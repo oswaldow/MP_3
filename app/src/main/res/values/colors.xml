@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Estos nombres se conservan porque los usan muchos drawables ya
+         existentes en el proyecto (tabs, bordes, seekbar, chip de modo,
+         item "reproduciendo", etc). Al repuntar sus valores aqui, toda
+         la app cambia de golpe sin tocar cada XML individualmente. -->
+    <color name="purple_primary">#FFD600</color>
+    <color name="purple_dark">#1C1C1C</color>
+    <color name="purple_light">#66FFD600</color>
+
+    <color name="blue_primary">#FFD600</color>
+    <color name="blue_dark">#0A0A0A</color>
+    <color name="blue_light">#66FFD600</color>
+
+    <color name="gradient_start">#000000</color>
+    <color name="gradient_end">#1C1C1C</color>
+
+    <!-- Paleta principal: negro, blanco y amarillo fuerte -->
+    <color name="spotify_green">#FFD600</color>
+    <color name="spotify_green_dark">#C7A600</color>
+    <color name="spotify_black">#000000</color>
+    <color name="spotify_elevated">#101010</color>
+    <color name="spotify_card">#1C1C1C</color>
+    <color name="spotify_gray">#B3B3B3</color>
+    <color name="spotify_progress_track">#4DFFFFFF</color>
+
+    <color name="background_dark">#000000</color>
+    <color name="surface_dark">#101010</color>
+    <color name="surface_light">#F4F1FF</color>
+
+    <color name="text_primary_light">#FFFFFF</color>
+    <color name="text_secondary_light">#B3B3B3</color>
+    <color name="text_primary_dark">#1A1630</color>
+    <color name="text_secondary_dark">#6E6892</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+
+</resources>

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="240dp"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_dialog_rounded"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/tvSortTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:padding="14dp"
+        android:text="Ordenar por titulo"
+        android:textColor="@color/text_primary_light"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tvSortArtist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:padding="14dp"
+        android:text="Ordenar por artista"
+        android:textColor="@color/text_primary_light"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tvSortDuration"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:padding="14dp"
+        android:text="Ordenar por duracion"
+        android:textColor="@color/text_primary_light"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tvSortDateAdded"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:padding="14dp"
+        android:text="Agregadas recientemente"
+        android:textColor="@color/text_primary_light"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tvSortMostPlayed"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:padding="14dp"
+        android:text="Mas escuchadas"
+        android:textColor="@color/text_primary_light"
+        android:textSize="14sp" />
+
+</LinearLayout>
