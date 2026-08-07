@@ -22,6 +22,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -39,6 +40,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.doOnLayout
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -80,6 +82,23 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnPanelPrevious: ImageButton
     private lateinit var btnPanelPlayPause: ImageButton
     private lateinit var btnPanelNext: ImageButton
+    private lateinit var llPanelControls: View
+
+    // ---------- Panel de letra deslizable ----------
+    private lateinit var lyricsCoordinator: View
+    // FIX: el XML declara lyricsPanel como <FrameLayout> (el header flota
+    // como overlay encima del RecyclerView), no como LinearLayout. El tipo
+    // aqui debe coincidir con el inflado real o findViewById lanza
+    // ClassCastException en tiempo de ejecucion.
+    private lateinit var lyricsPanel: FrameLayout
+    private lateinit var lyricsPanelBehavior: BottomSheetBehavior<FrameLayout>
+    private lateinit var llLyricsHeader: View
+    private lateinit var btnLyricsPanelClose: ImageButton
+    private lateinit var rvLyricsPanel: RecyclerView
+
+    private var lyricsAdapter: LyricsLineAdapter? = null
+    private var lyricsSongId: Long? = null
+    private var lyricsRequestId: Int = 0
 
     private lateinit var songAdapter: SongAdapter
     private lateinit var playlistAdapter: PlaylistAdapter
@@ -148,6 +167,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 queuePlayPauseBtn?.setImageResource(
                     if (service.isPlaying()) R.drawable.ic_pause_small else R.drawable.ic_play_small
                 )
+
+                syncLyricsWithPosition(current.toLong())
             }
             uiHandler.postDelayed(this, 500)
         }
@@ -232,6 +253,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         setupTabs()
         setupSearch()
         setupPlayerPanel()
+        setupLyricsPanel()
         setupEdgeToEdge()
         setupBackPress()
         setupSwipeToPlaylists()
@@ -284,6 +306,34 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnPanelPrevious = findViewById(R.id.btnPanelPrevious)
         btnPanelPlayPause = findViewById(R.id.btnPanelPlayPause)
         btnPanelNext = findViewById(R.id.btnPanelNext)
+        llPanelControls = findViewById(R.id.llPanelControls)
+
+        lyricsCoordinator = findViewById(R.id.lyricsCoordinator)
+        lyricsPanel = findViewById(R.id.lyricsPanel)
+        llLyricsHeader = findViewById(R.id.llLyricsHeader)
+        btnLyricsPanelClose = findViewById(R.id.btnLyricsPanelClose)
+        rvLyricsPanel = findViewById(R.id.rvLyricsPanel)
+        // Colapsado: el usuario no puede hacer scroll manual (la posicion
+        // la controla la cancion), asi el gesto de swipe siempre se le pasa
+        // al panel para expandirlo/colapsarlo en vez de que el RecyclerView
+        // lo capture como intento de scroll interno.
+        // Expandido: se permite scroll manual libre para poder leer toda
+        // la letra sin que el auto-scroll lo interrumpa.
+        rvLyricsPanel.layoutManager = object : LinearLayoutManager(this) {
+            override fun canScrollVertically(): Boolean {
+                return ::lyricsPanelBehavior.isInitialized &&
+                        lyricsPanelBehavior.state == BottomSheetBehavior.STATE_EXPANDED
+            }
+        }
+        rvLyricsPanel.isNestedScrollingEnabled = false
+        // El item animator por defecto de RecyclerView queda desactivado:
+        // el resaltado de la linea activa (alpha + escala) ahora lo anima
+        // directamente LyricsLineAdapter sobre el ViewHolder visible, en
+        // paralelo al reposicionamiento instantaneo del scroll. Esto evita
+        // el conflicto que tenia antes el DefaultItemAnimator (su propia
+        // animacion de cambio se peleaba con el scroll y hacia parecer que
+        // la linea "avanzaba" en vez de quedarse fija arriba).
+        rvLyricsPanel.itemAnimator = null
 
         baseGroupMiniPaddingBottom = groupMini.paddingBottom
         baseGroupExpandedPaddingBottom = groupExpanded.paddingBottom
@@ -344,7 +394,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private fun setupBackPress() {
         onBackPressedDispatcher.addCallback(this) {
-            if (::panelBehavior.isInitialized && panelBehavior.state == BottomSheetBehavior.STATE_EXPANDED) {
+            if (::lyricsPanelBehavior.isInitialized && lyricsPanelBehavior.state == BottomSheetBehavior.STATE_EXPANDED) {
+                lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+            } else if (::panelBehavior.isInitialized && panelBehavior.state == BottomSheetBehavior.STATE_EXPANDED) {
                 panelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
             } else {
                 isEnabled = false
@@ -500,6 +552,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         private const val SWIPE_MIN_DISTANCE = 120
         private const val SWIPE_MIN_VELOCITY = 200
         private const val TAB_SLIDE_DURATION = 300L
+
+        // IDs de las playlists automaticas de historial. No viven en
+        // PlaylistRepository: se recalculan cada vez a partir de
+        // PlayCountRepository, por eso llevan un prefijo "auto_".
+        const val RECENT_PLAYLIST_ID = "auto_recent"
+        const val MOST_PLAYED_PLAYLIST_ID = "auto_most_played"
+        const val RECENT_PLAYLIST_NAME = "Recientes"
+        const val MOST_PLAYED_PLAYLIST_NAME = "Mas escuchadas"
+
+        private const val AUTO_PLAYLIST_LIMIT = 50
     }
 
     private fun selectSongsTab() {
@@ -614,6 +676,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                         groupExpanded.alpha = 1f
                         groupMini.visibility = View.INVISIBLE
                         groupExpanded.visibility = View.VISIBLE
+                        lyricsCoordinator.visibility = View.VISIBLE
+                        updateLyricsPeekHeight()
                     }
                     BottomSheetBehavior.STATE_COLLAPSED -> {
                         groupMini.alpha = 1f
@@ -621,6 +685,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                         groupMini.visibility = View.VISIBLE
                         groupExpanded.visibility = View.INVISIBLE
                         updatePeekHeight()
+                        if (::lyricsPanelBehavior.isInitialized) {
+                            lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+                        }
+                        lyricsCoordinator.visibility = View.GONE
                     }
                     else -> {
                         groupMini.visibility = View.VISIBLE
@@ -755,6 +823,212 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         )
         if (isPlaylistsTabActive) {
             loadPlaylists()
+        }
+    }
+
+    // ---------- Panel de letra deslizable (estilo Spotify) ----------
+
+    private fun setupLyricsPanel() {
+        lyricsPanelBehavior = BottomSheetBehavior.from(lyricsPanel)
+        lyricsPanelBehavior.isHideable = false
+        lyricsPanelBehavior.skipCollapsed = false
+        lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+
+        // La lista de letras ocupa todo el espacio del panel siempre,
+        // tanto colapsado como expandido; solo el encabezado (titulo +
+        // boton de cerrar) aparece/desaparece segun el estado.
+        rvLyricsPanel.alpha = 1f
+        rvLyricsPanel.visibility = View.VISIBLE
+        llLyricsHeader.alpha = 0f
+        llLyricsHeader.visibility = View.INVISIBLE
+
+        lyricsPanelBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
+            override fun onStateChanged(bottomSheet: View, newState: Int) {
+                when (newState) {
+                    BottomSheetBehavior.STATE_EXPANDED -> {
+                        llLyricsHeader.alpha = 1f
+                        llLyricsHeader.visibility = View.VISIBLE
+                        lyricsAdapter?.let { scrollLyricsToLine(it.getActiveIndex()) }
+                    }
+                    BottomSheetBehavior.STATE_COLLAPSED -> {
+                        llLyricsHeader.alpha = 0f
+                        llLyricsHeader.visibility = View.INVISIBLE
+                    }
+                }
+            }
+
+            override fun onSlide(bottomSheet: View, slideOffset: Float) {
+                val progress = slideOffset.coerceIn(0f, 1f)
+                llLyricsHeader.visibility = View.VISIBLE
+                val fadeIn = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                llLyricsHeader.alpha = fadeIn
+            }
+        })
+
+        btnLyricsPanelClose.setOnClickListener {
+            lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+        }
+    }
+
+    /**
+     * Calcula el peek height del panel de letra para que, en reposo, ocupe
+     * exactamente el espacio libre que queda debajo de llPanelControls
+     * (justo debajo de los botones de reproducir/siguiente/anterior).
+     */
+    private fun updateLyricsPeekHeight() {
+        groupExpanded.post {
+            if (!::lyricsPanelBehavior.isInitialized) return@post
+            if (groupExpanded.visibility != View.VISIBLE || groupExpanded.height == 0) return@post
+
+            val controlsLocation = IntArray(2)
+            llPanelControls.getLocationOnScreen(controlsLocation)
+            val panelLocation = IntArray(2)
+            groupExpanded.getLocationOnScreen(panelLocation)
+
+            val controlsBottomOnScreen = controlsLocation[1] + llPanelControls.height
+            val panelBottomOnScreen = panelLocation[1] + groupExpanded.height
+            val freeSpace = panelBottomOnScreen - controlsBottomOnScreen
+
+            val minPeek = (72 * resources.displayMetrics.density).toInt()
+            val newPeek = freeSpace.coerceAtLeast(minPeek)
+            if (newPeek != lyricsPanelBehavior.peekHeight) {
+                lyricsPanelBehavior.peekHeight = newPeek
+            }
+        }
+    }
+
+    /**
+     * Pide la letra sincronizada de la cancion actual y la deja lista en el
+     * panel. Se ignora si la respuesta llega para una peticion vieja
+     * (cancion ya cambiada) usando lyricsRequestId.
+     */
+    private fun loadLyricsForSong(song: Song) {
+        if (lyricsSongId == song.id) return
+        lyricsSongId = song.id
+        lyricsRequestId++
+        val requestId = lyricsRequestId
+
+        showLyricsMessage("Buscando letra...")
+
+        val durationSeconds = song.duration / 1000
+        LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
+            override fun onSuccess(result: LyricsResult) {
+                if (requestId != lyricsRequestId) return
+                when {
+                    result.isInstrumental -> showLyricsMessage("Esta cancion es instrumental")
+                    !result.syncedLines.isNullOrEmpty() -> showSyncedLyrics(result.syncedLines)
+                    !result.plainLyrics.isNullOrBlank() -> showPlainLyrics(result.plainLyrics)
+                    else -> showLyricsMessage("No se encontro letra para esta cancion")
+                }
+            }
+
+            override fun onError(message: String) {
+                if (requestId != lyricsRequestId) return
+                showLyricsMessage(message)
+            }
+        })
+    }
+
+    private fun showLyricsMessage(message: String) {
+        lyricsAdapter = null
+        rvLyricsPanel.adapter = LyricsLineAdapter(listOf(LyricsLine(timeMs = -1, text = message)))
+    }
+
+    private fun showSyncedLyrics(lines: List<LyricsLine>) {
+        val adapter = LyricsLineAdapter(lines)
+        lyricsAdapter = adapter
+        rvLyricsPanel.adapter = adapter
+    }
+
+    private fun showPlainLyrics(text: String) {
+        val staticLines = text.lines()
+            .filter { it.isNotBlank() }
+            .map { LyricsLine(timeMs = -1, text = it) }
+        val adapter = LyricsLineAdapter(staticLines)
+        lyricsAdapter = adapter
+        rvLyricsPanel.adapter = adapter
+    }
+
+    /**
+     * Sincroniza la linea activa con la posicion de reproduccion actual.
+     * Se llama desde miniProgressPoller. Siempre actualiza cual linea se
+     * resalta en blanco brillante. El auto-scroll (seguir la letra) solo
+     * ocurre cuando el panel esta colapsado (la franja de abajo); si el
+     * usuario expandio el panel para leer la letra completa, esta se queda
+     * estatica y el ya puede deslizarla libremente con el dedo.
+     */
+    private fun syncLyricsWithPosition(positionMs: Long) {
+        val adapter = lyricsAdapter ?: return
+        val previousIndex = adapter.getActiveIndex()
+        val newIndex = adapter.updateActiveLine(positionMs)
+        if (newIndex < 0) return
+
+        // La linea vieja se atenua y la nueva se resalta con una transicion
+        // suave (alpha + escala animados), en paralelo al reposicionamiento
+        // del scroll, que sigue siendo instantaneo para no reintroducir el
+        // desfase acumulado que tenia el smoothScroll continuo.
+        adapter.animateActiveLineChange(rvLyricsPanel, previousIndex, newIndex)
+
+        val isExpanded = ::lyricsPanelBehavior.isInitialized &&
+                lyricsPanelBehavior.state == BottomSheetBehavior.STATE_EXPANDED
+        if (!isExpanded) {
+            scrollLyricsToLine(newIndex)
+        }
+    }
+
+    /**
+     * Pone la linea activa siempre pegada arriba del RecyclerView (nunca
+     * centrada). Se pospone con post{} para que el smooth-scroll arranque
+     * despues de que notifyItemChanged haya terminado su paso de layout; si
+     * no, el scroll se calcula con el alto "viejo" de la linea y termina
+     * pasandose de largo (el bug original de la pantalla de letras).
+     *
+     * Como la linea activa siempre queda al tope, cuando ya no quedan mas
+     * lineas debajo (cerca del final de la cancion) el RecyclerView
+     * simplemente no tiene mas contenido que subir: la letra se detiene
+     * pegada arriba y el resto de la pantalla se queda vacio (en negro),
+     * en vez de forzar ningun otro acomodo.
+     */
+    private fun scrollLyricsToLine(index: Int) {
+        if (index < 0) return
+        rvLyricsPanel.post {
+            val layoutManager = rvLyricsPanel.layoutManager as? LinearLayoutManager ?: return@post
+            val isExpanded = ::lyricsPanelBehavior.isInitialized &&
+                    lyricsPanelBehavior.state == BottomSheetBehavior.STATE_EXPANDED
+
+            if (isExpanded) {
+                // Expandido: el RecyclerView ocupa toda la pantalla visible;
+                // se desliza suavemente pero siempre queda pegada arriba,
+                // igual que en la franja colapsada.
+                rvLyricsPanel.stopScroll()
+                val smoothScroller = object : LinearSmoothScroller(this) {
+                    override fun getVerticalSnapPreference(): Int = SNAP_TO_START
+                    override fun calculateSpeedPerPixel(displayMetrics: android.util.DisplayMetrics): Float {
+                        // Mas alto = mas lento/suave. El valor por defecto
+                        // (25f/densityDpi) hace que distancias cortas se
+                        // vean como un salto brusco; con esto se ve como
+                        // un deslizamiento agradable.
+                        return 70f / displayMetrics.densityDpi
+                    }
+                }
+                smoothScroller.targetPosition = index
+                layoutManager.startSmoothScroll(smoothScroller)
+            } else {
+                // Colapsado: solo se ve una franja pequena arriba del
+                // RecyclerView (el peek del bottom sheet); el resto de la
+                // vista sigue existiendo fuera de pantalla. Antes se usaba
+                // un smoothScroll aqui tambien, pero si la linea cambiaba
+                // antes de que la animacion anterior terminara (o mientras
+                // el item animator seguia con su propia transicion), los
+                // pequenos desfases se iban acumulando hasta que la linea
+                // resaltada quedaba fuera de la franja visible. Por eso
+                // aqui se detiene cualquier scroll en curso y se reubica de
+                // forma exacta e inmediata en el tope cada vez: garantiza
+                // que la linea en blanco brillante siempre sea visible,
+                // sin depender de animaciones que se puedan interrumpir.
+                rvLyricsPanel.stopScroll()
+                layoutManager.scrollToPositionWithOffset(index, 0)
+            }
         }
     }
 
@@ -987,8 +1261,30 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun loadPlaylists() {
-        val playlists = PlaylistRepository.getAllPlaylists(this)
+        val playlists = buildAutoPlaylists() + PlaylistRepository.getAllPlaylists(this)
         playlistAdapter.updateData(playlists)
+    }
+
+    /**
+     * Arma las playlists automaticas de historial ("Recientes" y "Mas
+     * escuchadas") a partir de PlayCountRepository. No se guardan en disco:
+     * se recalculan cada vez que se abre la pestana de playlists. Solo se
+     * muestran si ya hay al menos una reproduccion registrada.
+     */
+    private fun buildAutoPlaylists(): List<Playlist> {
+        val autoPlaylists = mutableListOf<Playlist>()
+
+        val recentIds = PlayCountRepository.getRecentlyPlayedSongIds(this, AUTO_PLAYLIST_LIMIT)
+        if (recentIds.isNotEmpty()) {
+            autoPlaylists.add(Playlist(RECENT_PLAYLIST_ID, RECENT_PLAYLIST_NAME, recentIds.toMutableList()))
+        }
+
+        val mostPlayedIds = PlayCountRepository.getMostPlayedSongIds(this, AUTO_PLAYLIST_LIMIT)
+        if (mostPlayedIds.isNotEmpty()) {
+            autoPlaylists.add(Playlist(MOST_PLAYED_PLAYLIST_ID, MOST_PLAYED_PLAYLIST_NAME, mostPlayedIds.toMutableList()))
+        }
+
+        return autoPlaylists
     }
 
     private fun showCreatePlaylistDialog(songIdToAdd: Long?) {
@@ -1094,6 +1390,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         updateFavoriteIcon(song.id)
         updatePeekHeight()
+        updateLyricsPeekHeight()
+        loadLyricsForSong(song)
     }
 
     override fun onSongChanged(song: Song, index: Int) {

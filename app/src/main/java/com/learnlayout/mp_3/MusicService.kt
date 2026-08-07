@@ -6,23 +6,31 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.media.MediaPlayer
 import android.os.Binder
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionParameters
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 
 class MusicService : Service() {
 
     private val binder = MusicBinder()
 
-    private var mediaPlayer: MediaPlayer? = null
+    private var mediaPlayer: ExoPlayer? = null
     private lateinit var mediaSession: MediaSessionCompat
 
     private var originalList: List<Song> = emptyList()
@@ -37,10 +45,10 @@ class MusicService : Service() {
     private var progressRunnable: Runnable? = null
 
     // --- Crossfade ---
-    // Mientras se hace crossfade hay DOS MediaPlayer sonando a la vez:
+    // Mientras se hace crossfade hay DOS ExoPlayer sonando a la vez:
     // "mediaPlayer" (la cancion que esta terminando) y "nextMediaPlayer"
     // (la cancion que ya empezo a sonar bajito y va subiendo de volumen).
-    private var nextMediaPlayer: MediaPlayer? = null
+    private var nextMediaPlayer: ExoPlayer? = null
     private var nextIndexDuringCrossfade: Int = -1
     private var isCrossfading: Boolean = false
     private var crossfadeRunnable: Runnable? = null
@@ -71,6 +79,38 @@ class MusicService : Service() {
         // Cada cuanto se revisa el progreso y se recalcula el volumen del
         // crossfade. 100ms da un fundido suave sin gastar mucha CPU.
         private const val FADE_STEP_MS = 100L
+
+        // --- DEBUG: instrumentacion temporal para hallar el origen del corte ---
+        // Todo lo etiquetado con TAG_XFADE se puede filtrar en Logcat con:
+        //   adb logcat -s MP3_XFADE
+        private const val TAG_XFADE = "MP3_XFADE"
+
+        // AudioAttributes explicitos para todos los ExoPlayer de musica.
+        private val MUSIC_AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
+    }
+
+    // Marca de tiempo del ultimo tick del progressRunnable (cada 500ms) y del
+    // crossfadeRunnable (cada 100ms), para detectar jank del hilo principal.
+    private var lastProgressTickNanos: Long = 0L
+    private var lastFadeTickNanos: Long = 0L
+
+    // Listener de "cancion actual termino". Es el mismo objeto para todos
+    // los players "principales" que van pasando por mediaPlayer; se
+    // agrega/quita segun haga falta (equivalente a los antiguos
+    // setOnCompletionListener(...) / setOnCompletionListener(null)).
+    private val mainPlayerListener = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                onCurrentPlayerCompleted()
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG_XFADE, "onPlayerError en player principal: ${error.message}")
+        }
     }
 
     override fun onCreate() {
@@ -243,13 +283,16 @@ class MusicService : Service() {
 
     fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
 
-    fun getCurrentPosition(): Int = mediaPlayer?.currentPosition ?: 0
+    fun getCurrentPosition(): Int = mediaPlayer?.currentPosition?.toInt() ?: 0
 
-    fun getDuration(): Int = mediaPlayer?.duration ?: 0
+    fun getDuration(): Int {
+        val duration = mediaPlayer?.duration ?: return 0
+        return if (duration == C.TIME_UNSET) 0 else duration.toInt()
+    }
 
     fun seekTo(positionMs: Int) {
         cancelCrossfadeIfAny()
-        mediaPlayer?.seekTo(positionMs)
+        mediaPlayer?.seekTo(positionMs.toLong())
         updateMediaSessionState(isPlaying())
     }
 
@@ -261,9 +304,9 @@ class MusicService : Service() {
     fun play() {
         val player = mediaPlayer ?: return
         if (!player.isPlaying) {
-            player.start()
+            player.playWhenReady = true
         }
-        nextMediaPlayer?.let { if (!it.isPlaying) it.start() }
+        nextMediaPlayer?.let { if (!it.isPlaying) it.playWhenReady = true }
         listener?.onPlaybackStateChanged(true)
         updateNotification()
         updateMediaSessionState(true)
@@ -276,7 +319,7 @@ class MusicService : Service() {
         cancelCrossfadeIfAny()
         val player = mediaPlayer ?: return
         if (player.isPlaying) {
-            player.pause()
+            player.playWhenReady = false
         }
         listener?.onPlaybackStateChanged(false)
         updateNotification()
@@ -297,18 +340,49 @@ class MusicService : Service() {
         playSongAt(currentIndex)
     }
 
+    // Crea un ExoPlayer con audio offload DESACTIVADO explicitamente. Esto es
+    // lo que evita el corte: sin esto, en cuanto solo hay un AudioTrack
+    // activo el sistema (MIUI/Dolby) lo pone en modo offload, y al abrir el
+    // segundo player para el crossfade se ve forzado a sacarlo de offload y
+    // reconfigurar la cadena de efectos -eso es el corte audible-.
+    // Con offload desactivado desde el inicio, esa reconfiguracion nunca
+    // ocurre.
+    private fun buildPlayer(startVolume: Float): ExoPlayer {
+        val trackSelector = DefaultTrackSelector(this)
+        trackSelector.setParameters(
+            trackSelector.buildUponParameters()
+                .setAudioOffloadPreferences(
+                    TrackSelectionParameters.AudioOffloadPreferences.Builder()
+                        .setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
+                        .build()
+                )
+                .build()
+        )
+
+        return ExoPlayer.Builder(this)
+            .setTrackSelector(trackSelector)
+            .build()
+            .apply {
+                // handleAudioFocus = false: mismo comportamiento manual que
+                // tenia MediaPlayer (la app nunca gestiono audio focus).
+                setAudioAttributes(MUSIC_AUDIO_ATTRIBUTES, false)
+                volume = startVolume
+            }
+    }
+
     private fun playSongAt(index: Int) {
         val song = songList.getOrNull(index) ?: return
 
         releasePlayer()
 
-        mediaPlayer = MediaPlayer().apply {
-            setDataSource(applicationContext, song.uri)
-            prepare()
-            setVolume(1f, 1f)
-            start()
-            setOnCompletionListener { onCurrentPlayerCompleted() }
-        }
+        val player = buildPlayer(startVolume = 1f)
+        player.addListener(mainPlayerListener)
+        player.setMediaItem(MediaItem.fromUri(song.uri))
+        player.prepare()
+        player.playWhenReady = true
+        mediaPlayer = player
+
+        Log.d(TAG_XFADE, "playSongAt() indice=$index nuevo player=$player")
 
         // FIX pantalla de bloqueo: sin esta metadata (sobre todo la duracion),
         // el sistema no sabe cuanto dura la cancion y la barra de progreso de
@@ -321,6 +395,7 @@ class MusicService : Service() {
         updateMediaSessionState(true)
 
         startForeground(NOTIFICATION_ID, buildNotification(song, true))
+        updateWidgets()
         startProgressUpdates()
     }
 
@@ -335,14 +410,35 @@ class MusicService : Service() {
     private fun startProgressUpdates() {
         progressRunnable?.let { handler.removeCallbacks(it) }
 
+        lastProgressTickNanos = 0L
         progressRunnable = object : Runnable {
             override fun run() {
+                // DEBUG: si este tick tarda mucho mas de 500ms en llegar,
+                // significa que el hilo principal estuvo bloqueado por algo
+                // (GC, disco, binder IPC...) justo en ese hueco de tiempo.
+                val now = System.nanoTime()
+                if (lastProgressTickNanos != 0L) {
+                    val deltaMs = (now - lastProgressTickNanos) / 1_000_000
+                    if (deltaMs > 600) {
+                        Log.w(TAG_XFADE, "JANK en hilo principal: tick de progreso tardo ${deltaMs}ms (esperado ~500ms). isCrossfading=$isCrossfading")
+                    }
+                }
+                lastProgressTickNanos = now
+
                 val player = mediaPlayer
                 if (player != null) {
                     val current = player.currentPosition
-                    val total = player.duration
-                    listener?.onProgressChanged(current, total)
-                    handleCrossfadeTick(current, total)
+                    val total = player.duration.let { if (it == C.TIME_UNSET) 0L else it }
+                    listener?.onProgressChanged(current.toInt(), total.toInt())
+                    // Solo evaluar crossfade si realmente esta sonando: si
+                    // esta en pausa, current/total quedan congelados dentro
+                    // de la ventana de crossfade y este tick se repetiria
+                    // cada 500ms disparando el arranque del siguiente player
+                    // una y otra vez, "reanudando" la musica aunque el
+                    // usuario haya pausado.
+                    if (player.isPlaying) {
+                        handleCrossfadeTick(current, total)
+                    }
                     handler.postDelayed(this, 500)
                 }
             }
@@ -352,22 +448,20 @@ class MusicService : Service() {
 
     // --- Logica de crossfade ---
     //
-    // El crossfade se hace en DOS fases para que no se sienta ningun corte:
-    //
     // FASE 1 (con varios segundos de anticipacion): se prepara la siguiente
-    // cancion en segundo plano con prepareAsync(), que NO bloquea el hilo
-    // principal. Esto es justo lo que causaba el tartamudeo antes: se usaba
-    // prepare() (sincrono) exactamente en el momento del cruce, y ese
-    // bloqueo del hilo principal se sentia como que la musica se detenia un
-    // instante.
+    // cancion en segundo plano con prepare() (ExoPlayer siempre es
+    // asincrono, no bloquea el hilo principal). Se deja con playWhenReady =
+    // true y volumen 0 desde el inicio, asi que en cuanto termina de
+    // bufferear ya esta sonando en silencio -sin necesidad de un paso
+    // adicional tipo "keepPlayingSilently"-.
     //
-    // FASE 2 (cuando realmente toca cruzar): como el reproductor ya esta
-    // preparado de antemano, solo hace falta llamar a start(), que es
-    // practicamente instantaneo, y arrancar el fundido de volumen.
+    // FASE 2 (cuando realmente toca cruzar): el segundo reproductor ya esta
+    // sonando en silencio, asi que aqui no hace falta arrancarlo: solo se
+    // inicia el fundido de volumen (subir uno, bajar el otro).
 
     private val CROSSFADE_PREPARE_LEAD_MS = 4000L
 
-    private var preparedNextPlayer: MediaPlayer? = null
+    private var preparedNextPlayer: ExoPlayer? = null
     private var preparedNextIndex: Int = -1
     private var prepareRequestedForIndex: Int = -1
 
@@ -376,7 +470,7 @@ class MusicService : Service() {
         return if (fromIndex + 1 >= songList.size) 0 else fromIndex + 1
     }
 
-    private fun handleCrossfadeTick(currentMs: Int, totalMs: Int) {
+    private fun handleCrossfadeTick(currentMs: Long, totalMs: Long) {
         if (isCrossfading) return
 
         if (playbackMode == PlaybackMode.REPEAT_ONE ||
@@ -390,7 +484,7 @@ class MusicService : Service() {
         if (totalMs <= 0) return
 
         val fadeMs = SettingsRepository.getCrossfadeSeconds(applicationContext) * 1000L
-        val remainingMs = (totalMs - currentMs).toLong()
+        val remainingMs = totalMs - currentMs
         if (remainingMs <= 0) return
 
         val upcomingIndex = nextIndexFor(currentIndex)
@@ -401,6 +495,7 @@ class MusicService : Service() {
             preparedNextPlayer == null &&
             prepareRequestedForIndex != upcomingIndex
         ) {
+            Log.d(TAG_XFADE, "FASE1 -> pidiendo preparar indice=$upcomingIndex remainingMs=$remainingMs fadeMs=$fadeMs")
             prepareNextPlayerAsync(upcomingIndex)
         }
 
@@ -408,7 +503,10 @@ class MusicService : Service() {
         if (remainingMs <= fadeMs) {
             val ready = preparedNextPlayer
             if (ready != null && preparedNextIndex == upcomingIndex) {
+                Log.d(TAG_XFADE, "FASE2 -> arrancando beginCrossfade indice=$upcomingIndex remainingMs=$remainingMs")
                 beginCrossfade(upcomingIndex, ready, remainingMs.coerceAtMost(fadeMs))
+            } else {
+                Log.w(TAG_XFADE, "FASE2 -> NO estaba listo el siguiente player (ready=${ready != null}, preparedNextIndex=$preparedNextIndex, upcomingIndex=$upcomingIndex). Se hara salto SIN crossfade.")
             }
             // Si aun no esta listo (cancion muy corta, almacenamiento lento,
             // etc.) no se fuerza nada: se deja que termine normal y el
@@ -420,58 +518,48 @@ class MusicService : Service() {
         val song = songList.getOrNull(index) ?: return
         prepareRequestedForIndex = index
 
-        val player = MediaPlayer()
-        val ok = runCatching {
-            player.setDataSource(applicationContext, song.uri)
-            player.setVolume(0f, 0f)
-            player.setOnPreparedListener {
-                // Si mientras se preparaba el usuario ya cambio de cancion a
-                // mano (siguiente/anterior/etc), este player quedo obsoleto.
-                if (prepareRequestedForIndex == index) {
-                    warmUpAndHold(player)
-                    preparedNextPlayer = player
-                    preparedNextIndex = index
-                } else {
-                    runCatching { player.release() }
+        val player = buildPlayer(startVolume = 0f)
+        player.addListener(createNextPlayerListener(index, player))
+        player.setMediaItem(MediaItem.fromUri(song.uri))
+        player.prepare()
+        // playWhenReady = true desde ya: en cuanto termine de bufferear
+        // arranca solo, sonando en silencio (volume = 0 puesto en
+        // buildPlayer), sin bloquear el hilo principal.
+        player.playWhenReady = true
+
+        Log.d(TAG_XFADE, "prepareNextPlayerAsync indice=$index (offload desactivado, sesion propia)")
+    }
+
+    // Listener de preparado/error para el player que se esta precargando
+    // para el crossfade. Equivalente a los antiguos
+    // setOnPreparedListener/setOnErrorListener de MediaPlayer.
+    private fun createNextPlayerListener(index: Int, player: ExoPlayer): Player.Listener {
+        return object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) {
+                    Log.d(TAG_XFADE, "onReady indice=$index (async, no deberia afectar al hilo principal)")
+                    // Si mientras se preparaba el usuario ya cambio de
+                    // cancion a mano (siguiente/anterior/etc), este player
+                    // quedo obsoleto.
+                    if (prepareRequestedForIndex == index && preparedNextIndex != index) {
+                        preparedNextPlayer = player
+                        preparedNextIndex = index
+                    }
                 }
             }
-            player.setOnErrorListener { _, _, _ ->
+
+            override fun onPlayerError(error: PlaybackException) {
+                Log.e(TAG_XFADE, "onError preparando indice=$index: ${error.message}")
                 if (prepareRequestedForIndex == index) {
                     prepareRequestedForIndex = -1
                 }
-                true
+                runCatching { player.release() }
             }
-            player.prepareAsync()
-        }.isSuccess
-
-        if (!ok) {
-            // Uri invalida, archivo borrado, etc. No pasa nada: simplemente
-            // no habra crossfade para esta transicion.
-            prepareRequestedForIndex = -1
-            runCatching { player.release() }
-        }
-    }
-
-    // "Precalienta" el reproductor: lo arranca y lo pausa casi al instante,
-    // a volumen 0. Con esto, Android ya crea y abre el AudioTrack de este
-    // segundo reproductor con varios segundos de anticipacion, en vez de
-    // hacerlo justo en el momento del crossfade (que es lo que generaba el
-    // corte perceptible: abrir un AudioTrack nuevo mientras el otro sigue
-    // sonando obliga al sistema a reconfigurar el mezclador de audio).
-    // Como el pausado ocurre casi inmediatamente despues del start, la
-    // posicion de la cancion practicamente no avanza, asi que cuando el
-    // crossfade real empiece se sigue escuchando desde el arranque.
-    private fun warmUpAndHold(player: MediaPlayer) {
-        runCatching {
-            player.start()
-            player.pause()
-            player.seekTo(0)
         }
     }
 
     private fun discardPreparedNextIfAny() {
         preparedNextPlayer?.let {
-            runCatching { it.setOnPreparedListener(null) }
             runCatching { it.stop() }
             runCatching { it.release() }
         }
@@ -480,12 +568,18 @@ class MusicService : Service() {
         prepareRequestedForIndex = -1
     }
 
-    private fun beginCrossfade(upcomingIndex: Int, readyPlayer: MediaPlayer, durationMs: Long) {
+    private fun beginCrossfade(upcomingIndex: Int, readyPlayer: ExoPlayer, durationMs: Long) {
+        val fnStart = System.nanoTime()
         val current = mediaPlayer
         if (current == null || durationMs <= 0) {
             discardPreparedNextIfAny()
             return
         }
+
+        val readyIsPlayingBefore = runCatching { readyPlayer.isPlaying }.getOrDefault(false)
+        val readyPosBefore = runCatching { readyPlayer.currentPosition }.getOrDefault(-1L)
+        val currentPos = runCatching { current.currentPosition }.getOrDefault(-1L)
+        Log.d(TAG_XFADE, "beginCrossfade() indice=$upcomingIndex durationMs=$durationMs | readyIsPlayingBefore=$readyIsPlayingBefore readyPosBefore=$readyPosBefore currentPos=$currentPos")
 
         nextMediaPlayer = readyPlayer
         nextIndexDuringCrossfade = upcomingIndex
@@ -499,25 +593,43 @@ class MusicService : Service() {
 
         // El listener de "cancion termino" ya no debe disparar el salto
         // automatico: el propio fundido es quien decide cuando cambiar.
-        current.setOnCompletionListener(null)
+        current.removeListener(mainPlayerListener)
 
-        // El AudioTrack ya se creo y se abrio durante el precalentamiento
-        // (warmUpAndHold), asi que esto solo reanuda una pista ya lista:
-        // no deberia generar ningun corte en la que sigue sonando.
-        readyPlayer.start()
+        // El segundo player ya viene sonando en silencio desde que termino
+        // de bufferear (playWhenReady=true puesto en prepareNextPlayerAsync).
+        // Si por alguna razon llegara sin sonar (no deberia pasar nunca),
+        // esto actua como red de seguridad.
+        if (!readyPlayer.isPlaying) {
+            Log.w(TAG_XFADE, "beginCrossfade(): readyPlayer NO estaba sonando, forzando playWhenReady=true de emergencia")
+            readyPlayer.playWhenReady = true
+        }
 
+        lastFadeTickNanos = 0L
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = object : Runnable {
             override fun run() {
                 if (!isCrossfading) return
+
+                // DEBUG: cada tick deberia llegar cada ~100ms. Si llega mucho
+                // mas tarde, el hueco de tiempo es exactamente lo que se
+                // percibe como "la cancion se detiene un momento".
+                val now = System.nanoTime()
+                if (lastFadeTickNanos != 0L) {
+                    val deltaMs = (now - lastFadeTickNanos) / 1_000_000
+                    if (deltaMs > 150) {
+                        Log.w(TAG_XFADE, "JANK durante crossfade: tick de fundido tardo ${deltaMs}ms (esperado ~100ms)")
+                    }
+                }
+                lastFadeTickNanos = now
+
                 crossfadeElapsedMs += FADE_STEP_MS
                 val fraction = (crossfadeElapsedMs.toFloat() / crossfadeTotalMs.toFloat()).coerceIn(0f, 1f)
 
                 val outgoingVolume = 1f - fraction
                 val incomingVolume = fraction
 
-                runCatching { mediaPlayer?.setVolume(outgoingVolume, outgoingVolume) }
-                runCatching { nextMediaPlayer?.setVolume(incomingVolume, incomingVolume) }
+                runCatching { mediaPlayer?.volume = outgoingVolume }
+                runCatching { nextMediaPlayer?.volume = incomingVolume }
 
                 if (fraction >= 1f) {
                     finishCrossfade()
@@ -527,9 +639,15 @@ class MusicService : Service() {
             }
         }
         handler.post(crossfadeRunnable!!)
+
+        val fnMs = (System.nanoTime() - fnStart) / 1_000_000
+        Log.d(TAG_XFADE, "beginCrossfade() function completa en ${fnMs}ms")
     }
 
     private fun finishCrossfade() {
+        val fnStart = System.nanoTime()
+        Log.d(TAG_XFADE, "finishCrossfade() INICIO")
+
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = null
 
@@ -540,14 +658,18 @@ class MusicService : Service() {
             return
         }
 
-        // Suelta la cancion vieja y "asciende" la nueva a ser la principal.
-        mediaPlayer?.setOnCompletionListener(null)
+        // DEBUG: mide cada sub-paso. release() de un ExoPlayer puede
+        // implicar esperar a que el decoder interno termine de liberar
+        // recursos, y a veces NO es instantaneo.
+        var t = System.nanoTime()
+        mediaPlayer?.removeListener(mainPlayerListener)
         mediaPlayer?.release()
+        logStep("mediaPlayer.release() (cancion vieja)", t)
 
         val song = songList.getOrNull(finishedIndex)
         mediaPlayer = incomingPlayer.apply {
-            setVolume(1f, 1f)
-            setOnCompletionListener { onCurrentPlayerCompleted() }
+            volume = 1f
+            addListener(mainPlayerListener)
         }
         currentIndex = finishedIndex
         nextMediaPlayer = null
@@ -555,31 +677,72 @@ class MusicService : Service() {
         isCrossfading = false
 
         if (song != null) {
+            t = System.nanoTime()
             updateMediaMetadata(song)
+            logStep("updateMediaMetadata()", t)
+
+            t = System.nanoTime()
             listener?.onSongChanged(song, finishedIndex)
+            logStep("listener.onSongChanged() (UI/Activity)", t)
+
+            // DEBUG: esta escribe/lee SharedPreferences con JSON en el hilo
+            // principal. Si la lista de conteos ya crecio bastante, parsear
+            // y volver a serializar el JSON completo puede tardar mas de lo
+            // que parece.
+            t = System.nanoTime()
             PlayCountRepository.incrementPlayCount(applicationContext, song.id)
+            logStep("PlayCountRepository.incrementPlayCount() (disco/SharedPreferences)", t)
+
+            t = System.nanoTime()
             updateNotification()
+            logStep("updateNotification()", t)
         }
         updateMediaSessionState(true)
+
+        val fnMs = (System.nanoTime() - fnStart) / 1_000_000
+        Log.d(TAG_XFADE, "finishCrossfade() FIN, total ${fnMs}ms")
+    }
+
+    // DEBUG: helper para loguear cuanto tardo un paso puntual, marcando en
+    // rojo (Log.w) los que superen 30ms -suficiente para notarse como un
+    // "salto" en el audio.
+    private fun logStep(label: String, startNanos: Long) {
+        val ms = (System.nanoTime() - startNanos) / 1_000_000
+        if (ms > 30) {
+            Log.w(TAG_XFADE, "$label tardo ${ms}ms")
+        } else {
+            Log.d(TAG_XFADE, "$label tardo ${ms}ms")
+        }
     }
 
     // Aborta un crossfade en curso (si lo hay) y deja "mediaPlayer" como la
     // unica pista sonando, a volumen normal. Se llama antes de cualquier
     // accion manual del usuario (siguiente, anterior, seek, cambiar modo...)
-    // para que nunca se quede un segundo MediaPlayer fantasma sonando.
+    // para que nunca se quede un segundo player fantasma sonando.
     private fun cancelCrossfadeIfAny() {
         discardPreparedNextIfAny()
 
         if (!isCrossfading && nextMediaPlayer == null) return
 
+        // DEBUG: si esto se dispara MIENTRAS el fundido esta a medias
+        // (isCrossfading=true), el volumen de la cancion actual salta de
+        // golpe de vuelta a 1.0 -eso tambien se percibiria como un corte/
+        // salto raro-. Interesa saber si algo esta llamando a alguna accion
+        // manual (pausa, seek, siguiente...) justo durante el crossfade.
+        if (isCrossfading) {
+            Log.w(TAG_XFADE, "cancelCrossfadeIfAny() aborto un crossfade EN CURSO -> esto tambien puede sonar como un corte", Throwable("stacktrace de origen"))
+        }
+
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = null
 
-        runCatching { mediaPlayer?.setVolume(1f, 1f) }
-        mediaPlayer?.setOnCompletionListener { onCurrentPlayerCompleted() }
+        runCatching { mediaPlayer?.volume = 1f }
+        mediaPlayer?.let {
+            it.removeListener(mainPlayerListener)
+            it.addListener(mainPlayerListener)
+        }
 
         nextMediaPlayer?.let {
-            runCatching { it.setOnCompletionListener(null) }
             runCatching { it.stop() }
             runCatching { it.release() }
         }
@@ -596,7 +759,12 @@ class MusicService : Service() {
      * posicion/velocidad reportadas en el PlaybackState).
      */
     private fun updateMediaMetadata(song: Song) {
-        val duration = mediaPlayer?.duration?.toLong()?.takeIf { it > 0 } ?: song.duration
+        val exoDuration = mediaPlayer?.duration
+        val duration = if (exoDuration != null && exoDuration != C.TIME_UNSET && exoDuration > 0) {
+            exoDuration
+        } else {
+            song.duration
+        }
         val metadata = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, song.title)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, song.artist)
@@ -609,7 +777,7 @@ class MusicService : Service() {
 
     private fun updateMediaSessionState(isPlaying: Boolean) {
         val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
-        val position = mediaPlayer?.currentPosition?.toLong() ?: 0L
+        val position = mediaPlayer?.currentPosition ?: 0L
 
         val playbackState = PlaybackStateCompat.Builder()
             .setActions(
@@ -641,6 +809,15 @@ class MusicService : Service() {
         val song = getCurrentSong() ?: return
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, buildNotification(song, isPlaying()))
+        updateWidgets()
+    }
+
+    /**
+     * Refresca el widget de pantalla de inicio (si el usuario agrego uno)
+     * con la cancion y el estado de reproduccion actuales.
+     */
+    private fun updateWidgets() {
+        MusicWidgetProvider.pushUpdate(applicationContext, getCurrentSong(), isPlaying())
     }
 
     private fun buildNotification(song: Song, playing: Boolean): Notification {
@@ -685,6 +862,7 @@ class MusicService : Service() {
         releasePlayer()
         listener?.onPlaybackStateChanged(false)
         updateMediaSessionState(false)
+        MusicWidgetProvider.pushUpdate(applicationContext, getCurrentSong(), false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -692,7 +870,10 @@ class MusicService : Service() {
     private fun releasePlayer() {
         progressRunnable?.let { handler.removeCallbacks(it) }
         cancelCrossfadeIfAny()
-        mediaPlayer?.release()
+        mediaPlayer?.let {
+            it.removeListener(mainPlayerListener)
+            it.release()
+        }
         mediaPlayer = null
     }
 

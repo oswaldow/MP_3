@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnNext: ImageButton
     private lateinit var btnBack: ImageButton
     private lateinit var btnQueue: ImageButton
+    private lateinit var btnLyrics: ImageButton
 
     private var musicService: MusicService? = null
     private var isBound = false
@@ -146,6 +147,7 @@ class MainActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnNext = findViewById(R.id.btnNext)
         btnBack = findViewById(R.id.btnBack)
         btnQueue = findViewById(R.id.btnQueue)
+        btnLyrics = findViewById(R.id.btnLyrics)
     }
 
     private fun setupListeners() {
@@ -169,6 +171,10 @@ class MainActivity : AppCompatActivity(), MusicService.PlaybackListener {
             showQueueSheet()
         }
 
+        btnLyrics.setOnClickListener {
+            openLyrics()
+        }
+
         sbProgress.listener = object : WaveformSeekBar.OnWaveformSeekListener {
             override fun onProgressChanged(progress: Int, fromUser: Boolean) {
                 if (fromUser) {
@@ -185,6 +191,17 @@ class MainActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 musicService?.seekTo(progress)
             }
         }
+    }
+
+    private fun openLyrics() {
+        val currentSong = musicService?.getCurrentSong() ?: run {
+            Toast.makeText(this, "No hay canción reproduciéndose", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(this, LyricsActivity::class.java)
+        intent.putExtra("song", currentSong)
+        startActivity(intent)
+        overridePendingTransition(R.anim.activity_slide_up_in, R.anim.activity_stay)
     }
 
     private fun setupDragToDismiss() {

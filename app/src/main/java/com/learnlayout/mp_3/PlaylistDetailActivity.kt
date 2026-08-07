@@ -63,19 +63,41 @@ class PlaylistDetailActivity : AppCompatActivity() {
         rvPlaylistSongs = findViewById(R.id.rvPlaylistSongs)
     }
 
+    private fun isAutoPlaylist(): Boolean {
+        return playlistId == SongListActivity.RECENT_PLAYLIST_ID ||
+                playlistId == SongListActivity.MOST_PLAYED_PLAYLIST_ID
+    }
+
     private fun loadPlaylistSongs() {
-        val playlist = PlaylistRepository.getPlaylistById(this, playlistId)
-        if (playlist == null) {
-            finish()
-            return
-        }
-
-        tvPlaylistTitle.text = playlist.name
-
         val allSongs = SongRepository.getAllSongs(this)
         val songsById = allSongs.associateBy { it.id }
 
-        playlistSongs = playlist.songIds.mapNotNull { songsById[it] }.toMutableList()
+        if (isAutoPlaylist()) {
+            // Playlists automaticas de historial: no viven en
+            // PlaylistRepository, se recalculan desde PlayCountRepository.
+            val songIds = when (playlistId) {
+                SongListActivity.RECENT_PLAYLIST_ID ->
+                    PlayCountRepository.getRecentlyPlayedSongIds(this)
+                else ->
+                    PlayCountRepository.getMostPlayedSongIds(this)
+            }
+
+            tvPlaylistTitle.text = when (playlistId) {
+                SongListActivity.RECENT_PLAYLIST_ID -> SongListActivity.RECENT_PLAYLIST_NAME
+                else -> SongListActivity.MOST_PLAYED_PLAYLIST_NAME
+            }
+
+            playlistSongs = songIds.mapNotNull { songsById[it] }.toMutableList()
+        } else {
+            val playlist = PlaylistRepository.getPlaylistById(this, playlistId)
+            if (playlist == null) {
+                finish()
+                return
+            }
+
+            tvPlaylistTitle.text = playlist.name
+            playlistSongs = playlist.songIds.mapNotNull { songsById[it] }.toMutableList()
+        }
 
         songAdapter.updateData(playlistSongs)
 
@@ -86,6 +108,17 @@ class PlaylistDetailActivity : AppCompatActivity() {
 
     private fun confirmRemoveSong(position: Int) {
         val song = playlistSongs.getOrNull(position) ?: return
+
+        if (isAutoPlaylist()) {
+            // Esta lista se arma sola con el historial de reproduccion, no
+            // se pueden quitar canciones a mano.
+            Toast.makeText(
+                this,
+                "Esta lista se genera automaticamente con tu historial",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
 
         AlertDialog.Builder(this, R.style.RoundedAlertDialog)
             .setTitle("Quitar cancion")

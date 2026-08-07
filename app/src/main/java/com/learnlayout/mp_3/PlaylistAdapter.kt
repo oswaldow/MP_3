@@ -69,6 +69,9 @@ class PlaylistAdapter(
             holder.tvSong2.text = songs.getOrNull(1)?.title ?: ""
             holder.tvSong2.visibility = if (songs.size > 1) View.VISIBLE else View.GONE
 
+            val isAutoPlaylist = playlist.id == SongListActivity.RECENT_PLAYLIST_ID ||
+                    playlist.id == SongListActivity.MOST_PLAYED_PLAYLIST_ID
+
             val cover = playlist.coverImageUri
             if (cover != null) {
                 try {
@@ -80,19 +83,36 @@ class PlaylistAdapter(
             } else if (playlist.id == PlaylistRepository.FAVORITES_PLAYLIST_ID) {
                 holder.ivCover.setPadding(16, 16, 16, 16)
                 holder.ivCover.setImageResource(R.drawable.ic_favorite)
+            } else if (playlist.id == SongListActivity.RECENT_PLAYLIST_ID) {
+                holder.ivCover.setPadding(16, 16, 16, 16)
+                holder.ivCover.setImageResource(R.drawable.ic_repeat)
+            } else if (playlist.id == SongListActivity.MOST_PLAYED_PLAYLIST_ID) {
+                holder.ivCover.setPadding(16, 16, 16, 16)
+                holder.ivCover.setImageResource(R.drawable.ic_equalizer)
             } else {
                 holder.ivCover.setImageResource(R.drawable.ic_queue_music)
             }
 
             holder.itemView.setOnClickListener { onItemClick(playlist) }
-            holder.btnEditCover.setOnClickListener { onCoverClick(playlist) }
 
-            if (playlist.id == PlaylistRepository.FAVORITES_PLAYLIST_ID) {
+            if (isAutoPlaylist) {
+                // Las playlists automaticas no tienen portada propia ni se
+                // pueden borrar: se recalculan solas a partir del historial.
+                holder.btnEditCover.visibility = View.GONE
+                holder.btnEditCover.setOnClickListener(null)
                 holder.btnDelete.visibility = View.GONE
                 holder.btnDelete.setOnClickListener(null)
             } else {
-                holder.btnDelete.visibility = View.VISIBLE
-                holder.btnDelete.setOnClickListener { onDeleteClick(playlist) }
+                holder.btnEditCover.visibility = View.VISIBLE
+                holder.btnEditCover.setOnClickListener { onCoverClick(playlist) }
+
+                if (playlist.id == PlaylistRepository.FAVORITES_PLAYLIST_ID) {
+                    holder.btnDelete.visibility = View.GONE
+                    holder.btnDelete.setOnClickListener(null)
+                } else {
+                    holder.btnDelete.visibility = View.VISIBLE
+                    holder.btnDelete.setOnClickListener { onDeleteClick(playlist) }
+                }
             }
         }
     }

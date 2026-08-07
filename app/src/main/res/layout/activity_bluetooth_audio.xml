@@ -112,7 +112,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Por seguridad del sistema, Android no deja que ninguna app cambie directamente el codec Bluetooth (SBC, AAC, aptX, LDAC) ni la fuerza de la señal. Eso solo lo controla Android mismo."
+                    android:text="Por sssssssssssssssssssssssssssssssssssssssss prueba 123445343552seguridad del sistema, Android no deja que ninguna app cambie directamente el codec Bluetooth (SBC, AAC, aptX, LDAC) ni la fuerza de la señal. Eso solo lo controla Android mismo."
                     android:textColor="@color/text_secondary_light"
                     android:textSize="13sp" />
 
