@@ -69,7 +69,7 @@ class PlaylistDetailActivity : AppCompatActivity() {
     }
 
     private fun loadPlaylistSongs() {
-        val allSongs = SongRepository.getAllSongs(this)
+        val allSongs = SongRepository.getAllSongs(this).map { SongMetadataRepository.apply(this, it) }
         val songsById = allSongs.associateBy { it.id }
 
         if (isAutoPlaylist()) {

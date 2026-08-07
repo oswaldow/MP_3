@@ -49,6 +49,8 @@ class LyricsLineAdapter(
 
         holder.activeAnimator?.cancel()
         holder.tvLine.translationY = 0f
+        holder.tvLine.scaleX = 1f
+        holder.tvLine.scaleY = 1f
         holder.tvLine.alpha = if (isActive) 1.0f else INACTIVE_ALPHA
         holder.tvLine.setTextSize(
             TypedValue.COMPLEX_UNIT_SP,
@@ -78,7 +80,6 @@ class LyricsLineAdapter(
 
         val startAlpha = view.alpha
         val endAlpha = if (isActive) 1.0f else INACTIVE_ALPHA
-        val startSizeSp = view.textSize / view.resources.displayMetrics.scaledDensity
         val endSizeSp = if (isActive) ACTIVE_TEXT_SIZE_SP else INACTIVE_TEXT_SIZE_SP
         val startGlow = holder.glowRadius
         val endGlow = if (isActive) activeGlowPx else 0f
@@ -87,6 +88,24 @@ class LyricsLineAdapter(
         view.translationY = startTranslationY
 
         view.setTypeface(null, if (isActive) Typeface.BOLD else Typeface.NORMAL)
+
+        // El tamano de letra ya NO se anima en sp frame a frame: hacerlo asi
+        // obliga al TextView a reflowear (recalcular donde corta cada
+        // linea) en cada frame, y justo cuando una palabra deja de caber en
+        // el ancho disponible salta de golpe a la siguiente linea (se ve
+        // tosco/trabado). En vez de eso, el tamano final se aplica de una
+        // sola vez (el texto ya queda acomodado en su layout final desde el
+        // primer frame) y el efecto de "crecer" se anima con un escalado
+        // (scaleX/scaleY), que es un transform visual puro y no vuelve a
+        // reflowear nada mientras corre.
+        val currentApparentSizeSp =
+            (view.textSize / view.resources.displayMetrics.scaledDensity) * view.scaleX
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, endSizeSp)
+        view.pivotX = 0f
+        view.pivotY = 0f
+        val startScale = currentApparentSizeSp / endSizeSp
+        view.scaleX = startScale
+        view.scaleY = startScale
 
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = LINE_TRANSITION_MS
@@ -102,8 +121,9 @@ class LyricsLineAdapter(
 
                 view.alpha = startAlpha + (endAlpha - startAlpha) * fraction
 
-                val sizeSp = startSizeSp + (endSizeSp - startSizeSp) * fraction
-                view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+                val scale = startScale + (1f - startScale) * fraction
+                view.scaleX = scale
+                view.scaleY = scale
 
                 val glowRadius = startGlow + (endGlow - startGlow) * fraction
                 holder.glowRadius = glowRadius

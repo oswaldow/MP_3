@@ -1,5 +1,6 @@
 package com.learnlayout.mp_3
 
+import android.animation.ValueAnimator
 import android.Manifest
 import android.content.ComponentName
 import android.graphics.Rect
@@ -95,6 +96,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var lyricsAdapter: LyricsLineAdapter? = null
     private var lyricsSongId: Long? = null
     private var lyricsRequestId: Int = 0
+    private lateinit var btnSaveLyrics: ImageButton
+    private var lyricsBannerScrollAnimator: ValueAnimator? = null
+    private var currentLyricsResult: LyricsResult? = null
 
     private lateinit var songAdapter: SongAdapter
     private lateinit var playlistAdapter: PlaylistAdapter
@@ -331,27 +335,24 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         lyricsCoordinator = findViewById(R.id.lyricsCoordinator)
         lyricsPanel = findViewById(R.id.lyricsPanel)
         rvLyricsPanel = findViewById(R.id.rvLyricsPanel)
-
+        btnSaveLyrics = findViewById(R.id.btnSaveLyrics)
         rvLyricsPanel.layoutManager = object : LinearLayoutManager(this) {
             override fun canScrollVertically(): Boolean {
                 return isLyricsExpanded()
             }
         }
         rvLyricsPanel.isNestedScrollingEnabled = false
-
         rvLyricsPanel.itemAnimator = null
-
 
         baseGroupMiniPaddingBottom = groupMini.paddingBottom
         baseGroupExpandedPaddingBottom = groupExpanded.paddingBottom
-
         baseLyricsPanelPaddingTop = lyricsPanel.paddingTop
 
         rvSongs.layoutManager = LinearLayoutManager(this)
         songAdapter = SongAdapter(
             emptyList(),
             onItemClick = { position -> openPlayer(songAdapter.getCurrentList(), position) },
-            onMenuClick = { position -> showAddToPlaylistDialog(songAdapter.getSongAt(position)) }
+            onMenuClick = { position -> showSongItemMenu(songAdapter.getSongAt(position)) }
         )
         rvSongs.adapter = songAdapter
 
@@ -760,6 +761,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             toggleCurrentSongFavorite()
         }
 
+        btnSaveLyrics.setOnClickListener {
+            toggleSaveLyrics()
+        }
+
         btnPanelPlayPause.setOnClickListener {
             musicService?.togglePlayPause()
         }
@@ -926,18 +931,19 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         lyricsRequestId++
         val requestId = lyricsRequestId
 
+        val saved = SavedLyricsRepository.getSavedLyrics(this, song.id)
+        if (saved != null) {
+            showLyricsResult(saved, song.id)
+            return
+        }
+
         showLyricsMessage("Buscando letra...")
 
         val durationSeconds = song.duration / 1000
         LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
             override fun onSuccess(result: LyricsResult) {
                 if (requestId != lyricsRequestId) return
-                when {
-                    result.isInstrumental -> showLyricsMessage("Esta cancion es instrumental")
-                    !result.syncedLines.isNullOrEmpty() -> showSyncedLyrics(result.syncedLines)
-                    !result.plainLyrics.isNullOrBlank() -> showPlainLyrics(result.plainLyrics)
-                    else -> showLyricsMessage("No se encontro letra para esta cancion")
-                }
+                showLyricsResult(result, song.id)
             }
 
             override fun onError(message: String) {
@@ -947,8 +953,46 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         })
     }
 
+    private fun showLyricsResult(result: LyricsResult, songId: Long) {
+        val hasContent = !result.isInstrumental &&
+                (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
+
+        when {
+            result.isInstrumental -> showLyricsMessage("Esta cancion es instrumental")
+            !result.syncedLines.isNullOrEmpty() -> showSyncedLyrics(result.syncedLines)
+            !result.plainLyrics.isNullOrBlank() -> showPlainLyrics(result.plainLyrics)
+            else -> showLyricsMessage("No se encontro letra para esta cancion")
+        }
+
+        if (hasContent) {
+            currentLyricsResult = result
+            btnSaveLyrics.visibility = View.VISIBLE
+            updateSaveLyricsIcon(SavedLyricsRepository.isSaved(this, songId))
+        }
+    }
+
+    private fun updateSaveLyricsIcon(saved: Boolean) {
+        btnSaveLyrics.setImageResource(
+            if (saved) R.drawable.ic_favorite else R.drawable.ic_favorite_border
+        )
+    }
+
+    private fun toggleSaveLyrics() {
+        val songId = lyricsSongId ?: return
+        val result = currentLyricsResult ?: return
+        val nowSaved = SavedLyricsRepository.toggleSaved(this, songId, result)
+        updateSaveLyricsIcon(nowSaved)
+        Toast.makeText(
+            this,
+            if (nowSaved) "Letra guardada" else "Letra eliminada de guardadas",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
     private fun showLyricsMessage(message: String) {
         lyricsAdapter = null
+        currentLyricsResult = null
+        btnSaveLyrics.visibility = View.GONE
         rvLyricsPanel.adapter = LyricsLineAdapter(listOf(LyricsLine(timeMs = -1, text = message)))
     }
 
@@ -984,24 +1028,50 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         if (index < 0) return
         rvLyricsPanel.post {
             val layoutManager = rvLyricsPanel.layoutManager as? LinearLayoutManager ?: return@post
-            val isExpanded = isLyricsExpanded()
 
-            if (isExpanded) {
-
+            if (isLyricsExpanded()) {
                 rvLyricsPanel.stopScroll()
                 val smoothScroller = object : LinearSmoothScroller(this) {
                     override fun getVerticalSnapPreference(): Int = SNAP_TO_START
                     override fun calculateSpeedPerPixel(displayMetrics: android.util.DisplayMetrics): Float {
-
                         return 70f / displayMetrics.densityDpi
                     }
                 }
                 smoothScroller.targetPosition = index
                 layoutManager.startSmoothScroll(smoothScroller)
-            } else {
-                rvLyricsPanel.stopScroll()
-                layoutManager.scrollToPositionWithOffset(index, 0)
+                return@post
             }
+
+            // Colapsado (banner): el layoutManager tiene canScrollVertically()
+            // atado a isLyricsExpanded(), o sea que aquí devuelve false a
+            // propósito (para que el usuario no pueda arrastrar la letra con
+            // el dedo). Eso mismo hace que RecyclerView.smoothScrollBy /
+            // LinearSmoothScroller no muevan nada (ponen el desplazamiento en
+            // 0), por eso la línea activa se quedaba atrás y "bajaba" en vez
+            // de quedarse fija arriba. Por eso aquí se anima el offset a
+            // mano con un ValueAnimator llamando directo a
+            // scrollToPositionWithOffset (eso sí funciona, no pasa por
+            // smoothScrollBy) y siempre termina exacto en offset 0, para que
+            // la línea activa quede pegada arriba igual que antes.
+            lyricsBannerScrollAnimator?.cancel()
+
+            val density = resources.displayMetrics.density
+            val fallbackStartOffset = (40 * density).toInt()
+            val startOffset = layoutManager.findViewByPosition(index)?.top ?: fallbackStartOffset
+
+            if (startOffset <= 0) {
+                layoutManager.scrollToPositionWithOffset(index, 0)
+                return@post
+            }
+
+            val animator = ValueAnimator.ofInt(startOffset, 0)
+            animator.duration = 260L
+            animator.interpolator = DecelerateInterpolator()
+            animator.addUpdateListener { anim ->
+                layoutManager.scrollToPositionWithOffset(index, anim.animatedValue as Int)
+            }
+            lyricsBannerScrollAnimator = animator
+            animator.start()
         }
     }
 
@@ -1189,7 +1259,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun loadSongs() {
-        allSongs = SongRepository.getAllSongs(this)
+        allSongs = SongRepository.getAllSongs(this).map { SongMetadataRepository.apply(this, it) }
 
         if (allSongs.isEmpty()) {
             tvEmptyState.visibility = View.VISIBLE
@@ -1283,6 +1353,63 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 } else {
                     Toast.makeText(this, "El nombre no puede estar vacio", Toast.LENGTH_SHORT).show()
                 }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun showSongItemMenu(song: Song) {
+        val options = arrayOf("Agregar a playlist", "Editar nombre y artista")
+        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showAddToPlaylistDialog(song)
+                    1 -> showEditSongMetadataDialog(song)
+                }
+            }
+            .show()
+    }
+
+    private fun showEditSongMetadataDialog(song: Song) {
+        val density = resources.displayMetrics.density
+        val container = LinearLayout(this)
+        container.orientation = LinearLayout.VERTICAL
+        val padding = (20 * density).toInt()
+        container.setPadding(padding, padding, padding, padding)
+
+        val titleInput = EditText(this)
+        titleInput.hint = "Titulo"
+        titleInput.setText(song.title)
+        titleInput.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
+        titleInput.setHintTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
+        container.addView(titleInput)
+
+        val artistInput = EditText(this)
+        artistInput.hint = "Artista"
+        artistInput.setText(song.artist)
+        artistInput.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
+        artistInput.setHintTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
+        val artistParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        artistParams.topMargin = (12 * density).toInt()
+        container.addView(artistInput, artistParams)
+
+        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
+            .setTitle("Editar nombre y artista")
+            .setView(container)
+            .setPositiveButton("Guardar") { _, _ ->
+                val newTitle = titleInput.text.toString().trim()
+                val newArtist = artistInput.text.toString().trim()
+                if (newTitle.isBlank() || newArtist.isBlank()) {
+                    Toast.makeText(this, "Titulo y artista no pueden estar vacios", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                SongMetadataRepository.setOverride(this, song.id, newTitle, newArtist)
+                lyricsSongId = null
+                loadSongs()
+                Toast.makeText(this, "Cancion actualizada", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancelar", null)
             .show()
@@ -1418,6 +1545,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         super.onDestroy()
         stopMiniProgressPolling()
         activeQueueDialog?.dismiss()
+        lyricsBannerScrollAnimator?.cancel()
         if (isBound) {
             unbindService(connection)
             isBound = false
