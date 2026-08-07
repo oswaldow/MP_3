@@ -37,4 +37,7 @@
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
 
+    <!-- Marco amarillo para diferenciar el panel de letra deslizable -->
+    <color name="lyrics_banner_border">#FFEB3B</color>
+
 </resources>

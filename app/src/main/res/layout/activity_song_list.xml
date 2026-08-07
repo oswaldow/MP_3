@@ -416,30 +416,19 @@
 
         <!-- ===================== PANEL DE LETRA DESLIZABLE (estilo Spotify) =====================
              Ocupa, en reposo, solo el espacio libre debajo de llPanelControls (peekHeight se
-             calcula en tiempo de ejecucion). Deslizando hacia arriba se expande y cubre todo
-             el panel para mostrar la letra sincronizada completa; deslizando hacia abajo vuelve
-             a dejar solo la franja con la linea actual visible. -->
+             calcula en tiempo de ejecucion). Deslizando hacia arriba se expande, pero se detiene
+             antes de llegar a la barra de estado (ver expandedOffset en SongListActivity). -->
         <androidx.coordinatorlayout.widget.CoordinatorLayout
             android:id="@+id/lyricsCoordinator"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:visibility="gone">
 
-            <!-- FrameLayout en vez de LinearLayout: el RecyclerView ocupa
-                 SIEMPRE el panel completo desde arriba (apenas con el
-                 padding minimo para el drag handle) y el encabezado
-                 (titulo + boton cerrar) flota ENCIMA como overlay. Antes el
-                 encabezado, aun estando INVISIBLE mientras el panel esta
-                 colapsado, seguia reservando su alto dentro del
-                 LinearLayout (INVISIBLE no es lo mismo que GONE) y junto
-                 con el drag handle consumia casi todo el peekHeight minimo,
-                 dejando la franja colapsada sin espacio real para mostrar
-                 texto de la letra. -->
             <FrameLayout
                 android:id="@+id/lyricsPanel"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="@drawable/bg_bottom_sheet_top_rounded"
+                android:background="@drawable/bg_lyrics_panel_border"
                 android:clickable="true"
                 android:focusable="true"
                 app:layout_behavior="com.google.android.material.bottomsheet.BottomSheetBehavior"
@@ -462,42 +451,6 @@
                     android:layout_marginTop="10dp"
                     android:layout_gravity="top|center_horizontal"
                     android:background="@drawable/bg_drag_handle_small" />
-
-                <LinearLayout
-                    android:id="@+id/llLyricsHeader"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="top"
-                    android:layout_marginTop="18dp"
-                    android:background="@drawable/bg_bottom_sheet_top_rounded"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingStart="24dp"
-                    android:paddingTop="4dp"
-                    android:paddingEnd="12dp"
-                    android:paddingBottom="4dp"
-                    android:visibility="invisible">
-
-                    <TextView
-                        android:id="@+id/tvLyricsHeaderTitle"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="Letra"
-                        android:textColor="@color/text_secondary_light"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <ImageButton
-                        android:id="@+id/btnLyricsPanelClose"
-                        android:layout_width="36dp"
-                        android:layout_height="36dp"
-                        android:background="@android:color/transparent"
-                        android:contentDescription="Cerrar letra"
-                        android:padding="7dp"
-                        android:src="@drawable/ic_chevron_down" />
-
-                </LinearLayout>
 
             </FrameLayout>
 
@@ -599,5 +552,3 @@
     </FrameLayout>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
-
-

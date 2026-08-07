@@ -109,21 +109,6 @@
                 android:background="@drawable/bg_item_song"
                 android:padding="16dp">
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Por sssssssssssssssssssssssssssssssssssssssss prueba 123445343552seguridad del sistema, Android no deja que ninguna app cambie directamente el codec Bluetooth (SBC, AAC, aptX, LDAC) ni la fuerza de la señal. Eso solo lo controla Android mismo."
-                    android:textColor="@color/text_secondary_light"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="En muchos telefonos se puede ajustar manualmente desde Opciones de desarrollador, dentro de &quot;Codec de audio Bluetooth&quot;."
-                    android:textColor="@color/text_secondary_light"
-                    android:textSize="13sp" />
-
                 <Button
                     android:id="@+id/btnOpenBluetoothSettings"
                     style="@style/Widget.MaterialComponents.Button"
