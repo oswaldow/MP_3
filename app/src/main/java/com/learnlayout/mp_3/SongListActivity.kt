@@ -335,6 +335,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         // la linea "avanzaba" en vez de quedarse fija arriba).
         rvLyricsPanel.itemAnimator = null
 
+
         baseGroupMiniPaddingBottom = groupMini.paddingBottom
         baseGroupExpandedPaddingBottom = groupExpanded.paddingBottom
 

@@ -22,13 +22,51 @@ class LyricsLineAdapter(
         var activeAnimator: ValueAnimator? = null
     }
 
+    /**
+     * Ademas de las lineas reales, el adapter expone un item extra al
+     * final: un item "fantasma" vacio, del alto de toda la pantalla, que
+     * nunca se ve (texto vacio).
+     *
+     * Por que existe: LinearLayoutManager evita dejar un hueco vacio
+     * despues del ultimo item de la lista. Cuando la linea activa (la que
+     * scrollLyricsToLine pega arriba con scrollToPositionWithOffset)
+     * esta cerca del final de la letra, ya no quedan mas lineas reales
+     * despues para "llenar" el resto del RecyclerView, asi que el layout
+     * manager ignora el offset pedido y en vez de eso ancla el final de
+     * la lista al fondo visible del contenedor, empujando la linea activa
+     * hacia abajo (o fuera de la franja visible) justo cuando la cancion
+     * esta por terminar.
+     *
+     * Al agregar este item fantasma, siempre hay contenido real debajo de
+     * cualquier linea activa (aunque este vacio), asi que el layout
+     * manager nunca detecta ese hueco y respeta el offset pedido: la
+     * linea activa se queda pegada arriba del todo hasta el final de la
+     * cancion, con el resto del panel vacio debajo (que es el
+     * comportamiento esperado).
+     */
+    override fun getItemViewType(position: Int): Int =
+        if (position < lines.size) TYPE_LINE else TYPE_FOOTER
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): LineViewHolder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.item_lyrics_line, parent, false) as TextView
+        if (viewType == TYPE_FOOTER) {
+            view.text = ""
+            view.layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                view.resources.displayMetrics.heightPixels
+            )
+        }
         return LineViewHolder(view)
     }
 
     override fun onBindViewHolder(holder: LineViewHolder, position: Int) {
+        if (getItemViewType(position) == TYPE_FOOTER) {
+            // Ya quedo armado (vacio, alto de pantalla) en onCreateViewHolder;
+            // no hay texto ni estado que actualizar aqui.
+            return
+        }
+
         val line = lines[position]
         holder.tvLine.text = line.text.ifBlank { "♪" }
 
@@ -86,7 +124,7 @@ class LyricsLineAdapter(
         animator.start()
     }
 
-    override fun getItemCount(): Int = lines.size
+    override fun getItemCount(): Int = lines.size + 1
 
     /**
      * Actualiza la línea activa según la posición actual de reproducción (ms).
@@ -109,6 +147,14 @@ class LyricsLineAdapter(
         return -1
     }
 
+    /**
+     * Aplica visualmente el cambio de linea activa con una transicion
+     * suave, en vez de usar notifyItemChanged (que fuerza un rebind
+     * instantaneo sin animacion). Se llama por separado desde la Activity
+     * despues de updateActiveLine, una vez que el scroll ya se disparo,
+     * para que la animacion de resaltado corra en paralelo al
+     * reposicionamiento instantaneo de la lista.
+     */
     fun animateActiveLineChange(recyclerView: RecyclerView, previousIndex: Int, newIndex: Int) {
         if (previousIndex in lines.indices) {
             (recyclerView.findViewHolderForAdapterPosition(previousIndex) as? LineViewHolder)?.let {
@@ -127,6 +173,8 @@ class LyricsLineAdapter(
     fun getLineAt(index: Int): LyricsLine? = lines.getOrNull(index)
 
     companion object {
+        private const val TYPE_LINE = 0
+        private const val TYPE_FOOTER = 1
         private const val LINE_TRANSITION_MS = 220L
         private const val INACTIVE_ALPHA = 0.45f
         private const val ACTIVE_TEXT_SIZE_SP = 20f
