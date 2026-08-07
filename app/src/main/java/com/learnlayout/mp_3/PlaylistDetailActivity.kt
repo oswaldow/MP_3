@@ -1,13 +1,18 @@
 package com.learnlayout.mp_3
 
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import android.view.View
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
@@ -22,6 +27,36 @@ class PlaylistDetailActivity : AppCompatActivity() {
     private lateinit var playlistId: String
     private var playlistSongs: MutableList<Song> = mutableListOf()
     private lateinit var songAdapter: SongAdapter
+
+    // Conexion directa al MusicService: reutilizamos el mismo reproductor
+    // (el de SongListActivity, con letras/waveform) en lugar de abrir una
+    // pantalla de player aparte (MainActivity, el reproductor viejo).
+    // Solo necesitamos el service para armar la cola y arrancar la
+    // reproduccion; el panel visual lo dibuja SongListActivity al volver.
+    private var musicService: MusicService? = null
+    private var isBound = false
+    private var pendingPlaylist: List<Song>? = null
+    private var pendingStartIndex: Int = 0
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as MusicService.MusicBinder
+            musicService = binder.getService()
+            isBound = true
+
+            val pending = pendingPlaylist
+            if (pending != null) {
+                pendingPlaylist = null
+                musicService?.setPlaylist(pending, pendingStartIndex)
+                returnToPlayer()
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            musicService = null
+            isBound = false
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +88,10 @@ class PlaylistDetailActivity : AppCompatActivity() {
         rvPlaylistSongs.adapter = songAdapter
 
         loadPlaylistSongs()
+
+        val serviceIntent = Intent(this, MusicService::class.java)
+        ContextCompat.startForegroundService(this, serviceIntent)
+        bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
     }
 
     private fun bindViews() {
@@ -133,14 +172,38 @@ class PlaylistDetailActivity : AppCompatActivity() {
     }
 
     private fun openPlayer(startIndex: Int) {
-        val intent = Intent(this, MainActivity::class.java)
-        intent.putParcelableArrayListExtra("song_list", ArrayList(playlistSongs))
-        intent.putExtra("start_index", startIndex)
-        startActivity(intent)
+        val songs = playlistSongs.toList()
+        val service = musicService
+        if (service != null) {
+            service.setPlaylist(songs, startIndex)
+            returnToPlayer()
+        } else {
+            // El service aun no esta conectado (poco probable, se conecta
+            // muy rapido en onCreate): guardamos la seleccion y la
+            // aplicamos en cuanto llegue onServiceConnected.
+            pendingPlaylist = songs
+            pendingStartIndex = startIndex
+        }
+    }
+
+    private fun returnToPlayer() {
+        // Le avisamos a SongListActivity (que sigue viva debajo en el
+        // back stack) que debe expandir su panel de reproductor al volver
+        // a primer plano, y cerramos esta pantalla para regresar a ella.
+        SongListActivity.expandPlayerOnResume = true
+        finish()
     }
 
     override fun onResume() {
         super.onResume()
         loadPlaylistSongs()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
     }
 }

@@ -44,6 +44,14 @@ object LyricsRepository {
 
     private val lrcLinePattern = Pattern.compile("\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})]\\s*(.*)")
 
+    // Etiqueta opcional del formato LRC: "[offset:+/-milisegundos]". Ajusta
+    // TODOS los timestamps del archivo. La convierten pocas letras de
+    // LRCLIB, pero cuando aparece y no se aplica, un offset positivo hace
+    // que casi todas las lineas "ya hayan pasado" desde el segundo 0, y
+    // por eso la letra activa salta directo al final apenas empieza la
+    // cancion y se queda ahi (ver parseLrc).
+    private val lrcOffsetPattern = Pattern.compile("\\[offset:\\s*(-?\\d+)]", Pattern.CASE_INSENSITIVE)
+
     interface LyricsCallback {
         fun onSuccess(result: LyricsResult)
         fun onError(message: String)
@@ -133,13 +141,44 @@ object LyricsRepository {
 
     private fun parseSingleResult(json: JSONObject): LyricsResult {
         val instrumental = json.optBoolean("instrumental", false)
-        val plain = json.optString("plainLyrics", "").ifBlank { null }
-        val syncedRaw = json.optString("syncedLyrics", "").ifBlank { null }
+        val plain = optNullableString(json, "plainLyrics")
+        val syncedRaw = optNullableString(json, "syncedLyrics")
+
+        // Log de diagnostico: para detectar si LRCLIB esta devolviendo una
+        // letra que no corresponde a la duracion real de la cancion (lo que
+        // causaria timestamps que no cuadran con el audio). Comparar
+        // "matchedDuration" contra la duracion real del archivo mp3.
+        Log.d(
+            TAG,
+            "Resultado LRCLIB -> id=${json.optLong("id", -1)} " +
+                    "trackName=\"${json.optString("trackName")}\" " +
+                    "artistName=\"${json.optString("artistName")}\" " +
+                    "matchedDuration=${json.optInt("duration", -1)}s " +
+                    "instrumental=$instrumental hasSynced=${!syncedRaw.isNullOrBlank()}"
+        )
+
         val synced = syncedRaw?.let { parseLrc(it) }
         return LyricsResult(plainLyrics = plain, syncedLines = synced, isInstrumental = instrumental)
     }
 
+    /**
+     * org.json.JSONObject.optString() tiene una trampa: si la clave EXISTE
+     * pero su valor es JSON null, no devuelve el default que le pasas, sino
+     * el string literal "null" (4 caracteres). Eso hacia que una cancion
+     * SIN letra sincronizada en LRCLIB ("syncedLyrics": null) se tratara
+     * como si su letra sincronizada fuera el texto "null", provocando 0
+     * lineas parseadas y una caida al modo no-sincronizado (todas las
+     * lineas con timeMs = -1), lo que hacia que el resaltado saltara
+     * directo al final de la letra desde el segundo 0.
+     */
+    private fun optNullableString(json: JSONObject, key: String): String? {
+        if (!json.has(key) || json.isNull(key)) return null
+        return json.optString(key, "").ifBlank { null }
+    }
+
     private fun parseLrc(raw: String): List<LyricsLine> {
+        val offsetMs = extractOffsetMs(raw)
+
         val lines = mutableListOf<LyricsLine>()
         raw.lines().forEach { line ->
             val matcher = lrcLinePattern.matcher(line.trim())
@@ -149,11 +188,47 @@ object LyricsRepository {
                 val fraction = matcher.group(3)!!
                 val millis = if (fraction.length == 2) fraction.toLong() * 10 else fraction.toLong()
                 val text = matcher.group(4) ?: ""
-                val timeMs = (minutes * 60_000L) + (seconds * 1000L) + millis
-                lines.add(LyricsLine(timeMs, text))
+                val rawTimeMs = (minutes * 60_000L) + (seconds * 1000L) + millis
+                // offset positivo = la letra debe adelantarse (verse antes),
+                // por eso se RESTA al timestamp original; negativo la
+                // atrasa. Es la convencion estandar del formato LRC.
+                lines.add(LyricsLine(rawTimeMs - offsetMs, text))
             }
         }
-        return lines.sortedBy { it.timeMs }
+        val sorted = lines.sortedBy { it.timeMs }
+
+        // Log de diagnostico temporal: cuantas lineas se parsearon, el
+        // offset detectado, y las primeras 5 (tiempo + texto). Si "offsetMs"
+        // sale distinto de 0 aqui, ese es el problema. Si sale 0 y aun asi
+        // la primera linea real ya tiene un timeMs bajo con texto que no es
+        // el inicio de la cancion, el problema esta en el LRC que devuelve
+        // LRCLIB (letra desincronizada o de otra version), no en el parser.
+        Log.d(
+            TAG,
+            "parseLrc -> offsetMs=$offsetMs totalLineas=${sorted.size} " +
+                    "primeras=${sorted.take(5).joinToString(" | ") { "${it.timeMs}ms:\"${it.text}\"" }}"
+        )
+
+        // Diagnostico extra: si el LRC llego con contenido pero no se
+        // extrajo ninguna linea, es que el regex no matchea el formato de
+        // ESTE LRC en particular. Se imprime tal cual llegaron las primeras
+        // lineas crudas (sin parsear) para poder ver el formato exacto.
+        if (sorted.isEmpty() && raw.isNotBlank()) {
+            val rawPreview = raw.lines().filter { it.isNotBlank() }.take(5)
+            Log.w(TAG, "parseLrc -> 0 lineas extraidas, LRC crudo (primeras lineas no vacias):")
+            rawPreview.forEachIndexed { i, l -> Log.w(TAG, "  raw[$i] = \"$l\"") }
+        }
+
+        return sorted
+    }
+
+    private fun extractOffsetMs(raw: String): Long {
+        val matcher = lrcOffsetPattern.matcher(raw)
+        return if (matcher.find()) {
+            matcher.group(1)?.toLongOrNull() ?: 0L
+        } else {
+            0L
+        }
     }
 
     private fun buildGetUrl(title: String, artist: String, durationSeconds: Long): String {

@@ -96,6 +96,14 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var lyricsAdapter: LyricsLineAdapter? = null
     private var lyricsSongId: Long? = null
     private var lyricsRequestId: Int = 0
+    // true solo cuando las lineas cargadas tienen timestamps reales (vienen
+    // de showSyncedLyrics). La letra plana (showPlainLyrics) usa timeMs=-1
+    // en todas sus lineas como "sin tiempo", y si se le aplica el mismo
+    // resaltado por posicion, TODAS las lineas cuentan como "ya pasadas"
+    // desde el segundo 0 y el resaltado salta directo a la ultima linea.
+    // Esta bandera evita que syncLyricsWithPosition toque letra sin
+    // sincronizar.
+    private var lyricsAreSynced: Boolean = false
     private lateinit var btnSaveLyrics: ImageButton
     private var lyricsBannerScrollAnimator: ValueAnimator? = null
     private var currentLyricsResult: LyricsResult? = null
@@ -595,6 +603,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         // de letra colapsado (el "peek" del panel deslizable de letra).
         private const val LYRICS_PEEK_GAP_DP = 16f
         private const val LYRICS_EXPANDED_TOP_GAP_DP = 24
+
+        // Bandera para que, al reproducir una cancion desde
+        // PlaylistDetailActivity, el panel del reproductor se expanda
+        // solo al volver a esta pantalla (que sigue viva en el back stack).
+        var expandPlayerOnResume: Boolean = false
     }
 
     private fun selectSongsTab() {
@@ -991,6 +1004,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private fun showLyricsMessage(message: String) {
         lyricsAdapter = null
+        lyricsAreSynced = false
         currentLyricsResult = null
         btnSaveLyrics.visibility = View.GONE
         rvLyricsPanel.adapter = LyricsLineAdapter(listOf(LyricsLine(timeMs = -1, text = message)))
@@ -999,6 +1013,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private fun showSyncedLyrics(lines: List<LyricsLine>) {
         val adapter = LyricsLineAdapter(lines)
         lyricsAdapter = adapter
+        lyricsAreSynced = true
         rvLyricsPanel.adapter = adapter
     }
 
@@ -1008,10 +1023,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             .map { LyricsLine(timeMs = -1, text = it) }
         val adapter = LyricsLineAdapter(staticLines)
         lyricsAdapter = adapter
+        // Letra sin sincronizar: no tiene timestamps reales, asi que no se
+        // debe intentar resaltar ni auto-scrollear por posicion (ver
+        // syncLyricsWithPosition). Se queda estatica, el usuario la lee
+        // desplazandose manualmente en modo expandido.
+        lyricsAreSynced = false
         rvLyricsPanel.adapter = adapter
     }
 
     private fun syncLyricsWithPosition(positionMs: Long) {
+        if (!lyricsAreSynced) return
         val adapter = lyricsAdapter ?: return
         val previousIndex = adapter.getActiveIndex()
         val newIndex = adapter.updateActiveLine(positionMs)
@@ -1532,6 +1553,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         if (isPlaylistsTabActive) {
             loadPlaylists()
+        }
+
+        if (expandPlayerOnResume) {
+            expandPlayerOnResume = false
+            expandPlayerPanelWhenReady()
         }
     }
 
