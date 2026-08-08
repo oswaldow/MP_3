@@ -11,10 +11,17 @@ import androidx.recyclerview.widget.RecyclerView
 import android.widget.TextView
 
 class LyricsLineAdapter(
-    private val lines: List<LyricsLine>
+    private val lines: List<LyricsLine>,
+    // Si no es null, las lineas se vuelven tocables (modo sincronizacion
+    // manual) y se invoca con la posicion tocada.
+    private val onLineTap: ((Int) -> Unit)? = null
 ) : RecyclerView.Adapter<LyricsLineAdapter.LineViewHolder>() {
 
     private var activeIndex: Int = -1
+
+    // Indices ya marcados con un timestamp manual (ver LyricsActivity).
+    // Solo se usa cuando onLineTap != null.
+    private val taggedIndices = mutableSetOf<Int>()
 
     class LineViewHolder(val tvLine: TextView) : RecyclerView.ViewHolder(tvLine) {
         var activeAnimator: ValueAnimator? = null
@@ -43,7 +50,13 @@ class LyricsLineAdapter(
         if (getItemViewType(position) == TYPE_FOOTER) return
 
         val line = lines[position]
-        holder.tvLine.text = line.text.ifBlank { "♪" }
+        val isTappable = onLineTap != null
+        val isTagged = position in taggedIndices
+        holder.tvLine.text = when {
+            line.text.isBlank() -> "♪"
+            isTappable && isTagged -> "✓  ${line.text}"
+            else -> line.text
+        }
 
         val isActive = position == activeIndex
 
@@ -51,7 +64,7 @@ class LyricsLineAdapter(
         holder.tvLine.translationY = 0f
         holder.tvLine.scaleX = 1f
         holder.tvLine.scaleY = 1f
-        holder.tvLine.alpha = if (isActive) 1.0f else INACTIVE_ALPHA
+        holder.tvLine.alpha = if (isActive) 1.0f else if (isTappable && isTagged) 0.65f else INACTIVE_ALPHA
         holder.tvLine.setTextSize(
             TypedValue.COMPLEX_UNIT_SP,
             if (isActive) ACTIVE_TEXT_SIZE_SP else INACTIVE_TEXT_SIZE_SP
@@ -65,6 +78,14 @@ class LyricsLineAdapter(
         }
         holder.glowRadius = glow
         applyGlow(holder.tvLine, glow)
+
+        if (isTappable) {
+            holder.tvLine.isClickable = true
+            holder.tvLine.setOnClickListener { onLineTap.invoke(position) }
+        } else {
+            holder.tvLine.isClickable = false
+            holder.tvLine.setOnClickListener(null)
+        }
     }
 
     // Anima solo el TextView (alpha, tamano, un desplazamiento en Y y un
@@ -89,15 +110,6 @@ class LyricsLineAdapter(
 
         view.setTypeface(null, if (isActive) Typeface.BOLD else Typeface.NORMAL)
 
-        // El tamano de letra ya NO se anima en sp frame a frame: hacerlo asi
-        // obliga al TextView a reflowear (recalcular donde corta cada
-        // linea) en cada frame, y justo cuando una palabra deja de caber en
-        // el ancho disponible salta de golpe a la siguiente linea (se ve
-        // tosco/trabado). En vez de eso, el tamano final se aplica de una
-        // sola vez (el texto ya queda acomodado en su layout final desde el
-        // primer frame) y el efecto de "crecer" se anima con un escalado
-        // (scaleX/scaleY), que es un transform visual puro y no vuelve a
-        // reflowear nada mientras corre.
         val currentApparentSizeSp =
             (view.textSize / view.resources.displayMetrics.scaledDensity) * view.scaleX
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, endSizeSp)
@@ -113,9 +125,6 @@ class LyricsLineAdapter(
             addUpdateListener { animation ->
                 val fraction = animation.animatedValue as Float
 
-                // El movimiento (subir) avanza un poco mas rapido que el
-                // alpha/brillo, para que se perciba como "sube y luego
-                // brilla" en vez de aparecer ya arriba y solo iluminarse.
                 val moveFraction = (fraction * 1.35f).coerceAtMost(1f)
                 view.translationY = startTranslationY + (0f - startTranslationY) * moveFraction
 
@@ -158,6 +167,25 @@ class LyricsLineAdapter(
             return newIndex
         }
         return -1
+    }
+
+    /**
+     * Resalta directamente la linea "index" como activa, sin depender del
+     * tiempo de reproduccion. La usa el modo de sincronizacion manual para
+     * marcar cual es la siguiente linea pendiente de tocar.
+     */
+    fun setActiveIndexDirect(index: Int) {
+        if (index == activeIndex) return
+        val previous = activeIndex
+        activeIndex = index
+        if (previous in lines.indices) notifyItemChanged(previous)
+        if (index in lines.indices) notifyItemChanged(index)
+    }
+
+    /** Marca una linea como ya sincronizada manualmente (le pone el check). */
+    fun markTagged(index: Int) {
+        taggedIndices.add(index)
+        notifyItemChanged(index)
     }
 
     fun animateActiveLineChange(recyclerView: RecyclerView, previousIndex: Int, newIndex: Int) {

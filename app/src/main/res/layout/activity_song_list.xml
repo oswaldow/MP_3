@@ -451,6 +451,20 @@
                     android:layout_marginTop="10dp"
                     android:layout_gravity="top|center_horizontal"
                     android:background="@drawable/bg_drag_handle_small" />
+
+                <ImageButton
+                    android:id="@+id/btnPanelLyricsSync"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="top|start"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@android:color/transparent"
+                    android:contentDescription="Sincronizar letra manualmente"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_lyrics"
+                    android:visibility="gone" />
+
                 <ImageButton
                     android:id="@+id/btnSaveLyrics"
                     android:layout_width="40dp"

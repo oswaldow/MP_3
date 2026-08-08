@@ -34,6 +34,16 @@ object SavedLyricsRepository {
         }
     }
 
+    /**
+     * Guarda (o sobreescribe) la letra de esta cancion sin importar si ya
+     * habia una guardada antes. La usa el modo de sincronizacion manual:
+     * cada vez que el usuario re-sincroniza a mano, esto reemplaza lo que
+     * hubiera guardado previamente (LRCLIB o una sincronizacion anterior).
+     */
+    fun save(context: Context, songId: Long, result: LyricsResult) {
+        prefs(context).edit().putString(keyFor(songId), toJson(result).toString()).apply()
+    }
+
     private fun toJson(result: LyricsResult): JSONObject {
         val obj = JSONObject()
         obj.put("plainLyrics", result.plainLyrics ?: JSONObject.NULL)

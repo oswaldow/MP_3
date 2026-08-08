@@ -229,6 +229,69 @@
 
             </LinearLayout>
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:layout_marginBottom="10dp"
+                android:text="Letras"
+                android:textColor="@color/text_secondary_light"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.05" />
+
+            <LinearLayout
+                android:id="@+id/rowDownloadLyrics"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_item_song"
+                android:clickable="true"
+                android:focusable="true"
+                android:padding="16dp">
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/ic_lyrics"
+                    android:contentDescription="Letras" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="14dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Descargar todas las letras"
+                        android:textColor="@color/text_primary_light"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvDownloadLyricsSummary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Busca y guarda la letra de cada cancion que reconozca"
+                        android:textColor="@color/text_secondary_light"
+                        android:textSize="13sp" />
+
+                </LinearLayout>
+
+                <ProgressBar
+                    android:id="@+id/progressDownloadLyrics"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+
         </LinearLayout>
 
     </androidx.core.widget.NestedScrollView>

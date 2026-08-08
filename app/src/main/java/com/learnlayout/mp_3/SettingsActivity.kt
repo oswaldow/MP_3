@@ -5,8 +5,10 @@ import android.os.Bundle
 import android.view.View
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 
@@ -18,6 +20,11 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var seekCrossfadeSeconds: SeekBar
     private lateinit var tvCrossfadeSeconds: TextView
     private lateinit var rowBluetooth: LinearLayout
+
+    private lateinit var rowDownloadLyrics: LinearLayout
+    private lateinit var tvDownloadLyricsSummary: TextView
+    private lateinit var progressDownloadLyrics: ProgressBar
+    private var isDownloadingLyrics = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +42,10 @@ class SettingsActivity : AppCompatActivity() {
         seekCrossfadeSeconds = findViewById(R.id.seekCrossfadeSeconds)
         tvCrossfadeSeconds = findViewById(R.id.tvCrossfadeSeconds)
         rowBluetooth = findViewById(R.id.rowBluetooth)
+
+        rowDownloadLyrics = findViewById(R.id.rowDownloadLyrics)
+        tvDownloadLyricsSummary = findViewById(R.id.tvDownloadLyricsSummary)
+        progressDownloadLyrics = findViewById(R.id.progressDownloadLyrics)
     }
 
     private fun loadCurrentSettings() {
@@ -71,6 +82,10 @@ class SettingsActivity : AppCompatActivity() {
         rowBluetooth.setOnClickListener {
             startActivity(Intent(this, BluetoothAudioActivity::class.java))
         }
+
+        rowDownloadLyrics.setOnClickListener {
+            downloadAllLyrics()
+        }
     }
 
     private fun updateDurationGroupEnabled(enabled: Boolean) {
@@ -86,4 +101,76 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
     }
+
+    // ==================== DESCARGA MASIVA DE LETRAS ====================
+
+    private fun downloadAllLyrics() {
+        if (isDownloadingLyrics) return
+
+        val songs = SongRepository.getAllSongs(this)
+        if (songs.isEmpty()) {
+            Toast.makeText(this, "No se encontraron canciones", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isDownloadingLyrics = true
+        rowDownloadLyrics.isEnabled = false
+        progressDownloadLyrics.visibility = View.VISIBLE
+
+        var index = 0
+        var foundCount = 0
+
+        fun finishDownload() {
+            isDownloadingLyrics = false
+            rowDownloadLyrics.isEnabled = true
+            progressDownloadLyrics.visibility = View.GONE
+            tvDownloadLyricsSummary.text = "Se encontraron $foundCount de ${songs.size} letras"
+            Toast.makeText(
+                this,
+                "Listo: $foundCount de ${songs.size} letras encontradas",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
+        fun processNext() {
+            // Salta de una vez las canciones que ya tienen letra guardada,
+            // sin llamadas de red. Es un while, no recursion, para no
+            // acumular stack si hay muchas canciones ya guardadas seguidas.
+            while (index < songs.size && SavedLyricsRepository.isSaved(this, songs[index].id)) {
+                foundCount++
+                index++
+            }
+
+            if (index >= songs.size) {
+                finishDownload()
+                return
+            }
+
+            val song = songs[index]
+            tvDownloadLyricsSummary.text = "Buscando ${index + 1}/${songs.size}: ${song.title}"
+
+            val durationSeconds = song.duration / 1000
+            LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
+                override fun onSuccess(result: LyricsResult) {
+                    val hasLyrics = !result.isInstrumental &&
+                            (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
+                    if (hasLyrics) {
+                        SavedLyricsRepository.save(this@SettingsActivity, song.id, result)
+                        foundCount++
+                    }
+                    index++
+                    processNext()
+                }
+
+                override fun onError(message: String) {
+                    index++
+                    processNext()
+                }
+            })
+        }
+
+        processNext()
+    }
+
+    // ==================== FIN DESCARGA MASIVA DE LETRAS ====================
 }

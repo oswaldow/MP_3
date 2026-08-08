@@ -75,6 +75,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnMiniPlayMode: ImageButton
     private lateinit var circularMiniProgress: CircularProgressView
     private lateinit var btnPanelBack: ImageButton
+    private lateinit var btnPanelLyricsSync: ImageButton
     private lateinit var btnPanelQueue: ImageButton
     private lateinit var tvPanelSongTitle: TextView
     private lateinit var tvPanelArtist: TextView
@@ -330,6 +331,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnPanelBack = findViewById(R.id.btnPanelBack)
         btnPanelQueue = findViewById(R.id.btnPanelQueue)
         btnPanelFavorite = findViewById(R.id.btnPanelFavorite)
+        btnPanelLyricsSync = findViewById(R.id.btnPanelLyricsSync)
         tvPanelSongTitle = findViewById(R.id.tvPanelSongTitle)
         tvPanelArtist = findViewById(R.id.tvPanelArtist)
         sbPanelProgress = findViewById(R.id.sbPanelProgress)
@@ -774,6 +776,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             toggleCurrentSongFavorite()
         }
 
+        btnPanelLyricsSync.setOnClickListener {
+            openLyricsSyncScreen()
+        }
+
         btnSaveLyrics.setOnClickListener {
             toggleSaveLyrics()
         }
@@ -876,6 +882,17 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 
+    private fun openLyricsSyncScreen() {
+        val currentSong = musicService?.getCurrentSong() ?: run {
+            Toast.makeText(this, "No hay cancion reproduciendose", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(this, LyricsActivity::class.java)
+        intent.putExtra("song", currentSong)
+        startActivity(intent)
+        overridePendingTransition(R.anim.activity_slide_up_in, R.anim.activity_stay)
+    }
+
     // ---------- Panel de letra deslizable (estilo Spotify) ----------
 
     private fun setupLyricsPanel() {
@@ -950,6 +967,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             return
         }
 
+        btnPanelLyricsSync.visibility = View.GONE
         showLyricsMessage("Buscando letra...")
 
         val durationSeconds = song.duration / 1000
@@ -976,6 +994,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             !result.plainLyrics.isNullOrBlank() -> showPlainLyrics(result.plainLyrics)
             else -> showLyricsMessage("No se encontro letra para esta cancion")
         }
+
+        // El boton siempre visible si hay contenido: aunque ya tenga
+        // timestamps sincronizados, el usuario puede querer editar la
+        // letra o resincronizarla a mano.
+        btnPanelLyricsSync.visibility = if (hasContent) View.VISIBLE else View.GONE
 
         if (hasContent) {
             currentLyricsResult = result
