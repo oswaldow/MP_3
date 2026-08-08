@@ -1,6 +1,7 @@
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
+import android.graphics.drawable.AnimationDrawable
 import android.Manifest
 import android.content.ComponentName
 import android.graphics.Rect
@@ -24,6 +25,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ProgressBar
@@ -57,6 +59,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var rvPlaylists: RecyclerView
     private lateinit var tvEmptyState: TextView
     private lateinit var tvAppName: TextView
+    private lateinit var ivMascot: ImageView
+    private lateinit var ivMonito: ImageView
     private lateinit var llInlineSearch: View
     private lateinit var etSearch: EditText
     private lateinit var btnSearch: ImageButton
@@ -273,7 +277,58 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         val serviceIntent = Intent(this, MusicService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+
+        startMascotAnimation()
     }
+
+    private fun startMascotAnimation() {
+        // .post() asegura que la vista ya este "attachada" a la ventana;
+        // si se llama .start() demasiado pronto, la animacion no arranca.
+        ivMascot.post {
+            (ivMascot.drawable as? AnimationDrawable)?.start()
+        }
+    }
+
+    private var monitoBlinkRunnable: Runnable? = null
+
+    private fun resetMonitoToTop() {
+        // Se llama al cerrar el panel: cancela cualquier bajada/parpadeo
+        // pendiente y deja al monito quieto en su frame inicial (arriba,
+        // cuerda corta), para que la proxima vez que abras el panel no se
+        // alcance a ver un instante el estado anterior (aterrizado) durante
+        // el fade-in del onSlide.
+        monitoBlinkRunnable?.let { uiHandler.removeCallbacks(it) }
+        (ivMonito.drawable as? AnimationDrawable)?.stop()
+        ivMonito.setImageResource(R.drawable.ic_monito_frame1)
+    }
+
+    private fun startMonitoAnimation() {
+        // Si ya habia una bajada pendiente (p.ej. abriste/cerraste muy rapido),
+        // se cancela para que no se encimen dos animaciones.
+        monitoBlinkRunnable?.let { uiHandler.removeCallbacks(it) }
+
+        ivMonito.setImageResource(R.drawable.anim_monito_descend)
+        ivMonito.post {
+            val descendDrawable = ivMonito.drawable as? AnimationDrawable ?: return@post
+            descendDrawable.start()
+
+            // AnimationDrawable no avisa cuando termina un oneshot, asi que
+            // calculamos la duracion total sumando cada frame y programamos
+            // el cambio a la animacion de parpadeo justo cuando acaba.
+            var totalDuration = 0
+            for (i in 0 until descendDrawable.numberOfFrames) {
+                totalDuration += descendDrawable.getDuration(i)
+            }
+
+            val blinkRunnable = Runnable {
+                ivMonito.setImageResource(R.drawable.anim_monito_blink)
+                (ivMonito.drawable as? AnimationDrawable)?.start()
+            }
+            monitoBlinkRunnable = blinkRunnable
+            uiHandler.postDelayed(blinkRunnable, totalDuration.toLong())
+        }
+    }
+
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (::swipeGestureDetector.isInitialized) {
@@ -312,6 +367,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         rvPlaylists = findViewById(R.id.rvPlaylists)
         tvEmptyState = findViewById(R.id.tvEmptyState)
         tvAppName = findViewById(R.id.tvAppName)
+        ivMascot = findViewById(R.id.ivMascot)
+        ivMonito = findViewById(R.id.ivMonito)
         llInlineSearch = findViewById(R.id.llInlineSearch)
         etSearch = findViewById(R.id.etSearch)
         btnSearch = findViewById(R.id.btnSearch)
@@ -467,6 +524,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         if (isSearchVisible) {
             tvAppName.visibility = View.GONE
+            ivMascot.visibility = View.GONE
             llInlineSearch.visibility = View.VISIBLE
             btnSort.visibility = View.GONE
             btnSettings.visibility = View.GONE
@@ -477,6 +535,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         } else {
             llInlineSearch.visibility = View.GONE
             tvAppName.visibility = View.VISIBLE
+            ivMascot.visibility = View.VISIBLE
             btnSort.visibility = View.VISIBLE
             btnSettings.visibility = View.VISIBLE
             btnSearch.setImageResource(R.drawable.ic_search)
@@ -647,6 +706,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             isSearchVisible = false
             llInlineSearch.visibility = View.GONE
             tvAppName.visibility = View.VISIBLE
+            ivMascot.visibility = View.VISIBLE
             btnSort.visibility = View.VISIBLE
             btnSettings.visibility = View.VISIBLE
             btnSearch.setImageResource(R.drawable.ic_search)
@@ -726,6 +786,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                         groupExpanded.visibility = View.VISIBLE
                         lyricsCoordinator.visibility = View.VISIBLE
                         updateLyricsPeekHeight()
+                        startMonitoAnimation()
                     }
                     BottomSheetBehavior.STATE_COLLAPSED -> {
                         groupMini.alpha = 1f
@@ -737,6 +798,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                             lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
                         }
                         lyricsCoordinator.visibility = View.GONE
+                        resetMonitoToTop()
                     }
                     else -> {
                         groupMini.visibility = View.VISIBLE
@@ -995,9 +1057,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             else -> showLyricsMessage("No se encontro letra para esta cancion")
         }
 
-        // El boton siempre visible si hay contenido: aunque ya tenga
-        // timestamps sincronizados, el usuario puede querer editar la
-        // letra o resincronizarla a mano.
         btnPanelLyricsSync.visibility = if (hasContent) View.VISIBLE else View.GONE
 
         if (hasContent) {

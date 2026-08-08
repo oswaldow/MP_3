@@ -14,19 +14,34 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
+        <ImageView
+            android:id="@+id/ivMascot"
+            android:layout_width="78dp"
+            android:layout_height="78dp"
+            android:layout_marginStart="12dp"
+            android:contentDescription="Mapache"
+            android:scaleType="fitCenter"
+            android:src="@drawable/anim_mascot_wink"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="@id/tvAppName"
+            app:layout_constraintBottom_toBottomOf="@id/tvAppName" />
+
+
+
         <TextView
             android:id="@+id/tvAppName"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:layout_marginStart="20dp"
+            android:layout_marginStart="8dp"
             android:text="MP_3"
             android:textColor="@color/text_primary_light"
             android:textSize="24sp"
             android:textStyle="bold"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintStart_toEndOf="@id/ivMascot"
             app:layout_constraintEnd_toStartOf="@id/btnSearch"
+            app:layout_constraintHorizontal_bias="0"
             app:layout_constraintBottom_toBottomOf="@id/btnSettings" />
 
         <LinearLayout
@@ -228,6 +243,19 @@
                 android:src="@drawable/ic_chevron_down"
                 app:layout_constraintTop_toTopOf="parent"
                 app:layout_constraintStart_toStartOf="parent" />
+
+            <ImageView
+                android:id="@+id/ivMonito"
+                android:layout_width="99dp"
+                android:layout_height="99dp"
+                android:contentDescription="Monito"
+                android:scaleType="fitCenter"
+                android:elevation="14dp"
+                android:layout_marginBottom="-20dp"
+                app:layout_constraintStart_toStartOf="@id/ivPanelAlbumArt"
+                app:layout_constraintEnd_toEndOf="@id/ivPanelAlbumArt"
+                app:layout_constraintBottom_toTopOf="@id/ivPanelAlbumArt"
+                app:layout_constraintVertical_bias="1" />
 
             <ImageView
                 android:id="@+id/ivPanelAlbumArt"
