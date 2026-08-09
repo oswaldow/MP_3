@@ -1,0 +1,339 @@
+package com.learnlayout.mp_3
+
+import android.content.Intent
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.doOnLayout
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+
+/**
+ * Encapsula el panel del reproductor: el mini player colapsado, el panel
+ * expandido (estilo Spotify) y su BottomSheetBehavior, los controles de
+ * reproduccion (play/pause/siguiente/anterior/modo/favorito/seek), y las
+ * actualizaciones de progreso.
+ *
+ * No guarda una referencia fija a MusicService: la pide via [getMusicService]
+ * cada vez que la necesita, porque el binding del servicio puede no estar
+ * listo todavia cuando el controller ya existe (mismo patron que
+ * QueueSheetController).
+ *
+ * [onExpanded] / [onCollapsed] son notificaciones hacia la Activity para que
+ * coordine efectos que no le pertenecen a este panel (letra, animacion del
+ * monito). [onShowQueue] delega la apertura de la cola. [onFavoriteToggled]
+ * avisa que cambio el estado de favorito por si hay que refrescar la
+ * pestana de playlists.
+ */
+class PlayerPanelController(
+    private val activity: AppCompatActivity,
+    private val getMusicService: () -> MusicService?,
+    private val playerPanel: FrameLayout,
+    private val groupExpanded: View,
+    private val groupMini: View,
+    private val tvMiniTitle: TextView,
+    private val tvMiniArtist: TextView,
+    private val btnMiniPlayPause: ImageButton,
+    private val btnMiniPlayMode: ImageButton,
+    private val circularMiniProgress: CircularProgressView,
+    private val btnPanelBack: ImageButton,
+    private val btnPanelQueue: ImageButton,
+    private val btnPanelFavorite: ImageButton,
+    private val btnPanelLyricsSync: ImageButton,
+    private val tvPanelSongTitle: TextView,
+    private val tvPanelArtist: TextView,
+    private val sbPanelProgress: WaveformSeekBar,
+    private val tvPanelCurrentTime: TextView,
+    private val tvPanelTotalTime: TextView,
+    private val btnPanelPrevious: ImageButton,
+    private val btnPanelPlayPause: ImageButton,
+    private val btnPanelNext: ImageButton,
+    private val onExpanded: () -> Unit,
+    private val onCollapsed: () -> Unit,
+    private val onShowQueue: () -> Unit,
+    private val onFavoriteToggled: () -> Unit
+) {
+
+    private lateinit var behavior: BottomSheetBehavior<FrameLayout>
+
+    private var isUserSeekingPanel: Boolean = false
+
+    private val baseGroupMiniPaddingBottom: Int = groupMini.paddingBottom
+    private val baseGroupExpandedPaddingBottom: Int = groupExpanded.paddingBottom
+
+    val isReady: Boolean
+        get() = ::behavior.isInitialized
+
+    val isExpanded: Boolean
+        get() = isReady && behavior.state == BottomSheetBehavior.STATE_EXPANDED
+
+    val isVisible: Boolean
+        get() = playerPanel.visibility == View.VISIBLE
+
+    fun setup() {
+        behavior = BottomSheetBehavior.from(playerPanel)
+        behavior.isHideable = false
+        behavior.skipCollapsed = false
+
+        behavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
+            override fun onStateChanged(bottomSheet: View, newState: Int) {
+                when (newState) {
+                    BottomSheetBehavior.STATE_EXPANDED -> {
+                        groupMini.alpha = 0f
+                        groupExpanded.alpha = 1f
+                        groupMini.visibility = View.INVISIBLE
+                        groupExpanded.visibility = View.VISIBLE
+                        onExpanded()
+                    }
+                    BottomSheetBehavior.STATE_COLLAPSED -> {
+                        groupMini.alpha = 1f
+                        groupExpanded.alpha = 0f
+                        groupMini.visibility = View.VISIBLE
+                        groupExpanded.visibility = View.INVISIBLE
+                        updatePeekHeight()
+                        onCollapsed()
+                    }
+                    else -> {
+                        groupMini.visibility = View.VISIBLE
+                        groupExpanded.visibility = View.VISIBLE
+                    }
+                }
+            }
+
+            override fun onSlide(bottomSheet: View, slideOffset: Float) {
+                val progress = slideOffset.coerceIn(0f, 1f)
+                groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
+                groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+            }
+        })
+
+        behavior.state = BottomSheetBehavior.STATE_COLLAPSED
+        groupMini.alpha = 1f
+        groupExpanded.alpha = 0f
+        groupMini.visibility = View.VISIBLE
+        groupExpanded.visibility = View.INVISIBLE
+
+        groupMini.setOnClickListener {
+            if (behavior.state != BottomSheetBehavior.STATE_EXPANDED) {
+                behavior.state = BottomSheetBehavior.STATE_EXPANDED
+            }
+        }
+
+        btnPanelBack.setOnClickListener {
+            behavior.state = BottomSheetBehavior.STATE_COLLAPSED
+        }
+
+        btnPanelQueue.setOnClickListener {
+            onShowQueue()
+        }
+
+        btnPanelFavorite.setOnClickListener {
+            toggleFavorite()
+        }
+
+        btnPanelLyricsSync.setOnClickListener {
+            openLyricsSyncScreen()
+        }
+
+        btnPanelPlayPause.setOnClickListener {
+            getMusicService()?.togglePlayPause()
+        }
+
+        btnPanelPrevious.setOnClickListener {
+            getMusicService()?.playPrevious()
+        }
+
+        btnPanelNext.setOnClickListener {
+            getMusicService()?.playNext()
+        }
+
+        btnMiniPlayPause.setOnClickListener {
+            getMusicService()?.togglePlayPause()
+        }
+
+        btnMiniPlayMode.setOnClickListener {
+            val service = getMusicService() ?: return@setOnClickListener
+            val newMode = service.cyclePlaybackMode()
+            updateModeButtonIcon(newMode)
+
+            val message = when (newMode) {
+                MusicService.PlaybackMode.NORMAL -> "Reproduccion normal"
+                MusicService.PlaybackMode.REPEAT_ONE -> "Repitiendo cancion actual"
+                MusicService.PlaybackMode.SHUFFLE -> "Reproduccion aleatoria"
+            }
+            Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
+        }
+
+        sbPanelProgress.listener = object : WaveformSeekBar.OnWaveformSeekListener {
+            override fun onProgressChanged(progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    tvPanelCurrentTime.text = formatTime(progress.toLong())
+                }
+            }
+
+            override fun onStartTrackingTouch() {
+                isUserSeekingPanel = true
+            }
+
+            override fun onStopTrackingTouch(progress: Int) {
+                isUserSeekingPanel = false
+                getMusicService()?.seekTo(progress)
+            }
+        }
+    }
+
+    // ---------- Drag guard (usado por dispatchTouchEvent de la Activity) ----------
+
+    fun setDraggable(draggable: Boolean) {
+        if (isReady) {
+            behavior.setDraggable(draggable)
+        }
+    }
+
+    // ---------- Estado del panel ----------
+
+    fun collapse() {
+        if (isReady) {
+            behavior.state = BottomSheetBehavior.STATE_COLLAPSED
+        }
+    }
+
+    fun expandWhenReady() {
+        playerPanel.doOnLayout {
+            behavior.state = BottomSheetBehavior.STATE_EXPANDED
+        }
+    }
+
+    fun updatePeekHeight() {
+        groupMini.post {
+            val height = groupMini.height
+            if (isReady && height > 0 && height != behavior.peekHeight) {
+                behavior.peekHeight = height
+                playerPanel.requestLayout()
+            }
+        }
+    }
+
+    // ---------- Insets / edge-to-edge ----------
+
+    fun applyBottomInset(systemBarsBottom: Int) {
+        groupMini.setPadding(
+            groupMini.paddingLeft,
+            groupMini.paddingTop,
+            groupMini.paddingRight,
+            baseGroupMiniPaddingBottom + systemBarsBottom
+        )
+
+        groupExpanded.setPadding(
+            groupExpanded.paddingLeft,
+            groupExpanded.paddingTop,
+            groupExpanded.paddingRight,
+            baseGroupExpandedPaddingBottom + systemBarsBottom
+        )
+    }
+
+    // ---------- Now playing ----------
+
+    fun updateNowPlaying(song: Song, playing: Boolean) {
+        playerPanel.visibility = View.VISIBLE
+
+        tvMiniTitle.text = song.title
+        tvMiniArtist.text = song.artist
+        tvPanelSongTitle.text = song.title
+        tvPanelArtist.text = song.artist
+        sbPanelProgress.setWaveformSeed(song.id)
+
+        btnMiniPlayPause.setImageResource(
+            if (playing) R.drawable.ic_pause_small else R.drawable.ic_play_small
+        )
+        btnPanelPlayPause.setImageResource(
+            if (playing) R.drawable.ic_pause else R.drawable.ic_play_arrow
+        )
+
+        updateFavoriteIcon(song.id)
+        updatePeekHeight()
+    }
+
+    fun updatePlaybackState(isPlaying: Boolean) {
+        btnMiniPlayPause.setImageResource(
+            if (isPlaying) R.drawable.ic_pause_small else R.drawable.ic_play_small
+        )
+        btnPanelPlayPause.setImageResource(
+            if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
+        )
+    }
+
+    // Llamado desde el poller de progreso de la Activity (cada 500ms),
+    // solo mientras isVisible es true.
+    fun updateProgress(currentMs: Int, totalMs: Int) {
+        val service = getMusicService()
+
+        circularMiniProgress.setProgress(currentMs, totalMs)
+        btnMiniPlayPause.setImageResource(
+            if (service?.isPlaying() == true) R.drawable.ic_pause_small else R.drawable.ic_play_small
+        )
+
+        if (!isUserSeekingPanel) {
+            sbPanelProgress.max = if (totalMs > 0) totalMs else 0
+            sbPanelProgress.progress = currentMs
+        }
+        tvPanelCurrentTime.text = formatTime(currentMs.toLong())
+        tvPanelTotalTime.text = formatTime(totalMs.toLong())
+        btnPanelPlayPause.setImageResource(
+            if (service?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play_arrow
+        )
+    }
+
+    fun updateModeButtonIcon(mode: MusicService.PlaybackMode) {
+        when (mode) {
+            MusicService.PlaybackMode.NORMAL -> {
+                btnMiniPlayMode.setImageResource(R.drawable.ic_repeat)
+                btnMiniPlayMode.setBackgroundResource(R.drawable.bg_icon_button_circle)
+            }
+            MusicService.PlaybackMode.REPEAT_ONE -> {
+                btnMiniPlayMode.setImageResource(R.drawable.ic_repeat_one)
+                btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
+            }
+            MusicService.PlaybackMode.SHUFFLE -> {
+                btnMiniPlayMode.setImageResource(R.drawable.ic_shuffle)
+                btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
+            }
+        }
+    }
+
+    private fun updateFavoriteIcon(songId: Long?) {
+        val isFav = songId != null && PlaylistRepository.isFavorite(activity, songId)
+        btnPanelFavorite.setImageResource(
+            if (isFav) R.drawable.ic_favorite else R.drawable.ic_favorite_border
+        )
+    }
+
+    private fun toggleFavorite() {
+        val song = getMusicService()?.getCurrentSong() ?: return
+        val isNowFavorite = PlaylistRepository.toggleFavorite(activity, song.id)
+        btnPanelFavorite.setImageResource(
+            if (isNowFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border
+        )
+        onFavoriteToggled()
+    }
+
+    private fun openLyricsSyncScreen() {
+        val currentSong = getMusicService()?.getCurrentSong() ?: run {
+            Toast.makeText(activity, "No hay cancion reproduciendose", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(activity, LyricsActivity::class.java)
+        intent.putExtra("song", currentSong)
+        activity.startActivity(intent)
+        activity.overridePendingTransition(R.anim.activity_slide_up_in, R.anim.activity_stay)
+    }
+
+    private fun formatTime(millis: Long): String {
+        val totalSeconds = millis / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    }
+}

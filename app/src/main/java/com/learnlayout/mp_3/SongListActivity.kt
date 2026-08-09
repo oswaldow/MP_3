@@ -1,10 +1,8 @@
 package com.learnlayout.mp_3
 
-import android.animation.ValueAnimator
 import android.graphics.drawable.AnimationDrawable
 import android.Manifest
 import android.content.ComponentName
-import android.graphics.Rect
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
@@ -14,26 +12,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.text.Editable
-import android.text.TextWatcher
-import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
-import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.ImageButton
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.PopupWindow
-import android.widget.ProgressBar
-import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.coordinatorlayout.widget.CoordinatorLayout
@@ -41,15 +23,15 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.doOnLayout
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.bottomsheet.BottomSheetBehavior
-import com.google.android.material.bottomsheet.BottomSheetDialog
-import java.util.Locale
-import kotlin.math.abs
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
 
 class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
@@ -70,7 +52,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var tabPlaylists: TextView
 
     private lateinit var playerPanel: FrameLayout
-    private lateinit var panelBehavior: BottomSheetBehavior<FrameLayout>
     private lateinit var groupExpanded: View
     private lateinit var groupMini: View
     private lateinit var tvMiniTitle: TextView
@@ -93,38 +74,30 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     // ---------- Panel de letra deslizable ----------
     private lateinit var lyricsCoordinator: View
-
     private lateinit var lyricsPanel: FrameLayout
-    private lateinit var lyricsPanelBehavior: BottomSheetBehavior<FrameLayout>
     private lateinit var rvLyricsPanel: RecyclerView
-
-    private var lyricsAdapter: LyricsLineAdapter? = null
-    private var lyricsSongId: Long? = null
-    private var lyricsRequestId: Int = 0
-    // true solo cuando las lineas cargadas tienen timestamps reales (vienen
-    // de showSyncedLyrics). La letra plana (showPlainLyrics) usa timeMs=-1
-    // en todas sus lineas como "sin tiempo", y si se le aplica el mismo
-    // resaltado por posicion, TODAS las lineas cuentan como "ya pasadas"
-    // desde el segundo 0 y el resaltado salta directo a la ultima linea.
-    // Esta bandera evita que syncLyricsWithPosition toque letra sin
-    // sincronizar.
-    private var lyricsAreSynced: Boolean = false
     private lateinit var btnSaveLyrics: ImageButton
-    private var lyricsBannerScrollAnimator: ValueAnimator? = null
-    private var currentLyricsResult: LyricsResult? = null
 
     private lateinit var songAdapter: SongAdapter
     private lateinit var playlistAdapter: PlaylistAdapter
 
     private lateinit var btnPanelFavorite: ImageButton
 
-    private lateinit var swipeGestureDetector: GestureDetector
-
     private var allSongs: List<Song> = emptyList()
     private var currentSort: SortType = SortType.TITLE
     private var searchQuery: String = ""
-    private var isSearchVisible: Boolean = false
-    private var isPlaylistsTabActive: Boolean = false
+
+    private val playlistDialogs by lazy {
+        PlaylistDialogs(
+            context = this,
+            isPlaylistsTabActive = { topBarController.isPlaylistsTabActive },
+            onPlaylistsChanged = { loadPlaylists() },
+            onSongMetadataChanged = {
+                lyricsPanelController.resetSongId()
+                loadSongs()
+            }
+        )
+    }
 
     private var musicService: MusicService? = null
     private var isBound = false
@@ -133,21 +106,93 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var pendingSongList: List<Song>? = null
     private var pendingStartIndex: Int = 0
 
-    private var isUserSeekingPanel: Boolean = false
+    private val queueSheet by lazy {
+        QueueSheetController(this) { musicService }
+    }
 
-    private var activeQueueDialog: BottomSheetDialog? = null
-    private var queueTvTitle: TextView? = null
-    private var queuePlayPauseBtn: ImageButton? = null
-    private var queueProgressBar: ProgressBar? = null
-    private var queueRecyclerView: RecyclerView? = null
-    private var queueBtnModeNormal: ImageButton? = null
-    private var queueBtnModeRepeat: ImageButton? = null
-    private var queueBtnModeShuffle: ImageButton? = null
-    private var queueTouchHelper: ItemTouchHelper? = null
+    private val lyricsPanelController by lazy {
+        LyricsPanelController(
+            activity = this,
+            lyricsCoordinator = lyricsCoordinator,
+            lyricsPanel = lyricsPanel,
+            rvLyricsPanel = rvLyricsPanel,
+            btnSaveLyrics = btnSaveLyrics,
+            btnPanelLyricsSync = btnPanelLyricsSync,
+            groupExpanded = groupExpanded,
+            llPanelControls = llPanelControls
+        )
+    }
 
-    private var baseGroupMiniPaddingBottom: Int = 0
-    private var baseGroupExpandedPaddingBottom: Int = 0
-    private var baseLyricsPanelPaddingTop: Int = 0
+    private val playerPanelController by lazy {
+        PlayerPanelController(
+            activity = this,
+            getMusicService = { musicService },
+            playerPanel = playerPanel,
+            groupExpanded = groupExpanded,
+            groupMini = groupMini,
+            tvMiniTitle = tvMiniTitle,
+            tvMiniArtist = tvMiniArtist,
+            btnMiniPlayPause = btnMiniPlayPause,
+            btnMiniPlayMode = btnMiniPlayMode,
+            circularMiniProgress = circularMiniProgress,
+            btnPanelBack = btnPanelBack,
+            btnPanelQueue = btnPanelQueue,
+            btnPanelFavorite = btnPanelFavorite,
+            btnPanelLyricsSync = btnPanelLyricsSync,
+            tvPanelSongTitle = tvPanelSongTitle,
+            tvPanelArtist = tvPanelArtist,
+            sbPanelProgress = sbPanelProgress,
+            tvPanelCurrentTime = tvPanelCurrentTime,
+            tvPanelTotalTime = tvPanelTotalTime,
+            btnPanelPrevious = btnPanelPrevious,
+            btnPanelPlayPause = btnPanelPlayPause,
+            btnPanelNext = btnPanelNext,
+            onExpanded = {
+                lyricsPanelController.onPlayerPanelExpanded()
+                startMonitoAnimation()
+            },
+            onCollapsed = {
+                lyricsPanelController.onPlayerPanelCollapsed()
+                resetMonitoToTop()
+            },
+            onShowQueue = { queueSheet.show() },
+            onFavoriteToggled = {
+                if (topBarController.isPlaylistsTabActive) {
+                    loadPlaylists()
+                }
+            }
+        )
+    }
+
+    private val topBarController by lazy {
+        TopBarController(
+            activity = this,
+            rootLayout = rootLayout,
+            tvAppName = tvAppName,
+            ivMascot = ivMascot,
+            llInlineSearch = llInlineSearch,
+            etSearch = etSearch,
+            btnSearch = btnSearch,
+            btnSort = btnSort,
+            btnSettings = btnSettings,
+            tabSongs = tabSongs,
+            tabPlaylists = tabPlaylists,
+            rvSongs = rvSongs,
+            rvPlaylists = rvPlaylists,
+            tvEmptyState = tvEmptyState,
+            onSearchQueryChanged = { query ->
+                searchQuery = query
+                applyFilterAndSort()
+            },
+            onSortSelected = { type ->
+                currentSort = type
+                PlaybackStateRepository.saveSortType(this, type)
+                applyFilterAndSort()
+            },
+            onSongsTabSelected = { applyFilterAndSort() },
+            onPlaylistsTabSelected = { loadPlaylists() }
+        )
+    }
 
     enum class SortType { TITLE, ARTIST, DURATION, DATE_ADDED, MOST_PLAYED }
 
@@ -155,34 +200,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private val miniProgressPoller = object : Runnable {
         override fun run() {
             val service = musicService
-            if (service != null && playerPanel.visibility == View.VISIBLE) {
+            if (service != null && playerPanelController.isVisible) {
                 val current = service.getCurrentPosition()
                 val total = service.getDuration()
 
-                circularMiniProgress.setProgress(current, total)
-                btnMiniPlayPause.setImageResource(
-                    if (service.isPlaying()) R.drawable.ic_pause_small else R.drawable.ic_play_small
-                )
-
-                if (!isUserSeekingPanel) {
-                    sbPanelProgress.max = if (total > 0) total else 0
-                    sbPanelProgress.progress = current
-                }
-                tvPanelCurrentTime.text = formatTime(current.toLong())
-                tvPanelTotalTime.text = formatTime(total.toLong())
-                btnPanelPlayPause.setImageResource(
-                    if (service.isPlaying()) R.drawable.ic_pause else R.drawable.ic_play_arrow
-                )
-
-                queueProgressBar?.let {
-                    it.max = if (total > 0) total else 0
-                    it.progress = current
-                }
-                queuePlayPauseBtn?.setImageResource(
-                    if (service.isPlaying()) R.drawable.ic_pause_small else R.drawable.ic_play_small
-                )
-
-                syncLyricsWithPosition(current.toLong())
+                playerPanelController.updateProgress(current, total)
+                queueSheet.updateProgress(current, total)
+                lyricsPanelController.syncWithPosition(current.toLong())
             }
             uiHandler.postDelayed(this, 500)
         }
@@ -218,7 +242,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             if (pending != null) {
                 pendingSongList = null
                 musicService?.setPlaylist(pending, pendingStartIndex)
-                expandPlayerPanelWhenReady()
+                playerPanelController.expandWhenReady()
             } else {
                 val current = musicService?.getCurrentSong()
                 if (current != null) {
@@ -229,7 +253,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 }
             }
 
-            musicService?.let { updateModeButtonIcon(it.getPlaybackMode()) }
+            musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
             startMiniProgressPolling()
         }
 
@@ -266,14 +290,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         PlaylistRepository.ensureFavoritesPlaylist(this)
 
         bindViews()
-        setupTopBar()
-        setupTabs()
-        setupSearch()
+        topBarController.setup()
         setupPlayerPanel()
         setupLyricsPanel()
         setupEdgeToEdge()
         setupBackPress()
-        setupSwipeToPlaylists()
 
         currentSort = PlaybackStateRepository.getSortType(this)
 
@@ -283,15 +304,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         ContextCompat.startForegroundService(this, serviceIntent)
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
 
-        startMascotAnimation()
-    }
-
-    private fun startMascotAnimation() {
-        // .post() asegura que la vista ya este "attachada" a la ventana;
-        // si se llama .start() demasiado pronto, la animacion no arranca.
-        ivMascot.post {
-            (ivMascot.drawable as? AnimationDrawable)?.start()
-        }
+        topBarController.startMascotAnimation()
     }
 
     private var monitoBlinkRunnable: Runnable? = null
@@ -334,35 +347,26 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 
-
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (::swipeGestureDetector.isInitialized) {
-            swipeGestureDetector.onTouchEvent(ev)
-        }
+        topBarController.dispatchTouchEvent(ev)
         guardLyricsPanelDrag(ev)
         return super.dispatchTouchEvent(ev)
     }
 
     private fun guardLyricsPanelDrag(ev: MotionEvent) {
-        if (!::panelBehavior.isInitialized || !::lyricsPanel.isInitialized || !::lyricsCoordinator.isInitialized) {
-            return
-        }
+        if (!playerPanelController.isReady) return
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (lyricsCoordinator.visibility == View.VISIBLE && isPointInsideView(lyricsPanel, ev.rawX, ev.rawY)) {
-                    panelBehavior.setDraggable(false)
+                if (lyricsPanelController.isCoordinatorVisible &&
+                    lyricsPanelController.isPointInside(ev.rawX, ev.rawY)
+                ) {
+                    playerPanelController.setDraggable(false)
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                panelBehavior.setDraggable(true)
+                playerPanelController.setDraggable(true)
             }
         }
-    }
-
-    private fun isPointInsideView(view: View, rawX: Float, rawY: Float): Boolean {
-        val rect = Rect()
-        view.getGlobalVisibleRect(rect)
-        return rect.contains(rawX.toInt(), rawY.toInt())
     }
 
     private fun bindViews() {
@@ -408,23 +412,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         lyricsPanel = findViewById(R.id.lyricsPanel)
         rvLyricsPanel = findViewById(R.id.rvLyricsPanel)
         btnSaveLyrics = findViewById(R.id.btnSaveLyrics)
-        rvLyricsPanel.layoutManager = object : LinearLayoutManager(this) {
-            override fun canScrollVertically(): Boolean {
-                return isLyricsExpanded()
-            }
-        }
-        rvLyricsPanel.isNestedScrollingEnabled = false
-        rvLyricsPanel.itemAnimator = null
-
-        baseGroupMiniPaddingBottom = groupMini.paddingBottom
-        baseGroupExpandedPaddingBottom = groupExpanded.paddingBottom
-        baseLyricsPanelPaddingTop = lyricsPanel.paddingTop
 
         rvSongs.layoutManager = LinearLayoutManager(this)
         songAdapter = SongAdapter(
             emptyList(),
             onItemClick = { position -> openPlayer(songAdapter.getCurrentList(), position) },
-            onMenuClick = { position -> showSongItemMenu(songAdapter.getSongAt(position)) }
+            onMenuClick = { position -> playlistDialogs.showSongItemMenu(songAdapter.getSongAt(position)) }
         )
         rvSongs.adapter = songAdapter
 
@@ -440,9 +433,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         playlistAdapter = PlaylistAdapter(
             playlists = emptyList(),
             getSongsForPlaylist = { playlist -> getSongsForPlaylist(playlist) },
-            onAddNewClick = { showCreatePlaylistDialog(null) },
+            onAddNewClick = { playlistDialogs.showCreatePlaylistDialog(null) },
             onItemClick = { playlist -> openPlaylistDetail(playlist) },
-            onDeleteClick = { playlist -> confirmDeletePlaylist(playlist) },
+            onDeleteClick = { playlist -> playlistDialogs.confirmDeletePlaylist(playlist) },
             onCoverClick = { playlist -> requestCoverImage(playlist) }
         )
         rvPlaylists.adapter = playlistAdapter
@@ -455,49 +448,20 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             rootLayout.setPadding(0, systemBars.top, 0, 0)
 
-            groupMini.setPadding(
-                groupMini.paddingLeft,
-                groupMini.paddingTop,
-                groupMini.paddingRight,
-                baseGroupMiniPaddingBottom + systemBars.bottom
-            )
+            playerPanelController.applyBottomInset(systemBars.bottom)
+            lyricsPanelController.applyWindowInsets(systemBars.top, rootCoordinator.height)
 
-            groupExpanded.setPadding(
-                groupExpanded.paddingLeft,
-                groupExpanded.paddingTop,
-                groupExpanded.paddingRight,
-                baseGroupExpandedPaddingBottom + systemBars.bottom
-            )
-
-            lyricsPanel.setPadding(
-                lyricsPanel.paddingLeft,
-                baseLyricsPanelPaddingTop,
-                lyricsPanel.paddingRight,
-                lyricsPanel.paddingBottom
-            )
-
-            if (::lyricsPanelBehavior.isInitialized) {
-                val extraGap = (LYRICS_EXPANDED_TOP_GAP_DP * resources.displayMetrics.density).toInt()
-                val offset = systemBars.top + extraGap
-                lyricsPanelBehavior.setExpandedOffset(offset)
-
-                if (rootCoordinator.height > 0) {
-                    val ratio = (1f - offset.toFloat() / rootCoordinator.height).coerceIn(0.05f, 0.95f)
-                    lyricsPanelBehavior.setHalfExpandedRatio(ratio)
-                }
-            }
-
-            updatePeekHeight()
+            playerPanelController.updatePeekHeight()
             insets
         }
     }
 
     private fun setupBackPress() {
         onBackPressedDispatcher.addCallback(this) {
-            if (isLyricsExpanded()) {
-                lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
-            } else if (::panelBehavior.isInitialized && panelBehavior.state == BottomSheetBehavior.STATE_EXPANDED) {
-                panelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+            if (lyricsPanelController.isExpanded) {
+                lyricsPanelController.collapse()
+            } else if (playerPanelController.isReady && playerPanelController.isExpanded) {
+                playerPanelController.collapse()
             } else {
                 isEnabled = false
                 onBackPressedDispatcher.onBackPressed()
@@ -510,152 +474,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         return playlist.songIds.mapNotNull { songsById[it] }
     }
 
-    private fun setupTopBar() {
-        btnSearch.setOnClickListener {
-            toggleInlineSearch()
-        }
-
-        btnSort.setOnClickListener {
-            showSortPopup()
-        }
-
-        btnSettings.setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        }
-    }
-
-    private fun toggleInlineSearch() {
-        isSearchVisible = !isSearchVisible
-
-        if (isSearchVisible) {
-            tvAppName.visibility = View.GONE
-            ivMascot.visibility = View.GONE
-            llInlineSearch.visibility = View.VISIBLE
-            btnSort.visibility = View.GONE
-            btnSettings.visibility = View.GONE
-            btnSearch.setImageResource(R.drawable.ic_close)
-            etSearch.requestFocus()
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(etSearch, InputMethodManager.SHOW_IMPLICIT)
-        } else {
-            llInlineSearch.visibility = View.GONE
-            tvAppName.visibility = View.VISIBLE
-            ivMascot.visibility = View.VISIBLE
-            btnSort.visibility = View.VISIBLE
-            btnSettings.visibility = View.VISIBLE
-            btnSearch.setImageResource(R.drawable.ic_search)
-            etSearch.setText("")
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(etSearch.windowToken, 0)
-        }
-    }
-
-    private fun showSortPopup() {
-        val popupView = layoutInflater.inflate(R.layout.popup_sort_menu, null)
-        val popupWindow = PopupWindow(
-            popupView,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            true
-        )
-        popupWindow.isOutsideTouchable = true
-        popupWindow.elevation = 16f
-
-        val tvTitle: TextView = popupView.findViewById(R.id.tvSortTitle)
-        val tvArtist: TextView = popupView.findViewById(R.id.tvSortArtist)
-        val tvDuration: TextView = popupView.findViewById(R.id.tvSortDuration)
-        val tvDateAdded: TextView = popupView.findViewById(R.id.tvSortDateAdded)
-        val tvMostPlayed: TextView = popupView.findViewById(R.id.tvSortMostPlayed)
-
-        tvTitle.setOnClickListener {
-            selectSortType(SortType.TITLE)
-            popupWindow.dismiss()
-        }
-        tvArtist.setOnClickListener {
-            selectSortType(SortType.ARTIST)
-            popupWindow.dismiss()
-        }
-        tvDuration.setOnClickListener {
-            selectSortType(SortType.DURATION)
-            popupWindow.dismiss()
-        }
-        tvDateAdded.setOnClickListener {
-            selectSortType(SortType.DATE_ADDED)
-            popupWindow.dismiss()
-        }
-        tvMostPlayed.setOnClickListener {
-            selectSortType(SortType.MOST_PLAYED)
-            popupWindow.dismiss()
-        }
-
-        popupWindow.showAsDropDown(btnSort, -180, 12)
-    }
-
-    private fun selectSortType(type: SortType) {
-        currentSort = type
-        PlaybackStateRepository.saveSortType(this, type)
-        applyFilterAndSort()
-    }
-
-    private fun setupTabs() {
-        tabSongs.setOnClickListener {
-            selectSongsTab()
-        }
-
-        tabPlaylists.setOnClickListener {
-            selectPlaylistsTab()
-        }
-    }
-
-    private fun setupSwipeToPlaylists() {
-        swipeGestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-
-            override fun onDown(e: MotionEvent): Boolean {
-                return true
-            }
-
-            override fun onFling(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                velocityX: Float,
-                velocityY: Float
-            ): Boolean {
-                if (e1 == null || isSearchVisible) return false
-
-                val diffX = e2.x - e1.x
-                val diffY = e2.y - e1.y
-
-                val isMostlyHorizontal = abs(diffX) > abs(diffY) * 1.5f
-                val isFastEnough = abs(velocityX) > SWIPE_MIN_VELOCITY
-
-                if (!isMostlyHorizontal || !isFastEnough) return false
-
-                // El dedo se mueve hacia la izquierda para traer la siguiente
-                // pestana (Playlists) desde la derecha; hacia la derecha para
-                // regresar (Canciones), como un ViewPager.
-                val isSwipeLeft = diffX < -SWIPE_MIN_DISTANCE
-                val isSwipeRight = diffX > SWIPE_MIN_DISTANCE
-
-                if (isSwipeLeft && !isPlaylistsTabActive) {
-                    selectPlaylistsTab()
-                    return true
-                }
-
-                if (isSwipeRight && isPlaylistsTabActive) {
-                    selectSongsTab()
-                    return true
-                }
-
-                return false
-            }
-        })
-    }
-
     companion object {
-        private const val SWIPE_MIN_DISTANCE = 120
-        private const val SWIPE_MIN_VELOCITY = 200
-        private const val TAB_SLIDE_DURATION = 300L
-
         // IDs de las playlists automaticas de historial. No viven en
         // PlaylistRepository: se recalculan cada vez a partir de
         // PlayCountRepository, por eso llevan un prefijo "auto_".
@@ -666,529 +485,22 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         private const val AUTO_PLAYLIST_LIMIT = 50
 
-        // Separacion en dp entre el boton de pausa/reproducir y el banner
-        // de letra colapsado (el "peek" del panel deslizable de letra).
-        private const val LYRICS_PEEK_GAP_DP = 16f
-        private const val LYRICS_EXPANDED_TOP_GAP_DP = 24
-
         // Bandera para que, al reproducir una cancion desde
         // PlaylistDetailActivity, el panel del reproductor se expanda
         // solo al volver a esta pantalla (que sigue viva en el back stack).
         var expandPlayerOnResume: Boolean = false
     }
 
-    private fun selectSongsTab() {
-        if (!isPlaylistsTabActive) return
-
-        isPlaylistsTabActive = false
-
-        tabSongs.setBackgroundResource(R.drawable.bg_tab_selected)
-        tabSongs.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
-        tabPlaylists.background = null
-        tabPlaylists.setTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
-
-        btnSearch.visibility = View.VISIBLE
-
-        applyFilterAndSort()
-
-        // toPlaylists = false: Canciones entra desde la izquierda, Playlists
-        // sale por la derecha.
-        slideTabs(outgoing = rvPlaylists, incoming = rvSongs, toPlaylists = false)
-    }
-
-    private fun selectPlaylistsTab() {
-        if (isPlaylistsTabActive) return
-
-        isPlaylistsTabActive = true
-
-        tabPlaylists.setBackgroundResource(R.drawable.bg_tab_selected)
-        tabPlaylists.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
-        tabSongs.background = null
-        tabSongs.setTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
-
-        tvEmptyState.visibility = View.GONE
-
-        if (isSearchVisible) {
-            isSearchVisible = false
-            llInlineSearch.visibility = View.GONE
-            tvAppName.visibility = View.VISIBLE
-            ivMascot.visibility = View.VISIBLE
-            btnSort.visibility = View.VISIBLE
-            btnSettings.visibility = View.VISIBLE
-            btnSearch.setImageResource(R.drawable.ic_search)
-            etSearch.setText("")
-        }
-        btnSearch.visibility = View.GONE
-
-        loadPlaylists()
-
-        // toPlaylists = true: Playlists entra desde la derecha, Canciones
-        // sale por la izquierda.
-        slideTabs(outgoing = rvSongs, incoming = rvPlaylists, toPlaylists = true)
-    }
-
-    /**
-     * Desliza dos vistas como si fueran paginas de un ViewPager: la vista
-     * "incoming" arranca completamente fuera de pantalla (a la derecha si
-     * toPlaylists es true, a la izquierda si es false) y se desliza hasta su
-     * posicion normal, mientras "outgoing" se desliza hacia el lado opuesto
-     * hasta salir de pantalla, donde se oculta con GONE.
-     */
-    private fun slideTabs(outgoing: View, incoming: View, toPlaylists: Boolean) {
-        val width = rootLayout.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-        val widthF = width.toFloat()
-
-        outgoing.animate().cancel()
-        incoming.animate().cancel()
-
-        val incomingStartX = if (toPlaylists) widthF else -widthF
-        val outgoingEndX = if (toPlaylists) -widthF else widthF
-
-        incoming.translationX = incomingStartX
-        incoming.visibility = View.VISIBLE
-
-        outgoing.animate()
-            .translationX(outgoingEndX)
-            .setDuration(TAB_SLIDE_DURATION)
-            .setInterpolator(DecelerateInterpolator())
-            .withEndAction {
-                outgoing.visibility = View.GONE
-                outgoing.translationX = 0f
-            }
-            .start()
-
-        incoming.animate()
-            .translationX(0f)
-            .setDuration(TAB_SLIDE_DURATION)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
-    }
-
-    private fun setupSearch() {
-        etSearch.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                searchQuery = s?.toString() ?: ""
-                applyFilterAndSort()
-            }
-            override fun afterTextChanged(s: Editable?) {}
-        })
-    }
-
     // ---------- Panel del reproductor ----------
 
     private fun setupPlayerPanel() {
-        panelBehavior = BottomSheetBehavior.from(playerPanel)
-        panelBehavior.isHideable = false
-        panelBehavior.skipCollapsed = false
-
-        panelBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
-            override fun onStateChanged(bottomSheet: View, newState: Int) {
-                when (newState) {
-                    BottomSheetBehavior.STATE_EXPANDED -> {
-                        groupMini.alpha = 0f
-                        groupExpanded.alpha = 1f
-                        groupMini.visibility = View.INVISIBLE
-                        groupExpanded.visibility = View.VISIBLE
-                        lyricsCoordinator.visibility = View.VISIBLE
-                        updateLyricsPeekHeight()
-                        startMonitoAnimation()
-                    }
-                    BottomSheetBehavior.STATE_COLLAPSED -> {
-                        groupMini.alpha = 1f
-                        groupExpanded.alpha = 0f
-                        groupMini.visibility = View.VISIBLE
-                        groupExpanded.visibility = View.INVISIBLE
-                        updatePeekHeight()
-                        if (::lyricsPanelBehavior.isInitialized) {
-                            lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
-                        }
-                        lyricsCoordinator.visibility = View.GONE
-                        resetMonitoToTop()
-                    }
-                    else -> {
-                        groupMini.visibility = View.VISIBLE
-                        groupExpanded.visibility = View.VISIBLE
-                    }
-                }
-            }
-
-            override fun onSlide(bottomSheet: View, slideOffset: Float) {
-                val progress = slideOffset.coerceIn(0f, 1f)
-                groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
-                groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
-            }
-        })
-
-        panelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
-        groupMini.alpha = 1f
-        groupExpanded.alpha = 0f
-        groupMini.visibility = View.VISIBLE
-        groupExpanded.visibility = View.INVISIBLE
-
-        groupMini.setOnClickListener {
-            if (panelBehavior.state != BottomSheetBehavior.STATE_EXPANDED) {
-                panelBehavior.state = BottomSheetBehavior.STATE_EXPANDED
-            }
-        }
-
-        btnPanelBack.setOnClickListener {
-            panelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
-        }
-
-        btnPanelQueue.setOnClickListener {
-            showQueueSheet()
-        }
-
-        btnPanelFavorite.setOnClickListener {
-            toggleCurrentSongFavorite()
-        }
-
-        btnPanelLyricsSync.setOnClickListener {
-            openLyricsSyncScreen()
-        }
-
-        btnSaveLyrics.setOnClickListener {
-            toggleSaveLyrics()
-        }
-
-        btnPanelPlayPause.setOnClickListener {
-            musicService?.togglePlayPause()
-        }
-
-        btnPanelPrevious.setOnClickListener {
-            musicService?.playPrevious()
-        }
-
-        btnPanelNext.setOnClickListener {
-            musicService?.playNext()
-        }
-
-        btnMiniPlayPause.setOnClickListener {
-            musicService?.togglePlayPause()
-        }
-
-        btnMiniPlayMode.setOnClickListener {
-            val service = musicService ?: return@setOnClickListener
-            val newMode = service.cyclePlaybackMode()
-            updateModeButtonIcon(newMode)
-
-            val message = when (newMode) {
-                MusicService.PlaybackMode.NORMAL -> "Reproduccion normal"
-                MusicService.PlaybackMode.REPEAT_ONE -> "Repitiendo cancion actual"
-                MusicService.PlaybackMode.SHUFFLE -> "Reproduccion aleatoria"
-            }
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        }
-
-        sbPanelProgress.listener = object : WaveformSeekBar.OnWaveformSeekListener {
-            override fun onProgressChanged(progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    tvPanelCurrentTime.text = formatTime(progress.toLong())
-                }
-            }
-
-            override fun onStartTrackingTouch() {
-                isUserSeekingPanel = true
-            }
-
-            override fun onStopTrackingTouch(progress: Int) {
-                isUserSeekingPanel = false
-                musicService?.seekTo(progress)
-            }
-        }
-    }
-
-    private fun updatePeekHeight() {
-        groupMini.post {
-            val height = groupMini.height
-            if (height > 0 && height != panelBehavior.peekHeight) {
-                panelBehavior.peekHeight = height
-                playerPanel.requestLayout()
-            }
-        }
-    }
-
-    private fun expandPlayerPanelWhenReady() {
-        playerPanel.doOnLayout {
-            panelBehavior.state = BottomSheetBehavior.STATE_EXPANDED
-        }
-    }
-
-    private fun updateModeButtonIcon(mode: MusicService.PlaybackMode) {
-        when (mode) {
-            MusicService.PlaybackMode.NORMAL -> {
-                btnMiniPlayMode.setImageResource(R.drawable.ic_repeat)
-                btnMiniPlayMode.setBackgroundResource(R.drawable.bg_icon_button_circle)
-            }
-            MusicService.PlaybackMode.REPEAT_ONE -> {
-                btnMiniPlayMode.setImageResource(R.drawable.ic_repeat_one)
-                btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
-            }
-            MusicService.PlaybackMode.SHUFFLE -> {
-                btnMiniPlayMode.setImageResource(R.drawable.ic_shuffle)
-                btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
-            }
-        }
-    }
-
-    private fun updateFavoriteIcon(songId: Long?) {
-        val isFav = songId != null && PlaylistRepository.isFavorite(this, songId)
-        btnPanelFavorite.setImageResource(
-            if (isFav) R.drawable.ic_favorite else R.drawable.ic_favorite_border
-        )
-    }
-
-    private fun toggleCurrentSongFavorite() {
-        val song = musicService?.getCurrentSong() ?: return
-        val isNowFavorite = PlaylistRepository.toggleFavorite(this, song.id)
-        btnPanelFavorite.setImageResource(
-            if (isNowFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border
-        )
-        if (isPlaylistsTabActive) {
-            loadPlaylists()
-        }
-    }
-
-    private fun openLyricsSyncScreen() {
-        val currentSong = musicService?.getCurrentSong() ?: run {
-            Toast.makeText(this, "No hay cancion reproduciendose", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val intent = Intent(this, LyricsActivity::class.java)
-        intent.putExtra("song", currentSong)
-        startActivity(intent)
-        overridePendingTransition(R.anim.activity_slide_up_in, R.anim.activity_stay)
+        playerPanelController.setup()
     }
 
     // ---------- Panel de letra deslizable (estilo Spotify) ----------
 
     private fun setupLyricsPanel() {
-        lyricsPanelBehavior = BottomSheetBehavior.from(lyricsPanel)
-        lyricsPanelBehavior.isHideable = false
-        lyricsPanelBehavior.skipCollapsed = false
-        lyricsPanelBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
-        lyricsPanelBehavior.setFitToContents(false)
-
-        rvLyricsPanel.alpha = 1f
-        rvLyricsPanel.visibility = View.VISIBLE
-
-        lyricsPanelBehavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
-            override fun onStateChanged(bottomSheet: View, newState: Int) {
-                if (newState == BottomSheetBehavior.STATE_EXPANDED ||
-                    newState == BottomSheetBehavior.STATE_HALF_EXPANDED
-                ) {
-                    lyricsAdapter?.let { scrollLyricsToLine(it.getActiveIndex()) }
-                }
-            }
-
-            override fun onSlide(bottomSheet: View, slideOffset: Float) {}
-        })
-    }
-
-    private fun isLyricsExpanded(): Boolean {
-        return ::lyricsPanelBehavior.isInitialized &&
-                (lyricsPanelBehavior.state == BottomSheetBehavior.STATE_EXPANDED ||
-                        lyricsPanelBehavior.state == BottomSheetBehavior.STATE_HALF_EXPANDED)
-    }
-
-    private fun updateLyricsPeekHeight() {
-        groupExpanded.post {
-            if (!::lyricsPanelBehavior.isInitialized) return@post
-            if (groupExpanded.visibility != View.VISIBLE || groupExpanded.height == 0) return@post
-
-            val controlsLocation = IntArray(2)
-            llPanelControls.getLocationOnScreen(controlsLocation)
-            val panelLocation = IntArray(2)
-            groupExpanded.getLocationOnScreen(panelLocation)
-
-            val controlsBottomOnScreen = controlsLocation[1] + llPanelControls.height
-            val panelBottomOnScreen = panelLocation[1] + groupExpanded.height
-
-            // Separacion extra entre el boton de pausa/reproducir y el
-            // banner de letra colapsado, para que no queden pegados.
-            val gapFromControls = (LYRICS_PEEK_GAP_DP * resources.displayMetrics.density).toInt()
-            val freeSpace = panelBottomOnScreen - controlsBottomOnScreen - gapFromControls
-
-            val minPeek = (72 * resources.displayMetrics.density).toInt()
-            val newPeek = freeSpace.coerceAtLeast(minPeek)
-            if (newPeek != lyricsPanelBehavior.peekHeight) {
-                lyricsPanelBehavior.peekHeight = newPeek
-            }
-        }
-    }
-
-    /**
-     * Pide la letra sincronizada de la cancion actual y la deja lista en el
-     * panel. Se ignora si la respuesta llega para una peticion vieja
-     * (cancion ya cambiada) usando lyricsRequestId.
-     */
-    private fun loadLyricsForSong(song: Song) {
-        if (lyricsSongId == song.id) return
-        lyricsSongId = song.id
-        lyricsRequestId++
-        val requestId = lyricsRequestId
-
-        val saved = SavedLyricsRepository.getSavedLyrics(this, song.id)
-        if (saved != null) {
-            showLyricsResult(saved, song.id)
-            return
-        }
-
-        btnPanelLyricsSync.visibility = View.GONE
-        showLyricsMessage("Buscando letra...")
-
-        val durationSeconds = song.duration / 1000
-        LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
-            override fun onSuccess(result: LyricsResult) {
-                if (requestId != lyricsRequestId) return
-                showLyricsResult(result, song.id)
-            }
-
-            override fun onError(message: String) {
-                if (requestId != lyricsRequestId) return
-                showLyricsMessage(message)
-            }
-        })
-    }
-
-    private fun showLyricsResult(result: LyricsResult, songId: Long) {
-        val hasContent = !result.isInstrumental &&
-                (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
-
-        when {
-            result.isInstrumental -> showLyricsMessage("Esta cancion es instrumental")
-            !result.syncedLines.isNullOrEmpty() -> showSyncedLyrics(result.syncedLines)
-            !result.plainLyrics.isNullOrBlank() -> showPlainLyrics(result.plainLyrics)
-            else -> showLyricsMessage("No se encontro letra para esta cancion")
-        }
-
-        btnPanelLyricsSync.visibility = if (hasContent) View.VISIBLE else View.GONE
-
-        if (hasContent) {
-            currentLyricsResult = result
-            btnSaveLyrics.visibility = View.VISIBLE
-            updateSaveLyricsIcon(SavedLyricsRepository.isSaved(this, songId))
-        }
-    }
-
-    private fun updateSaveLyricsIcon(saved: Boolean) {
-        btnSaveLyrics.setImageResource(
-            if (saved) R.drawable.ic_favorite else R.drawable.ic_favorite_border
-        )
-    }
-
-    private fun toggleSaveLyrics() {
-        val songId = lyricsSongId ?: return
-        val result = currentLyricsResult ?: return
-        val nowSaved = SavedLyricsRepository.toggleSaved(this, songId, result)
-        updateSaveLyricsIcon(nowSaved)
-        Toast.makeText(
-            this,
-            if (nowSaved) "Letra guardada" else "Letra eliminada de guardadas",
-            Toast.LENGTH_SHORT
-        ).show()
-    }
-
-    private fun showLyricsMessage(message: String) {
-        lyricsAdapter = null
-        lyricsAreSynced = false
-        currentLyricsResult = null
-        btnSaveLyrics.visibility = View.GONE
-        rvLyricsPanel.adapter = LyricsLineAdapter(listOf(LyricsLine(timeMs = -1, text = message)))
-    }
-
-    private fun showSyncedLyrics(lines: List<LyricsLine>) {
-        val adapter = LyricsLineAdapter(lines)
-        lyricsAdapter = adapter
-        lyricsAreSynced = true
-        rvLyricsPanel.adapter = adapter
-    }
-
-    private fun showPlainLyrics(text: String) {
-        val staticLines = text.lines()
-            .filter { it.isNotBlank() }
-            .map { LyricsLine(timeMs = -1, text = it) }
-        val adapter = LyricsLineAdapter(staticLines)
-        lyricsAdapter = adapter
-        // Letra sin sincronizar: no tiene timestamps reales, asi que no se
-        // debe intentar resaltar ni auto-scrollear por posicion (ver
-        // syncLyricsWithPosition). Se queda estatica, el usuario la lee
-        // desplazandose manualmente en modo expandido.
-        lyricsAreSynced = false
-        rvLyricsPanel.adapter = adapter
-    }
-
-    private fun syncLyricsWithPosition(positionMs: Long) {
-        if (!lyricsAreSynced) return
-        val adapter = lyricsAdapter ?: return
-        val previousIndex = adapter.getActiveIndex()
-        val newIndex = adapter.updateActiveLine(positionMs)
-        if (newIndex < 0) return
-
-        adapter.animateActiveLineChange(rvLyricsPanel, previousIndex, newIndex)
-
-        if (!isLyricsExpanded()) {
-            scrollLyricsToLine(newIndex)
-        }
-    }
-
-    private fun scrollLyricsToLine(index: Int) {
-        if (index < 0) return
-        rvLyricsPanel.post {
-            val layoutManager = rvLyricsPanel.layoutManager as? LinearLayoutManager ?: return@post
-
-            if (isLyricsExpanded()) {
-                rvLyricsPanel.stopScroll()
-                val smoothScroller = object : LinearSmoothScroller(this) {
-                    override fun getVerticalSnapPreference(): Int = SNAP_TO_START
-                    override fun calculateSpeedPerPixel(displayMetrics: android.util.DisplayMetrics): Float {
-                        return 70f / displayMetrics.densityDpi
-                    }
-                }
-                smoothScroller.targetPosition = index
-                layoutManager.startSmoothScroll(smoothScroller)
-                return@post
-            }
-
-            // Colapsado (banner): el layoutManager tiene canScrollVertically()
-            // atado a isLyricsExpanded(), o sea que aquí devuelve false a
-            // propósito (para que el usuario no pueda arrastrar la letra con
-            // el dedo). Eso mismo hace que RecyclerView.smoothScrollBy /
-            // LinearSmoothScroller no muevan nada (ponen el desplazamiento en
-            // 0), por eso la línea activa se quedaba atrás y "bajaba" en vez
-            // de quedarse fija arriba. Por eso aquí se anima el offset a
-            // mano con un ValueAnimator llamando directo a
-            // scrollToPositionWithOffset (eso sí funciona, no pasa por
-            // smoothScrollBy) y siempre termina exacto en offset 0, para que
-            // la línea activa quede pegada arriba igual que antes.
-            lyricsBannerScrollAnimator?.cancel()
-
-            val density = resources.displayMetrics.density
-            val fallbackStartOffset = (40 * density).toInt()
-            val startOffset = layoutManager.findViewByPosition(index)?.top ?: fallbackStartOffset
-
-            if (startOffset <= 0) {
-                layoutManager.scrollToPositionWithOffset(index, 0)
-                return@post
-            }
-
-            val animator = ValueAnimator.ofInt(startOffset, 0)
-            animator.duration = 260L
-            animator.interpolator = DecelerateInterpolator()
-            animator.addUpdateListener { anim ->
-                layoutManager.scrollToPositionWithOffset(index, anim.animatedValue as Int)
-            }
-            lyricsBannerScrollAnimator = animator
-            animator.start()
-        }
-    }
-
-    private fun formatTime(millis: Long): String {
-        val totalSeconds = millis / 1000
-        val minutes = totalSeconds / 60
-        val seconds = totalSeconds % 60
-        return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+        lyricsPanelController.setup()
     }
 
     private fun startMiniProgressPolling() {
@@ -1198,141 +510,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private fun stopMiniProgressPolling() {
         uiHandler.removeCallbacks(miniProgressPoller)
-    }
-
-    // ---------- Cola de reproduccion (bottom sheet) ----------
-
-    private fun showQueueSheet() {
-        val service = musicService ?: return
-        if (service.getSongList().isEmpty()) return
-
-        val dialog = BottomSheetDialog(this, R.style.RoundedBottomSheetDialog)
-        val view = layoutInflater.inflate(R.layout.bottom_sheet_queue, null)
-        dialog.setContentView(view)
-        activeQueueDialog = dialog
-
-        dialog.setOnShowListener { dialogInterface ->
-            val bottomSheetDialog = dialogInterface as BottomSheetDialog
-            val bottomSheet = bottomSheetDialog.findViewById<View>(
-                com.google.android.material.R.id.design_bottom_sheet
-            )
-            bottomSheet?.let {
-                val behavior = BottomSheetBehavior.from(it)
-                behavior.state = BottomSheetBehavior.STATE_EXPANDED
-                behavior.skipCollapsed = true
-                it.layoutParams.height = ViewGroup.LayoutParams.MATCH_PARENT
-                it.requestLayout()
-            }
-        }
-
-        queueTvTitle = view.findViewById(R.id.tvSheetSongTitle)
-        queuePlayPauseBtn = view.findViewById(R.id.btnSheetPlayPause)
-        queueProgressBar = view.findViewById(R.id.pbSheetProgress)
-        queueRecyclerView = view.findViewById(R.id.rvQueue)
-        queueBtnModeNormal = view.findViewById(R.id.btnModeNormal)
-        queueBtnModeRepeat = view.findViewById(R.id.btnModeRepeat)
-        queueBtnModeShuffle = view.findViewById(R.id.btnModeShuffle)
-
-        val layoutManager = LinearLayoutManager(this)
-        queueRecyclerView?.layoutManager = layoutManager
-
-        refreshQueueList()
-        refreshQueueHeader()
-        refreshModeButtons()
-
-        queuePlayPauseBtn?.setOnClickListener {
-            musicService?.togglePlayPause()
-        }
-
-        val btnLocateCurrent: ImageButton = view.findViewById(R.id.btnLocateCurrent)
-        btnLocateCurrent.setOnClickListener {
-            layoutManager.scrollToPositionWithOffset(musicService?.getCurrentIndex() ?: 0, 0)
-        }
-
-        queueBtnModeNormal?.setOnClickListener {
-            musicService?.setPlaybackMode(MusicService.PlaybackMode.NORMAL)
-            refreshModeButtons()
-            refreshQueueList()
-        }
-
-        queueBtnModeRepeat?.setOnClickListener {
-            musicService?.setPlaybackMode(MusicService.PlaybackMode.REPEAT_ONE)
-            refreshModeButtons()
-            refreshQueueList()
-        }
-
-        queueBtnModeShuffle?.setOnClickListener {
-            musicService?.setPlaybackMode(MusicService.PlaybackMode.SHUFFLE)
-            refreshModeButtons()
-            refreshQueueList()
-        }
-
-        dialog.setOnDismissListener {
-            queueTvTitle = null
-            queuePlayPauseBtn = null
-            queueProgressBar = null
-            queueRecyclerView = null
-            queueBtnModeNormal = null
-            queueBtnModeRepeat = null
-            queueBtnModeShuffle = null
-            queueTouchHelper = null
-            activeQueueDialog = null
-        }
-
-        dialog.show()
-    }
-
-    private fun refreshQueueList() {
-        val service = musicService ?: return
-        val adapter = QueueAdapter(
-            service.getSongList().toMutableList(),
-            service.getCurrentIndex(),
-            onItemClick = { position ->
-                musicService?.playAt(position)
-                activeQueueDialog?.dismiss()
-            },
-            onMoveFinished = { from, to ->
-                musicService?.moveQueueItem(from, to)
-            }
-        )
-        queueRecyclerView?.adapter = adapter
-
-        val touchHelper = ItemTouchHelper(
-            QueueTouchHelperCallback(adapter) { position ->
-                val current = service.getCurrentIndex()
-                val target = if (position > current) current + 1 else current
-                musicService?.moveQueueItem(position, target)
-                Toast.makeText(this, "Sonará a continuación", Toast.LENGTH_SHORT).show()
-                refreshQueueList()
-            }
-        )
-        touchHelper.attachToRecyclerView(queueRecyclerView)
-        queueTouchHelper = touchHelper
-        adapter.dragStartListener = { viewHolder -> touchHelper.startDrag(viewHolder) }
-    }
-
-    private fun refreshQueueHeader() {
-        val service = musicService ?: return
-        val currentSong = service.getCurrentSong()
-        queueTvTitle?.text = currentSong?.title ?: ""
-        queuePlayPauseBtn?.setImageResource(
-            if (service.isPlaying()) R.drawable.ic_pause_small else R.drawable.ic_play_small
-        )
-        queueProgressBar?.max = service.getDuration()
-        queueProgressBar?.progress = service.getCurrentPosition()
-    }
-
-    private fun refreshModeButtons() {
-        val currentMode = musicService?.getPlaybackMode() ?: MusicService.PlaybackMode.NORMAL
-        queueBtnModeNormal?.setBackgroundResource(
-            if (currentMode == MusicService.PlaybackMode.NORMAL) R.drawable.bg_mode_pill_active else 0
-        )
-        queueBtnModeRepeat?.setBackgroundResource(
-            if (currentMode == MusicService.PlaybackMode.REPEAT_ONE) R.drawable.bg_mode_pill_active else 0
-        )
-        queueBtnModeShuffle?.setBackgroundResource(
-            if (currentMode == MusicService.PlaybackMode.SHUFFLE) R.drawable.bg_mode_pill_active else 0
-        )
     }
 
     // ---------- Datos y permisos ----------
@@ -1399,7 +576,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun applyFilterAndSort() {
-        if (isPlaylistsTabActive) return
+        if (topBarController.isPlaylistsTabActive) return
 
         var list = allSongs
 
@@ -1422,7 +599,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         val hasResults = list.isNotEmpty()
         tvEmptyState.visibility = if (hasResults) View.GONE else View.VISIBLE
-        if (!isPlaylistsTabActive) {
+        if (!topBarController.isPlaylistsTabActive) {
             rvSongs.visibility = if (hasResults) View.VISIBLE else View.GONE
         }
 
@@ -1458,129 +635,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         return autoPlaylists
     }
 
-    private fun showCreatePlaylistDialog(songIdToAdd: Long?) {
-        val input = EditText(this)
-        input.hint = "Nombre de la playlist"
-        input.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
-        input.setHintTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
-
-        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
-            .setTitle("Nueva playlist")
-            .setView(input)
-            .setPositiveButton("Crear") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isNotEmpty()) {
-                    val playlist = PlaylistRepository.createPlaylist(this, name)
-                    if (songIdToAdd != null) {
-                        PlaylistRepository.addSongToPlaylist(this, playlist.id, songIdToAdd)
-                        Toast.makeText(this, "Cancion agregada a \"$name\"", Toast.LENGTH_SHORT).show()
-                    }
-                    if (isPlaylistsTabActive) {
-                        loadPlaylists()
-                    }
-                } else {
-                    Toast.makeText(this, "El nombre no puede estar vacio", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun showSongItemMenu(song: Song) {
-        val options = arrayOf("Agregar a playlist", "Editar nombre y artista")
-        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showAddToPlaylistDialog(song)
-                    1 -> showEditSongMetadataDialog(song)
-                }
-            }
-            .show()
-    }
-
-    private fun showEditSongMetadataDialog(song: Song) {
-        val density = resources.displayMetrics.density
-        val container = LinearLayout(this)
-        container.orientation = LinearLayout.VERTICAL
-        val padding = (20 * density).toInt()
-        container.setPadding(padding, padding, padding, padding)
-
-        val titleInput = EditText(this)
-        titleInput.hint = "Titulo"
-        titleInput.setText(song.title)
-        titleInput.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
-        titleInput.setHintTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
-        container.addView(titleInput)
-
-        val artistInput = EditText(this)
-        artistInput.hint = "Artista"
-        artistInput.setText(song.artist)
-        artistInput.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
-        artistInput.setHintTextColor(ContextCompat.getColor(this, R.color.text_secondary_light))
-        val artistParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-        artistParams.topMargin = (12 * density).toInt()
-        container.addView(artistInput, artistParams)
-
-        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
-            .setTitle("Editar nombre y artista")
-            .setView(container)
-            .setPositiveButton("Guardar") { _, _ ->
-                val newTitle = titleInput.text.toString().trim()
-                val newArtist = artistInput.text.toString().trim()
-                if (newTitle.isBlank() || newArtist.isBlank()) {
-                    Toast.makeText(this, "Titulo y artista no pueden estar vacios", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                SongMetadataRepository.setOverride(this, song.id, newTitle, newArtist)
-                lyricsSongId = null
-                loadSongs()
-                Toast.makeText(this, "Cancion actualizada", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun showAddToPlaylistDialog(song: Song) {
-        val playlists = PlaylistRepository.getAllPlaylists(this)
-        val options = playlists.map { it.name }.toMutableList()
-        options.add("+ Crear nueva playlist")
-
-        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
-            .setTitle("Agregar a playlist")
-            .setItems(options.toTypedArray()) { _, which ->
-                if (which == playlists.size) {
-                    showCreatePlaylistDialog(song.id)
-                } else {
-                    val playlist = playlists[which]
-                    PlaylistRepository.addSongToPlaylist(this, playlist.id, song.id)
-                    Toast.makeText(
-                        this,
-                        "Agregada a \"${playlist.name}\"",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            }
-            .show()
-    }
-
     private fun requestCoverImage(playlist: Playlist) {
         pendingCoverPlaylistId = playlist.id
         pickCoverLauncher.launch("image/*")
-    }
-
-    private fun confirmDeletePlaylist(playlist: Playlist) {
-        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
-            .setTitle("Eliminar playlist")
-            .setMessage("Eliminar \"${playlist.name}\"? Esta accion no se puede deshacer.")
-            .setPositiveButton("Eliminar") { _, _ ->
-                PlaylistRepository.deletePlaylist(this, playlist.id)
-                loadPlaylists()
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
     }
 
     private fun openPlaylistDetail(playlist: Playlist) {
@@ -1593,7 +650,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         val service = musicService
         if (service != null) {
             service.setPlaylist(playlist, startIndex)
-            expandPlayerPanelWhenReady()
+            playerPanelController.expandWhenReady()
         } else {
             pendingSongList = playlist
             pendingStartIndex = startIndex
@@ -1601,46 +658,22 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun showMiniPlayer(song: Song, playing: Boolean) {
-        playerPanel.visibility = View.VISIBLE
-
-        tvMiniTitle.text = song.title
-        tvMiniArtist.text = song.artist
-        tvPanelSongTitle.text = song.title
-        tvPanelArtist.text = song.artist
-        sbPanelProgress.setWaveformSeed(song.id)
-
-        btnMiniPlayPause.setImageResource(
-            if (playing) R.drawable.ic_pause_small else R.drawable.ic_play_small
-        )
-        btnPanelPlayPause.setImageResource(
-            if (playing) R.drawable.ic_pause else R.drawable.ic_play_arrow
-        )
-
-        updateFavoriteIcon(song.id)
-        updatePeekHeight()
-        updateLyricsPeekHeight()
-        loadLyricsForSong(song)
+        playerPanelController.updateNowPlaying(song, playing)
+        lyricsPanelController.updatePeekHeight()
+        lyricsPanelController.loadForSong(song)
     }
 
     override fun onSongChanged(song: Song, index: Int) {
         runOnUiThread {
             showMiniPlayer(song, musicService?.isPlaying() == true)
             songAdapter.setCurrentPlayingId(song.id)
-            queueTvTitle?.text = song.title
-            if (activeQueueDialog != null) {
-                refreshQueueList()
-            }
+            queueSheet.onSongChanged(song)
         }
     }
 
     override fun onPlaybackStateChanged(isPlaying: Boolean) {
         runOnUiThread {
-            btnMiniPlayPause.setImageResource(
-                if (isPlaying) R.drawable.ic_pause_small else R.drawable.ic_play_small
-            )
-            btnPanelPlayPause.setImageResource(
-                if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
-            )
+            playerPanelController.updatePlaybackState(isPlaying)
         }
     }
 
@@ -1655,16 +688,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             showMiniPlayer(it, musicService?.isPlaying() == true)
             songAdapter.setCurrentPlayingId(it.id)
         }
-        musicService?.let { updateModeButtonIcon(it.getPlaybackMode()) }
+        musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
         startMiniProgressPolling()
 
-        if (isPlaylistsTabActive) {
+        if (topBarController.isPlaylistsTabActive) {
             loadPlaylists()
         }
 
         if (expandPlayerOnResume) {
             expandPlayerOnResume = false
-            expandPlayerPanelWhenReady()
+            playerPanelController.expandWhenReady()
         }
     }
 
@@ -1677,8 +710,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     override fun onDestroy() {
         super.onDestroy()
         stopMiniProgressPolling()
-        activeQueueDialog?.dismiss()
-        lyricsBannerScrollAnimator?.cancel()
+        queueSheet.dismiss()
+        lyricsPanelController.cancelAnimations()
         if (isBound) {
             unbindService(connection)
             isBound = false
