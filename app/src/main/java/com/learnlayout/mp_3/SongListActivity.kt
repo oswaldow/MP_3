@@ -220,9 +220,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 musicService?.setPlaylist(pending, pendingStartIndex)
                 expandPlayerPanelWhenReady()
             } else {
-                musicService?.getCurrentSong()?.let { song ->
-                    showMiniPlayer(song, musicService?.isPlaying() == true)
-                    songAdapter.setCurrentPlayingId(song.id)
+                val current = musicService?.getCurrentSong()
+                if (current != null) {
+                    showMiniPlayer(current, musicService?.isPlaying() == true)
+                    songAdapter.setCurrentPlayingId(current.id)
+                } else {
+                    tryRestoreLastSong()
                 }
             }
 
@@ -271,6 +274,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         setupEdgeToEdge()
         setupBackPress()
         setupSwipeToPlaylists()
+
+        currentSort = PlaybackStateRepository.getSortType(this)
 
         checkPermissionsAndLoad()
 
@@ -563,32 +568,33 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         val tvMostPlayed: TextView = popupView.findViewById(R.id.tvSortMostPlayed)
 
         tvTitle.setOnClickListener {
-            currentSort = SortType.TITLE
-            applyFilterAndSort()
+            selectSortType(SortType.TITLE)
             popupWindow.dismiss()
         }
         tvArtist.setOnClickListener {
-            currentSort = SortType.ARTIST
-            applyFilterAndSort()
+            selectSortType(SortType.ARTIST)
             popupWindow.dismiss()
         }
         tvDuration.setOnClickListener {
-            currentSort = SortType.DURATION
-            applyFilterAndSort()
+            selectSortType(SortType.DURATION)
             popupWindow.dismiss()
         }
         tvDateAdded.setOnClickListener {
-            currentSort = SortType.DATE_ADDED
-            applyFilterAndSort()
+            selectSortType(SortType.DATE_ADDED)
             popupWindow.dismiss()
         }
         tvMostPlayed.setOnClickListener {
-            currentSort = SortType.MOST_PLAYED
-            applyFilterAndSort()
+            selectSortType(SortType.MOST_PLAYED)
             popupWindow.dismiss()
         }
 
         popupWindow.showAsDropDown(btnSort, -180, 12)
+    }
+
+    private fun selectSortType(type: SortType) {
+        currentSort = type
+        PlaybackStateRepository.saveSortType(this, type)
+        applyFilterAndSort()
     }
 
     private fun setupTabs() {
@@ -1371,6 +1377,25 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
 
         applyFilterAndSort()
+    }
+
+    // Si el servicio de musica arranco "en frio" (sin ninguna cancion
+    // cargada en memoria, porque el proceso murio en algun momento),
+    // busca la ultima cancion guardada y la deja preparada en pausa en la
+    // posicion donde se habia quedado. Si allSongs todavia no cargo (ej.
+    // el permiso de audio aun no se concedio), simplemente no restaura
+    // nada; la proxima vez que se abra la app con permiso concedido si
+    // funcionara, porque el dato queda guardado en SharedPreferences.
+    private fun tryRestoreLastSong() {
+        val lastSongId = PlaybackStateRepository.getLastSongId(this)
+        if (lastSongId == -1L) return
+
+        val song = allSongs.firstOrNull { it.id == lastSongId } ?: return
+        val positionMs = PlaybackStateRepository.getLastPositionMs(this)
+
+        musicService?.restorePlaylist(listOf(song), 0, positionMs)
+        showMiniPlayer(song, false)
+        songAdapter.setCurrentPlayingId(song.id)
     }
 
     private fun applyFilterAndSort() {

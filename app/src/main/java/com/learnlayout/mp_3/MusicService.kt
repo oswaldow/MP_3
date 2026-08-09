@@ -97,6 +97,11 @@ class MusicService : Service() {
     private var lastProgressTickNanos: Long = 0L
     private var lastFadeTickNanos: Long = 0L
 
+    // Ultimo momento en que se guardo cancion+posicion en disco mientras
+    // suena musica. Se usa para no escribir en SharedPreferences 2 veces
+    // por segundo (cada tick de progreso), solo cada ~5s.
+    private var lastPlaybackStateSaveNanos: Long = 0L
+
     // Listener de "cancion actual termino". Es el mismo objeto para todos
     // los players "principales" que van pasando por mediaPlayer; se
     // agrega/quita segun haga falta (equivalente a los antiguos
@@ -181,6 +186,44 @@ class MusicService : Service() {
         if (songList.isNotEmpty()) {
             playSongAt(currentIndex)
         }
+    }
+
+    // Reconstruye la ultima cancion reproducida sin contarla como una
+    // reproduccion nueva ni arrancarla en automatico: la deja preparada y
+    // en pausa, en la posicion en la que se habia quedado antes de que el
+    // proceso muriera.
+    fun restorePlaylist(songs: List<Song>, startIndex: Int, positionMs: Long) {
+        if (songs.isEmpty()) return
+        originalList = songs
+        songList = songs
+        currentIndex = startIndex.coerceIn(0, songs.size - 1)
+        playbackMode = PlaybackMode.NORMAL
+        restoreSongAt(currentIndex, positionMs)
+    }
+
+    private fun restoreSongAt(index: Int, positionMs: Long) {
+        val song = songList.getOrNull(index) ?: return
+
+        releasePlayer()
+
+        val player = buildPlayer(startVolume = 1f)
+        player.addListener(mainPlayerListener)
+        player.setMediaItem(MediaItem.fromUri(song.uri))
+        player.prepare()
+        player.playWhenReady = false
+        if (positionMs > 0) {
+            player.seekTo(positionMs)
+        }
+        mediaPlayer = player
+
+        updateMediaMetadata(song)
+        listener?.onSongChanged(song, index)
+        listener?.onPlaybackStateChanged(false)
+        updateMediaSessionState(false)
+
+        startForeground(NOTIFICATION_ID, buildNotification(song, false))
+        updateWidgets()
+        startProgressUpdates()
     }
 
     fun getCurrentSong(): Song? = songList.getOrNull(currentIndex)
@@ -324,6 +367,9 @@ class MusicService : Service() {
         listener?.onPlaybackStateChanged(false)
         updateNotification()
         updateMediaSessionState(false)
+        getCurrentSong()?.let {
+            PlaybackStateRepository.saveLastSong(applicationContext, it.id, getCurrentPosition().toLong())
+        }
     }
 
     fun playNext() {
@@ -391,6 +437,7 @@ class MusicService : Service() {
 
         listener?.onSongChanged(song, index)
         PlayCountRepository.incrementPlayCount(applicationContext, song.id)
+        PlaybackStateRepository.saveLastSong(applicationContext, song.id, 0L)
         listener?.onPlaybackStateChanged(true)
         updateMediaSessionState(true)
 
@@ -438,6 +485,13 @@ class MusicService : Service() {
                     // usuario haya pausado.
                     if (player.isPlaying) {
                         handleCrossfadeTick(current, total)
+
+                        if (now - lastPlaybackStateSaveNanos >= 5_000_000_000L) {
+                            lastPlaybackStateSaveNanos = now
+                            getCurrentSong()?.let { song ->
+                                PlaybackStateRepository.saveLastSong(applicationContext, song.id, current)
+                            }
+                        }
                     }
                     handler.postDelayed(this, 500)
                 }
@@ -859,6 +913,7 @@ class MusicService : Service() {
     }
 
     private fun stopPlaybackAndService() {
+        PlaybackStateRepository.clearLastSong(applicationContext)
         releasePlayer()
         listener?.onPlaybackStateChanged(false)
         updateMediaSessionState(false)
@@ -892,10 +947,21 @@ class MusicService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        // A partir de aqui el sistema puede matar el proceso en cualquier
+        // momento (sobre todo en fabricantes agresivos tipo MIUI/HyperOS),
+        // sin llegar a llamar onDestroy(). Se escribe de forma bloqueante
+        // para asegurar que la posicion quede en disco antes de que eso
+        // pase.
+        getCurrentSong()?.let {
+            PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        getCurrentSong()?.let {
+            PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
+        }
         releasePlayer()
         mediaSession.isActive = false
         mediaSession.release()
