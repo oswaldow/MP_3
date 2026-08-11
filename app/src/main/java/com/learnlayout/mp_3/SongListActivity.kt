@@ -64,6 +64,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnPanelLyricsSync: ImageButton
     private lateinit var btnPanelQueue: ImageButton
     private lateinit var ivPanelAlbumArt: ImageView
+    private lateinit var viewPanelArtBanner: View
     private lateinit var tvPanelSongTitle: TextView
     private lateinit var tvPanelArtist: TextView
     private lateinit var sbPanelProgress: WaveformSeekBar
@@ -112,7 +113,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         QueueSheetController(this) { musicService }
     }
 
-    private val lyricsPanelController by lazy {
+    private val lyricsPanelController: LyricsPanelController by lazy {
         LyricsPanelController(
             activity = this,
             lyricsCoordinator = lyricsCoordinator,
@@ -125,7 +126,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         )
     }
 
-    private val playerPanelController by lazy {
+    private val playerPanelController: PlayerPanelController by lazy {
         PlayerPanelController(
             activity = this,
             getMusicService = { musicService },
@@ -143,6 +144,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnPanelFavorite = btnPanelFavorite,
             btnPanelLyricsSync = btnPanelLyricsSync,
             ivPanelAlbumArt = ivPanelAlbumArt,
+            viewPanelArtBanner = viewPanelArtBanner,
             tvPanelSongTitle = tvPanelSongTitle,
             tvPanelArtist = tvPanelArtist,
             sbPanelProgress = sbPanelProgress,
@@ -163,6 +165,25 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             onFavoriteToggled = {
                 if (topBarController.isPlaylistsTabActive) {
                     loadPlaylists()
+                }
+            },
+            onAlbumArtLongPress = { song ->
+                AlbumArtPickerDialog(this, song) { chosenSong, bitmap ->
+                    AlbumArtRepository.applyOverride(
+                        this, chosenSong, bitmap,
+                        object : AlbumArtRepository.Callback {
+                            override fun onCoverReady(bmp: android.graphics.Bitmap) {
+                                playerPanelController.applyAlbumArtOverride(chosenSong, bmp)
+                            }
+                        }
+                    )
+                }.show()
+            },
+            onAlbumArtChanged = { bitmap ->
+                if (bitmap != null) {
+                    lyricsPanelController.applyAlbumArtColor(bitmap)
+                } else {
+                    lyricsPanelController.applyAlbumArtFallback()
                 }
             }
         )
@@ -404,6 +425,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnPanelFavorite = findViewById(R.id.btnPanelFavorite)
         btnPanelLyricsSync = findViewById(R.id.btnPanelLyricsSync)
         ivPanelAlbumArt = findViewById(R.id.ivPanelAlbumArt)
+        viewPanelArtBanner = findViewById(R.id.viewPanelArtBanner)
         tvPanelSongTitle = findViewById(R.id.tvPanelSongTitle)
         tvPanelArtist = findViewById(R.id.tvPanelArtist)
         sbPanelProgress = findViewById(R.id.sbPanelProgress)

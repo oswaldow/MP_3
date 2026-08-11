@@ -16,19 +16,11 @@ import java.util.Collections
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * Busca caratulas de album por titulo/artista, primero en iTunes y si no
- * hay resultado en Deezer. Cachea en memoria (LruCache) y en disco
- * (cacheDir/album_art_cache), asi que la mayoria de las veces no vuelve
- * a pegarle a la red.
- *
- * No toca el equalizador ni ninguna otra pantalla: solo resuelve un
- * Bitmap para un Song dado.
- */
 object AlbumArtRepository {
 
     private const val CACHE_DIR_NAME = "album_art_cache"
     private const val MEMORY_CACHE_SIZE = 60
+    private const val CANDIDATES_LIMIT_PER_SOURCE = 6
 
     private val executor: ExecutorService = Executors.newFixedThreadPool(2)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -41,6 +33,16 @@ object AlbumArtRepository {
 
     interface Callback {
         fun onCoverReady(bitmap: Bitmap)
+    }
+
+    /** Una opcion de caratula para elegir manualmente (ver [searchCandidates]). */
+    data class AlbumArtCandidate(
+        val bitmap: Bitmap,
+        val sourceLabel: String
+    )
+
+    interface CandidatesCallback {
+        fun onCandidatesReady(candidates: List<AlbumArtCandidate>)
     }
 
     /**
@@ -78,6 +80,100 @@ object AlbumArtRepository {
             } finally {
                 inFlight.remove(song.id)
             }
+        }
+    }
+
+    /**
+     * Busca varias posibles caratulas para [song] (iTunes + Deezer, hasta
+     * [CANDIDATES_LIMIT_PER_SOURCE] de cada una) para que el usuario elija
+     * manualmente cual es la correcta cuando la automatica no coincide.
+     * No toca la cache: solo devuelve opciones para previsualizar.
+     */
+    fun searchCandidates(song: Song, callback: CandidatesCallback) {
+        val query = "${song.artist} ${song.title}".trim()
+        if (query.isBlank()) {
+            callback.onCandidatesReady(emptyList())
+            return
+        }
+
+        executor.execute {
+            val candidates = mutableListOf<AlbumArtCandidate>()
+            candidates += fetchItunesCandidates(query)
+            candidates += fetchDeezerCandidates(query)
+            mainHandler.post { callback.onCandidatesReady(candidates) }
+        }
+    }
+
+    /**
+     * Guarda [bitmap] como la caratula elegida a mano para [song]: la
+     * escribe en el mismo lugar (memoria + disco) que usa el flujo
+     * automatico, asi que a partir de ahora [loadCover] la devuelve como
+     * si fuera el resultado normal de la busqueda.
+     */
+    fun applyOverride(context: Context, song: Song, bitmap: Bitmap, callback: Callback) {
+        val appContext = context.applicationContext
+        executor.execute {
+            val cacheKey = cacheKeyFor(song)
+            val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
+            saveToDisk(diskFile, bitmap)
+            memoryCache.put(song.id, bitmap)
+            mainHandler.post { callback.onCoverReady(bitmap) }
+        }
+    }
+
+    private fun fetchItunesCandidates(query: String): List<AlbumArtCandidate> {
+        return try {
+            val encoded = URLEncoder.encode(query, "UTF-8")
+            val url = "https://itunes.apple.com/search?term=$encoded&media=music&entity=song&limit=$CANDIDATES_LIMIT_PER_SOURCE"
+            val json = httpGetJson(url) ?: return emptyList()
+            val results = json.optJSONArray("results") ?: return emptyList()
+
+            val out = mutableListOf<AlbumArtCandidate>()
+            for (i in 0 until results.length()) {
+                val item = results.getJSONObject(i)
+                val artworkUrl = item.optString("artworkUrl100", "")
+                if (artworkUrl.isBlank()) continue
+
+                val highRes = artworkUrl.replace("100x100bb", "300x300bb")
+                val bitmap = downloadBitmap(highRes) ?: continue
+
+                val trackName = item.optString("trackName", "")
+                val artistName = item.optString("artistName", "")
+                val label = listOf(trackName, artistName).filter { it.isNotBlank() }.joinToString(" - ")
+                out += AlbumArtCandidate(bitmap, label.ifBlank { "iTunes" })
+            }
+            out
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun fetchDeezerCandidates(query: String): List<AlbumArtCandidate> {
+        return try {
+            val encoded = URLEncoder.encode(query, "UTF-8")
+            val url = "https://api.deezer.com/search?q=$encoded&limit=$CANDIDATES_LIMIT_PER_SOURCE"
+            val json = httpGetJson(url) ?: return emptyList()
+            val data = json.optJSONArray("data") ?: return emptyList()
+
+            val out = mutableListOf<AlbumArtCandidate>()
+            for (i in 0 until data.length()) {
+                val item = data.getJSONObject(i)
+                val album = item.optJSONObject("album") ?: continue
+                val coverUrl = album.optString("cover_medium", "").ifBlank {
+                    album.optString("cover_big", "")
+                }
+                if (coverUrl.isBlank()) continue
+
+                val bitmap = downloadBitmap(coverUrl) ?: continue
+
+                val trackTitle = item.optString("title", "")
+                val artistName = item.optJSONObject("artist")?.optString("name", "") ?: ""
+                val label = listOf(trackTitle, artistName).filter { it.isNotBlank() }.joinToString(" - ")
+                out += AlbumArtCandidate(bitmap, label.ifBlank { "Deezer" })
+            }
+            out
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 

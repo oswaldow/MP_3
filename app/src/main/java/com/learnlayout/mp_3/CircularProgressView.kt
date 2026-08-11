@@ -28,7 +28,7 @@ class CircularProgressView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = strokeWidthPx
         strokeCap = Paint.Cap.ROUND
-        color = Color.parseColor("#FFD600")
+        color = Color.parseColor("#9C27B0")
     }
 
     private val arcRect = RectF()

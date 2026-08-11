@@ -33,7 +33,7 @@
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
 
-    <!-- Marco morado para diferenciar el panel de letra deslizable -->
-    <color name="lyrics_banner_border">#E040FB</color>
+    <!-- Marco blanco fijo del panel de letra deslizable (no cambia con Material You) -->
+    <color name="lyrics_banner_border">#FFFFFF</color>
 
 </resources>

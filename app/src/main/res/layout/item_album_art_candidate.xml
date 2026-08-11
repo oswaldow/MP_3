@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:clickable="true"
+    android:focusable="true"
+    android:background="?android:attr/selectableItemBackground"
+    android:padding="6dp">
+
+    <ImageView
+        android:id="@+id/ivCandidateArt"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_album_art_small"
+        android:contentDescription="Opcion de caratula"
+        android:scaleType="centerCrop" />
+
+    <TextView
+        android:id="@+id/tvCandidateLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Fuente"
+        android:textColor="@color/text_secondary_light"
+        android:textSize="11sp" />
+
+</LinearLayout>

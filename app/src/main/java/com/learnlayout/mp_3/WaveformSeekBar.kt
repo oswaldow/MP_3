@@ -53,8 +53,8 @@ class WaveformSeekBar @JvmOverloads constructor(
     private var barHeights: FloatArray = FloatArray(0)
     private var isDragging = false
 
-    // Colores estilo Spotify: verde para lo reproducido, gris tenue para el resto
-    private val playedColor = Color.parseColor("#FFD600")
+    // Lo reproducido siempre blanco (fijo, no se tine con Material You); gris tenue para el resto
+    private val playedColor = Color.WHITE
     private val unplayedColor = Color.parseColor("#4DFFFFFF")
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {

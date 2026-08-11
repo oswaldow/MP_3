@@ -3,7 +3,9 @@ package com.learnlayout.mp_3
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
+import android.graphics.Outline
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -14,24 +16,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 
-/**
- * Encapsula el panel del reproductor: el mini player colapsado, el panel
- * expandido (estilo Spotify) y su BottomSheetBehavior, los controles de
- * reproduccion (play/pause/siguiente/anterior/modo/favorito/seek), la
- * caratula del album (iTunes/Deezer via AlbumArtRepository) y las
- * actualizaciones de progreso.
- *
- * No guarda una referencia fija a MusicService: la pide via [getMusicService]
- * cada vez que la necesita, porque el binding del servicio puede no estar
- * listo todavia cuando el controller ya existe (mismo patron que
- * QueueSheetController).
- *
- * [onExpanded] / [onCollapsed] son notificaciones hacia la Activity para que
- * coordine efectos que no le pertenecen a este panel (letra, animacion del
- * monito). [onShowQueue] delega la apertura de la cola. [onFavoriteToggled]
- * avisa que cambio el estado de favorito por si hay que refrescar la
- * pestana de playlists.
- */
 class PlayerPanelController(
     private val activity: AppCompatActivity,
     private val getMusicService: () -> MusicService?,
@@ -49,6 +33,7 @@ class PlayerPanelController(
     private val btnPanelFavorite: ImageButton,
     private val btnPanelLyricsSync: ImageButton,
     private val ivPanelAlbumArt: ImageView,
+    private val viewPanelArtBanner: View,
     private val tvPanelSongTitle: TextView,
     private val tvPanelArtist: TextView,
     private val sbPanelProgress: WaveformSeekBar,
@@ -60,7 +45,12 @@ class PlayerPanelController(
     private val onExpanded: () -> Unit,
     private val onCollapsed: () -> Unit,
     private val onShowQueue: () -> Unit,
-    private val onFavoriteToggled: () -> Unit
+    private val onFavoriteToggled: () -> Unit,
+    private val onAlbumArtLongPress: (Song) -> Unit,
+    // Avisa cada vez que cambia la caratula (o se va a placeholder, bitmap
+    // null) para que quien arme este controller pueda enterar a otras
+    // vistas, p.ej. el banner del panel de letra (Material You).
+    private val onAlbumArtChanged: (Bitmap?) -> Unit
 ) {
 
     private lateinit var behavior: BottomSheetBehavior<FrameLayout>
@@ -85,6 +75,37 @@ class PlayerPanelController(
     // ya cambio la cancion, se descarta (evita pisar la caratula nueva con
     // la de una cancion anterior).
     private var currentArtSongId: Long? = null
+
+    // Color de fondo de viewPanelArtBanner cuando no hay caratula (o mientras
+    // se genera la paleta la primera vez). Es el mismo gris oscuro que ya
+    // usaba el panel antes de este cambio, para que no haya salto visual.
+    private val defaultBannerColor: Int =
+        ContextCompat.getColor(activity, R.color.surface_dark)
+
+    // Color de acento (Material You) para tintar play/pause, siguiente,
+    // anterior, etc. Empieza en un gris neutro y se anima al color de la
+    // caratula cada vez que cambia la cancion (ver applyControlsAccent).
+    private val defaultAccentColor: Int =
+        ContextCompat.getColor(activity, R.color.text_primary_light)
+    private var currentAccentColor: Int = defaultAccentColor
+
+    init {
+        // Caratula "un poco redondeada": setImageBitmap() por si solo pinta
+        // un rectangulo filoso encima del fondo con esquinas (bg_album_art),
+        // asi que hay que recortar la vista misma.
+        applyRoundedCorners(ivMiniAlbumArt, 6f)
+        applyRoundedCorners(ivPanelAlbumArt, 10f)
+    }
+
+    private fun applyRoundedCorners(view: ImageView, radiusDp: Float) {
+        val radiusPx = radiusDp * activity.resources.displayMetrics.density
+        view.clipToOutline = true
+        view.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(v: View, outline: Outline) {
+                outline.setRoundRect(0, 0, v.width, v.height, radiusPx)
+            }
+        }
+    }
 
     val isReady: Boolean
         get() = ::behavior.isInitialized
@@ -158,6 +179,14 @@ class PlayerPanelController(
 
         btnPanelLyricsSync.setOnClickListener {
             openLyricsSyncScreen()
+        }
+
+        ivPanelAlbumArt.setOnLongClickListener {
+            val song = getMusicService()?.getCurrentSong()
+            if (song != null) {
+                onAlbumArtLongPress(song)
+            }
+            true
         }
 
         btnPanelPlayPause.setOnClickListener {
@@ -340,8 +369,40 @@ class PlayerPanelController(
                 if (currentArtSongId != song.id) return
                 applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
                 applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
+                onAlbumArtChanged(bitmap)
+                // Banner estilo Material You: color extraido de la caratula.
+                PlayerPaletteTheme.applyFromBitmap(bitmap, viewPanelArtBanner, defaultBannerColor)
+                // Color de acento para los controles (play/pause, siguiente,
+                // anterior, modo). Mismo espiritu de Material You pero sin
+                // oscurecer, para que los iconos se vean saturados.
+                PlayerPaletteTheme.applyAccentFromBitmap(
+                    bitmap, defaultAccentColor, currentAccentColor
+                ) { color ->
+                    currentAccentColor = color
+                    applyControlsAccent(color)
+                }
             }
         })
+    }
+
+    /**
+     * Aplica manualmente una caratula elegida por el usuario (long-press
+     * sobre ivPanelAlbumArt -> selector de opciones) para [song], sin pasar
+     * de nuevo por la busqueda automatica. Se llama despues de que
+     * [AlbumArtRepository.applyOverride] ya guardo el bitmap en cache.
+     */
+    fun applyAlbumArtOverride(song: Song, bitmap: Bitmap) {
+        if (currentArtSongId != song.id) return
+        applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
+        applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
+        onAlbumArtChanged(bitmap)
+        PlayerPaletteTheme.applyFromBitmap(bitmap, viewPanelArtBanner, defaultBannerColor)
+        PlayerPaletteTheme.applyAccentFromBitmap(
+            bitmap, defaultAccentColor, currentAccentColor
+        ) { color ->
+            currentAccentColor = color
+            applyControlsAccent(color)
+        }
     }
 
     private fun applyAlbumArtBitmap(iv: ImageView, bitmap: Bitmap) {
@@ -354,6 +415,34 @@ class PlayerPanelController(
     private fun showAlbumArtPlaceholder() {
         applyPlaceholder(ivMiniAlbumArt, miniAlbumArtBasePadding)
         applyPlaceholder(ivPanelAlbumArt, panelAlbumArtBasePadding)
+        onAlbumArtChanged(null)
+        PlayerPaletteTheme.applyFallback(viewPanelArtBanner, defaultBannerColor)
+        PlayerPaletteTheme.applyAccentFallback(defaultAccentColor, currentAccentColor) { color ->
+            currentAccentColor = color
+            applyControlsAccent(color)
+        }
+    }
+
+    /**
+     * Tinta los controles de reproduccion con [color] (extraido de la
+     * caratula o el fallback neutro). El boton grande de play/pause tinta
+     * su fondo circular (antes @color/white fijo) y su icono se recalcula
+     * a blanco o negro segun cual contraste mejor. El resto de botones
+     * (anterior, siguiente, modo, mini play/pause) solo tintan el icono,
+     * ya que su fondo es transparente.
+     */
+    private fun applyControlsAccent(color: Int) {
+        val onColor = PlayerPaletteTheme.onColorFor(color)
+        val accentTint = ColorStateList.valueOf(color)
+        val onColorTint = ColorStateList.valueOf(onColor)
+
+        btnPanelPlayPause.backgroundTintList = accentTint
+        btnPanelPlayPause.imageTintList = onColorTint
+
+        btnPanelPrevious.imageTintList = accentTint
+        btnPanelNext.imageTintList = accentTint
+        btnMiniPlayMode.imageTintList = accentTint
+        btnMiniPlayPause.imageTintList = accentTint
     }
 
     private fun applyPlaceholder(iv: ImageView, basePadding: IntArray) {

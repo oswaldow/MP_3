@@ -1,28 +1,21 @@
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 
-/**
- * Encapsula el panel deslizable de letra (estilo Spotify): el BottomSheet en
- * si (setup, peek height, insets), la carga de letra via LyricsRepository /
- * SavedLyricsRepository, el resaltado sincronizado con la posicion de
- * reproduccion, y el boton de guardar letra.
- *
- * [groupExpanded] y [llPanelControls] son vistas del panel del reproductor
- * (no de este controller) que se necesitan solo para calcular cuanto
- * espacio libre queda para el peek height del banner de letra colapsado.
- */
 class LyricsPanelController(
     private val activity: AppCompatActivity,
     private val lyricsCoordinator: View,
@@ -40,17 +33,37 @@ class LyricsPanelController(
     private var lyricsAdapter: LyricsLineAdapter? = null
     private var lyricsSongId: Long? = null
     private var lyricsRequestId: Int = 0
-    // true solo cuando las lineas cargadas tienen timestamps reales (vienen
-    // de showSyncedLyrics). La letra plana (showPlainLyrics) usa timeMs=-1
-    // en todas sus lineas como "sin tiempo", y si se le aplica el mismo
-    // resaltado por posicion, TODAS las lineas cuentan como "ya pasadas"
-    // desde el segundo 0 y el resaltado salta directo a la ultima linea.
-    // Esta bandera evita que syncWithPosition toque letra sin sincronizar.
+
     private var lyricsAreSynced: Boolean = false
     private var lyricsBannerScrollAnimator: ValueAnimator? = null
     private var currentLyricsResult: LyricsResult? = null
 
     private val baseLyricsPanelPaddingTop: Int = lyricsPanel.paddingTop
+
+    private val density = activity.resources.displayMetrics.density
+    private val collapsedRadiusPx = 8f * density
+    private val expandedRadiusPx = 28f * density
+
+    // Color de fondo por defecto (sin caratula o mientras se genera la
+    // paleta). Mismo valor con el que arranca panelBackground, para que no
+    // haya salto visual la primera vez que se resuelve la paleta.
+    private val defaultPanelColor: Int =
+        ContextCompat.getColor(activity, R.color.surface_dark)
+
+    private val panelBackground = GradientDrawable().apply {
+        setColor(defaultPanelColor)
+        // El borde siempre queda blanco (lyrics_banner_border), no se anima
+        // ni se toca con Material You: solo el relleno cambia con la caratula.
+        setStroke((2 * density).toInt(), ContextCompat.getColor(activity, R.color.lyrics_banner_border))
+        cornerRadii = radiiFor(collapsedRadiusPx)
+    }
+
+    private fun radiiFor(topRadius: Float): FloatArray = floatArrayOf(
+        topRadius, topRadius,
+        topRadius, topRadius,
+        0f, 0f,
+        0f, 0f
+    )
 
     val isExpanded: Boolean
         get() = ::behavior.isInitialized &&
@@ -61,6 +74,7 @@ class LyricsPanelController(
         get() = lyricsCoordinator.visibility == View.VISIBLE
 
     init {
+        lyricsPanel.background = panelBackground
         rvLyricsPanel.layoutManager = object : LinearLayoutManager(activity) {
             override fun canScrollVertically(): Boolean = isExpanded
         }
@@ -89,10 +103,33 @@ class LyricsPanelController(
                 ) {
                     lyricsAdapter?.let { scrollToLine(it.getActiveIndex()) }
                 }
+
+                val target = if (newState == BottomSheetBehavior.STATE_COLLAPSED) {
+                    collapsedRadiusPx
+                } else {
+                    expandedRadiusPx
+                }
+                panelBackground.cornerRadii = radiiFor(target)
             }
 
-            override fun onSlide(bottomSheet: View, slideOffset: Float) {}
+            override fun onSlide(bottomSheet: View, slideOffset: Float) {
+                val t = slideOffset.coerceIn(0f, 1f)
+                val radius = collapsedRadiusPx + (expandedRadiusPx - collapsedRadiusPx) * t
+                panelBackground.cornerRadii = radiiFor(radius)
+            }
         })
+    }
+
+    // ---------- Color del fondo (Material You, igual espiritu que viewPanelArtBanner) ----------
+
+    /** Llamado desde PlayerPanelController cada vez que hay una caratula nueva. */
+    fun applyAlbumArtColor(bitmap: Bitmap) {
+        PlayerPaletteTheme.applyToDrawable(bitmap, panelBackground, defaultPanelColor)
+    }
+
+    /** Llamado cuando la cancion actual no tiene caratula (placeholder). */
+    fun applyAlbumArtFallback() {
+        PlayerPaletteTheme.applyDrawableFallback(panelBackground, defaultPanelColor)
     }
 
     // ---------- Drag guard (usado por dispatchTouchEvent de la Activity) ----------
