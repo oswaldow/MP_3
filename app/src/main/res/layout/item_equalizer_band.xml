@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="match_parent"
+    android:layout_marginHorizontal="4dp"
+    android:background="@drawable/bg_eq_band_card"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:paddingVertical="10dp"
+    android:paddingHorizontal="6dp">
+
+    <TextView
+        android:id="@+id/tvBandLevel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="10dp"
+        android:text="0dB"
+        android:textColor="@color/spotify_green"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <FrameLayout
+        android:id="@+id/frameBandSeek"
+        android:layout_width="44dp"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <SeekBar
+            android:id="@+id/seekBand"
+            android:layout_width="240dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:rotation="270"
+            android:max="3000"
+            android:progressDrawable="@drawable/seekbar_style"
+            android:thumb="@drawable/thumb_seekbar"
+            android:splitTrack="false" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/tvBandFreq"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="0Hz"
+        android:textColor="@color/text_primary_light"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvBandLabel"
+        android:layout_width="72dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text=""
+        android:textColor="@color/text_secondary_light"
+        android:textSize="8.5sp"
+        android:lineSpacingExtra="1dp"
+        android:alpha="0.85"
+        android:gravity="center"
+        android:maxLines="3" />
+
+</LinearLayout>

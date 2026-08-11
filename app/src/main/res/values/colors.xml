@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Estos nombres se conservan porque los usan muchos drawables ya
-         existentes en el proyecto (tabs, bordes, seekbar, chip de modo,
-         item "reproduciendo", etc). Al repuntar sus valores aqui, toda
-         la app cambia de golpe sin tocar cada XML individualmente. -->
     <color name="purple_primary">#9C27B0</color>
     <color name="purple_dark">#1C1C1C</color>
     <color name="purple_light">#669C27B0</color>
