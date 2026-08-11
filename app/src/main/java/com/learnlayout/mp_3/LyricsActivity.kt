@@ -4,6 +4,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -16,12 +18,14 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
 
 class LyricsActivity : AppCompatActivity() {
 
+    private lateinit var rootLayout: View
     private lateinit var btnBack: ImageButton
     private lateinit var tvTitle: TextView
     private lateinit var progressBar: ProgressBar
@@ -62,6 +66,20 @@ class LyricsActivity : AppCompatActivity() {
     private var song: Song? = null
     private var lyricsAdapter: LyricsLineAdapter? = null
 
+    // ---------- Tema dinamico (Material You / PlayerPaletteTheme) ----------
+    // Mismo criterio que EqualizerActivity y el panel del reproductor: el
+    // fondo de toda la pantalla se oscurece segun la caratula de la
+    // cancion, y los botones que antes eran spotify_green fijo (usar letra
+    // y sincronizar / guardar sincronizacion) pasan a seguir ese acento.
+    // La linea activa de la letra (item_lyrics_line) NO se toca aqui: su
+    // color ya se ajusto en el punto 1 para mantener contraste con fondos
+    // claros, y cambiarlo a un acento dinamico podria romper eso de nuevo.
+    // Como el Song ya llega por Intent, no hace falta esperar al servicio
+    // para tematizar: se carga apenas se conoce la cancion.
+    private val defaultBannerColor: Int by lazy { ContextCompat.getColor(this, R.color.background_dark) }
+    private val defaultAccentColor: Int by lazy { ContextCompat.getColor(this, R.color.spotify_green) }
+    private var currentAccentColor: Int = 0
+
     private val uiHandler = Handler(Looper.getMainLooper())
     private val syncRunnable = object : Runnable {
         override fun run() {
@@ -98,6 +116,9 @@ class LyricsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_lyrics)
 
+        currentAccentColor = defaultAccentColor
+
+        rootLayout = findViewById(R.id.rootLyricsLayout)
         btnBack = findViewById(R.id.btnLyricsBack)
         tvTitle = findViewById(R.id.tvLyricsTitle)
         progressBar = findViewById(R.id.progressLyrics)
@@ -169,6 +190,9 @@ class LyricsActivity : AppCompatActivity() {
             showMessage("No se pudo identificar la cancion")
             return
         }
+
+        applyThemeFallback()
+        loadAlbumArtTheme(intentSong)
 
         bindService(Intent(this, MusicService::class.java), connection, Context.BIND_AUTO_CREATE)
 
@@ -420,6 +444,46 @@ class LyricsActivity : AppCompatActivity() {
     }
 
     // ==================== FIN MODO DE SINCRONIZACION MANUAL ====================
+
+    // ---------- Tema dinamico: carga y aplicacion ----------
+
+    private fun loadAlbumArtTheme(song: Song) {
+        AlbumArtRepository.loadCover(this, song, object : AlbumArtRepository.Callback {
+            override fun onCoverReady(bitmap: Bitmap) {
+                applyThemeFromBitmap(bitmap)
+            }
+        })
+        // Si no hay caratula en cache ni en red, loadCover no llama al
+        // callback: la pantalla se queda con el fallback ya aplicado en
+        // onCreate (fondo background_dark, acento spotify_green).
+    }
+
+    private fun applyThemeFromBitmap(bitmap: Bitmap) {
+        PlayerPaletteTheme.applyFromBitmap(bitmap, rootLayout, defaultBannerColor)
+        PlayerPaletteTheme.applyAccentFromBitmap(
+            bitmap, defaultAccentColor, currentAccentColor
+        ) { color ->
+            currentAccentColor = color
+            applyAccentToControls(color)
+        }
+    }
+
+    private fun applyThemeFallback() {
+        PlayerPaletteTheme.applyFallback(rootLayout, defaultBannerColor)
+        PlayerPaletteTheme.applyAccentFallback(defaultAccentColor, currentAccentColor) { color ->
+            currentAccentColor = color
+            applyAccentToControls(color)
+        }
+    }
+
+    private fun applyAccentToControls(color: Int) {
+        val accentTint = ColorStateList.valueOf(color)
+        val onColor = PlayerPaletteTheme.onColorFor(color)
+        btnConfirmEditLyrics.backgroundTintList = accentTint
+        btnConfirmEditLyrics.setTextColor(onColor)
+        btnSaveSync.backgroundTintList = accentTint
+        btnSaveSync.setTextColor(onColor)
+    }
 
     private fun scrollToLine(index: Int) {
         rvLyrics.post {

@@ -64,6 +64,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnMiniPlayMode: ImageButton
     private lateinit var circularMiniProgress: CircularProgressView
     private lateinit var btnPanelBack: ImageButton
+    private lateinit var btnPanelSleepTimer: ImageButton
     private lateinit var btnPanelLyricsSync: ImageButton
     private lateinit var btnPanelQueue: ImageButton
     private lateinit var ivPanelAlbumArt: ImageView
@@ -156,6 +157,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnMiniPlayMode = btnMiniPlayMode,
             circularMiniProgress = circularMiniProgress,
             btnPanelBack = btnPanelBack,
+            btnPanelSleepTimer = btnPanelSleepTimer,
             btnPanelQueue = btnPanelQueue,
             btnPanelFavorite = btnPanelFavorite,
             btnPanelLyricsSync = btnPanelLyricsSync,
@@ -472,6 +474,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnMiniPlayMode = findViewById(R.id.btnMiniPlayMode)
         circularMiniProgress = findViewById(R.id.circularMiniProgress)
         btnPanelBack = findViewById(R.id.btnPanelBack)
+        btnPanelSleepTimer = findViewById(R.id.btnPanelSleepTimer)
         btnPanelQueue = findViewById(R.id.btnPanelQueue)
         btnPanelFavorite = findViewById(R.id.btnPanelFavorite)
         btnPanelLyricsSync = findViewById(R.id.btnPanelLyricsSync)
@@ -527,6 +530,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             rootLayout.setPadding(0, systemBars.top, 0, 0)
 
+            playerPanelController.applyTopInset(systemBars.top)
             playerPanelController.applyBottomInset(systemBars.bottom)
             lyricsPanelController.applyWindowInsets(systemBars.top, rootCoordinator.height)
 

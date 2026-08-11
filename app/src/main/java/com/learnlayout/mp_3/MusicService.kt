@@ -69,6 +69,18 @@ class MusicService : Service() {
     private var crossfadeTotalMs: Long = 0L
     private var crossfadeElapsedMs: Long = 0L
 
+    // --- Sleep timer ---
+    // Dos modos, mutuamente excluyentes:
+    //  - Por minutos: sleepTimerRunnable programado con handler.postDelayed,
+    //    pausa la musica cuando se cumple (ver setSleepTimerMinutes()).
+    //  - "Fin de cancion": sleepTimerPauseAtSongEnd = true, no se programa
+    //    nada; se revisa en onCurrentPlayerCompleted() y ademas se bloquea
+    //    el crossfade en handleCrossfadeTick() para que la cancion termine
+    //    de forma normal (sin empalmarse con la siguiente).
+    private var sleepTimerRunnable: Runnable? = null
+    private var sleepTimerEndAtMillis: Long = 0L
+    private var sleepTimerPauseAtSongEnd: Boolean = false
+
     enum class PlaybackMode { NORMAL, REPEAT_ONE, SHUFFLE }
 
     interface PlaybackListener {
@@ -413,6 +425,48 @@ class MusicService : Service() {
         }
     }
 
+    // ---------- Sleep timer ----------
+
+    /** Programa la pausa automatica dentro de [minutes] minutos. Cancela cualquier timer previo. */
+    fun setSleepTimerMinutes(minutes: Int) {
+        cancelSleepTimer()
+        if (minutes <= 0) return
+
+        val delayMs = minutes * 60_000L
+        sleepTimerEndAtMillis = System.currentTimeMillis() + delayMs
+
+        val runnable = Runnable {
+            sleepTimerRunnable = null
+            sleepTimerEndAtMillis = 0L
+            pause()
+        }
+        sleepTimerRunnable = runnable
+        handler.postDelayed(runnable, delayMs)
+    }
+
+    /** Pausa cuando termine la cancion que esta sonando en este momento (sin crossfade hacia la siguiente). */
+    fun setSleepTimerEndOfSong() {
+        cancelSleepTimer()
+        sleepTimerPauseAtSongEnd = true
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerRunnable?.let { handler.removeCallbacks(it) }
+        sleepTimerRunnable = null
+        sleepTimerEndAtMillis = 0L
+        sleepTimerPauseAtSongEnd = false
+    }
+
+    fun isSleepTimerActive(): Boolean = sleepTimerRunnable != null || sleepTimerPauseAtSongEnd
+
+    fun isSleepTimerEndOfSongActive(): Boolean = sleepTimerPauseAtSongEnd
+
+    /** Milisegundos restantes del timer por minutos, o -1 si no hay uno activo (incluye el modo "fin de cancion"). */
+    fun getSleepTimerRemainingMs(): Long {
+        if (sleepTimerRunnable == null) return -1L
+        return (sleepTimerEndAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
+
     fun playNext() {
         if (songList.isEmpty()) return
         cancelCrossfadeIfAny()
@@ -618,6 +672,16 @@ class MusicService : Service() {
     }
 
     private fun onCurrentPlayerCompleted() {
+        if (sleepTimerPauseAtSongEnd) {
+            sleepTimerPauseAtSongEnd = false
+            listener?.onPlaybackStateChanged(false)
+            updateNotification()
+            updateMediaSessionState(false)
+            getCurrentSong()?.let {
+                PlaybackStateRepository.saveLastSong(applicationContext, it.id, getCurrentPosition().toLong())
+            }
+            return
+        }
         if (playbackMode == PlaybackMode.REPEAT_ONE) {
             playSongAt(currentIndex)
         } else {
@@ -697,6 +761,11 @@ class MusicService : Service() {
 
     private fun handleCrossfadeTick(currentMs: Long, totalMs: Long) {
         if (isCrossfading) return
+
+        if (sleepTimerPauseAtSongEnd) {
+            discardPreparedNextIfAny()
+            return
+        }
 
         if (playbackMode == PlaybackMode.REPEAT_ONE ||
             !SettingsRepository.isCrossfadeEnabled(applicationContext) ||
@@ -1193,6 +1262,7 @@ class MusicService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cancelSleepTimer()
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
         }

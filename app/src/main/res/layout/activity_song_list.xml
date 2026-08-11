@@ -262,6 +262,22 @@
                 app:layout_constraintTop_toTopOf="parent"
                 app:layout_constraintStart_toStartOf="parent" />
 
+            <!-- Sleep timer: abre un menu (5/15/30/60 min o "al terminar la
+                 cancion"). El tinte del icono lo controla PlayerPanelController
+                 (gris cuando no hay timer activo, color de acento cuando si). -->
+            <ImageButton
+                android:id="@+id/btnPanelSleepTimer"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="24dp"
+                android:layout_marginTop="12dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="Temporizador de apagado"
+                android:padding="12dp"
+                android:src="@drawable/ic_bedtime"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintEnd_toEndOf="parent" />
+
             <ImageView
                 android:id="@+id/ivMonito"
                 android:layout_width="99dp"

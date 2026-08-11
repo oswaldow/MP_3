@@ -5,13 +5,16 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Outline
 import android.view.View
+import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
@@ -29,6 +32,7 @@ class PlayerPanelController(
     private val btnMiniPlayMode: ImageButton,
     private val circularMiniProgress: CircularProgressView,
     private val btnPanelBack: ImageButton,
+    private val btnPanelSleepTimer: ImageButton,
     private val btnPanelQueue: ImageButton,
     private val btnPanelFavorite: ImageButton,
     private val btnPanelLyricsSync: ImageButton,
@@ -60,6 +64,16 @@ class PlayerPanelController(
 
     private val baseGroupMiniPaddingBottom: Int = groupMini.paddingBottom
     private val baseGroupExpandedPaddingBottom: Int = groupExpanded.paddingBottom
+
+    // Margen superior original de los botones del header del panel expandido
+    // (btnPanelBack / btnPanelSleepTimer), leido del XML antes de que
+    // applyTopInset() le sume el alto de la status bar / notch en tiempo de
+    // ejecucion. Sin esto quedan pegados arriba del todo, porque playerPanel
+    // es hermano de rootLayout (no hijo) y nunca recibe ese inset por su cuenta.
+    private val baseBtnPanelBackMarginTop: Int =
+        (btnPanelBack.layoutParams as ConstraintLayout.LayoutParams).topMargin
+    private val baseBtnPanelSleepTimerMarginTop: Int =
+        (btnPanelSleepTimer.layoutParams as ConstraintLayout.LayoutParams).topMargin
 
     // Padding original de cada placeholder (ic_music_note), leido antes de
     // tocarlo, para poder restaurarlo si una cancion no tiene caratula.
@@ -172,6 +186,11 @@ class PlayerPanelController(
             behavior.state = BottomSheetBehavior.STATE_COLLAPSED
         }
 
+        btnPanelSleepTimer.setOnClickListener {
+            showSleepTimerMenu()
+        }
+        updateSleepTimerIcon()
+
         btnPanelQueue.setOnClickListener {
             onShowQueue()
         }
@@ -273,6 +292,23 @@ class PlayerPanelController(
 
     // ---------- Insets / edge-to-edge ----------
 
+    // btnPanelBack y btnPanelSleepTimer estan constreñidos al top de
+    // groupExpanded, que no recibe el inset de status bar de forma
+    // automatica (playerPanel es hermano de rootLayout, no hijo). Sin esto
+    // quedan pegados arriba del todo -incluso debajo del notch en equipos
+    // con camara recortada-.
+    fun applyTopInset(systemBarsTop: Int) {
+        setTopMargin(btnPanelBack, baseBtnPanelBackMarginTop + systemBarsTop)
+        setTopMargin(btnPanelSleepTimer, baseBtnPanelSleepTimerMarginTop + systemBarsTop)
+    }
+
+    private fun setTopMargin(view: View, marginPx: Int) {
+        val params = view.layoutParams as? ConstraintLayout.LayoutParams ?: return
+        if (params.topMargin == marginPx) return
+        params.topMargin = marginPx
+        view.layoutParams = params
+    }
+
     fun applyBottomInset(systemBarsBottom: Int) {
         groupMini.setPadding(
             groupMini.paddingLeft,
@@ -340,6 +376,7 @@ class PlayerPanelController(
         btnPanelPlayPause.setImageResource(
             if (service?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play_arrow
         )
+        updateSleepTimerIcon()
     }
 
     fun updateModeButtonIcon(mode: MusicService.PlaybackMode) {
@@ -355,6 +392,80 @@ class PlayerPanelController(
             }
         }
         btnMiniPlayMode.background = null
+    }
+
+    // ---------- Sleep timer ----------
+
+    private fun showSleepTimerMenu() {
+        val service = getMusicService() ?: return
+
+        val popupView = activity.layoutInflater.inflate(R.layout.popup_sleep_timer, null)
+        val popupWindow = PopupWindow(
+            popupView,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            true
+        )
+        popupWindow.isOutsideTouchable = true
+        popupWindow.elevation = 16f
+
+        val tv5: TextView = popupView.findViewById(R.id.tvSleepTimer5)
+        val tv15: TextView = popupView.findViewById(R.id.tvSleepTimer15)
+        val tv30: TextView = popupView.findViewById(R.id.tvSleepTimer30)
+        val tv60: TextView = popupView.findViewById(R.id.tvSleepTimer60)
+        val tvEndOfSong: TextView = popupView.findViewById(R.id.tvSleepTimerEndOfSong)
+        val dividerCancel: View = popupView.findViewById(R.id.dividerSleepTimerCancel)
+        val tvCancel: TextView = popupView.findViewById(R.id.tvSleepTimerCancel)
+
+        // "Cancelar temporizador" solo aparece si ya hay uno corriendo. Si el
+        // modo activo es "al terminar la cancion", se resalta esa opcion con
+        // el mismo morado de acento que usa el resto de la app para marcar
+        // un estado seleccionado (ver bg_chip_eq_preset_selected).
+        val hasActiveTimer = service.isSleepTimerActive()
+        dividerCancel.visibility = if (hasActiveTimer) View.VISIBLE else View.GONE
+        tvCancel.visibility = if (hasActiveTimer) View.VISIBLE else View.GONE
+        tvEndOfSong.setTextColor(
+            ContextCompat.getColor(
+                activity,
+                if (service.isSleepTimerEndOfSongActive()) R.color.spotify_green else R.color.text_primary_light
+            )
+        )
+
+        tv5.setOnClickListener { applySleepTimerMinutes(5); popupWindow.dismiss() }
+        tv15.setOnClickListener { applySleepTimerMinutes(15); popupWindow.dismiss() }
+        tv30.setOnClickListener { applySleepTimerMinutes(30); popupWindow.dismiss() }
+        tv60.setOnClickListener { applySleepTimerMinutes(60); popupWindow.dismiss() }
+        tvEndOfSong.setOnClickListener {
+            getMusicService()?.setSleepTimerEndOfSong()
+            updateSleepTimerIcon()
+            Toast.makeText(activity, "Se pausara al terminar la cancion", Toast.LENGTH_SHORT).show()
+            popupWindow.dismiss()
+        }
+        tvCancel.setOnClickListener {
+            getMusicService()?.cancelSleepTimer()
+            updateSleepTimerIcon()
+            Toast.makeText(activity, "Temporizador cancelado", Toast.LENGTH_SHORT).show()
+            popupWindow.dismiss()
+        }
+
+        popupWindow.showAsDropDown(btnPanelSleepTimer, -180, 12)
+    }
+
+    private fun applySleepTimerMinutes(minutes: Int) {
+        getMusicService()?.setSleepTimerMinutes(minutes)
+        updateSleepTimerIcon()
+        Toast.makeText(activity, "Se pausara en $minutes min", Toast.LENGTH_SHORT).show()
+    }
+
+    // Icono gris cuando no hay timer activo, o teñido con el color de acento
+    // actual (mismo que play/pause) cuando si lo hay. Se vuelve a llamar en
+    // cada tick de updateProgress() para que el icono se apague solo cuando
+    // el timer por minutos termina y pausa la musica.
+    private fun updateSleepTimerIcon() {
+        val active = getMusicService()?.isSleepTimerActive() == true
+        btnPanelSleepTimer.imageTintList = ColorStateList.valueOf(
+            if (active) currentAccentColor else ContextCompat.getColor(activity, R.color.spotify_gray)
+        )
     }
 
     // ---------- Caratula del album (iTunes / Deezer) ----------

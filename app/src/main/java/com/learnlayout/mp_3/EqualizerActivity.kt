@@ -1,8 +1,15 @@
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.IBinder
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -29,6 +36,7 @@ class EqualizerActivity : AppCompatActivity() {
     // revienta con ClassCastException apenas se abre la pantalla (por
     // eso se cerraba solo el Ecualizador). Debe coincidir con el tag
     // real del XML.
+    private lateinit var rootLayout: View
     private lateinit var switchEnabled: SwitchMaterial
     private lateinit var llBandsContainer: LinearLayout
     private lateinit var llPresetsContainer: LinearLayout
@@ -42,6 +50,11 @@ class EqualizerActivity : AppCompatActivity() {
     private val presetChipViews = mutableListOf<TextView>()
     private val runningAnimators = mutableListOf<ValueAnimator>()
 
+    // Label del preset actualmente resaltado (o null = ajuste personalizado).
+    // Se guarda aparte para poder re-pintar los chips cuando cambia el
+    // acento dinamico sin tener que volver a calcular cual esta activo.
+    private var currentPresetLabel: String? = null
+
     // Descripcion en lenguaje sencillo de que hace cada banda, para gente
     // que no sabe de audio. Mismo orden que
     // SoftwareEqualizerProcessor.CENTER_FREQS_HZ (60, 230, 910, 3600, 14000 Hz).
@@ -53,26 +66,60 @@ class EqualizerActivity : AppCompatActivity() {
         "Brillo\n(aire, platillos)"
     )
 
+    // ---------- Tema dinamico (Material You / PlayerPaletteTheme) ----------
+    // Mismo espiritu que el panel del reproductor: el fondo de toda la
+    // pantalla se oscurece segun la caratula de la cancion que esta sonando
+    // (PlayerPaletteTheme.applyFromBitmap ya limita la luminosidad para no
+    // romper el contraste con el texto claro fijo), y el acento que antes
+    // era spotify_green fijo (switch, chip de preset seleccionado, texto
+    // de preset, boton Restablecer) pasa a seguir el color de la caratula.
+    // Si no hay cancion sonando o no tiene caratula, se mantiene el look
+    // original (fondo background_dark, acento spotify_green).
+    private lateinit var musicService: MusicService
+    private var isBound = false
+
+    private val defaultBannerColor: Int by lazy { ContextCompat.getColor(this, R.color.background_dark) }
+    private val defaultAccentColor: Int by lazy { ContextCompat.getColor(this, R.color.spotify_green) }
+    private var currentAccentColor: Int = 0
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            musicService = (binder as MusicService.MusicBinder).getService()
+            isBound = true
+            loadThemeFromCurrentSong()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            isBound = false
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_equalizer)
+
+        currentAccentColor = defaultAccentColor
 
         bindViews()
 
         if (!EqualizerRepository.isAvailable) {
             showUnavailableState()
-            return
+        } else {
+            setupEnabledSwitch()
+            buildBandSliders()
+            buildPresetChips()
+            setupResetButton()
+            applyEnabledStateToControls(EqualizerRepository.isEnabled())
+            highlightChip(findMatchingPresetLabel())
         }
 
-        setupEnabledSwitch()
-        buildBandSliders()
-        buildPresetChips()
-        setupResetButton()
-        applyEnabledStateToControls(EqualizerRepository.isEnabled())
-        highlightChip(findMatchingPresetLabel())
+        // Se enlaza al servicio siempre (haya o no ecualizador disponible)
+        // para poder tematizar el fondo con la caratula de la cancion actual.
+        bindService(Intent(this, MusicService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
 
     private fun bindViews() {
+        rootLayout = findViewById(R.id.rootEqLayout)
         switchEnabled = findViewById(R.id.switchEqEnabled)
         llBandsContainer = findViewById(R.id.llEqBandsContainer)
         llPresetsContainer = findViewById(R.id.llEqPresetsContainer)
@@ -250,22 +297,28 @@ class EqualizerActivity : AppCompatActivity() {
         }
     }
 
+    // El color base (seleccionado o no) sigue al acento dinamico en vez de
+    // spotify_green fijo. Cuando el chip esta seleccionado, el color del
+    // texto se decide con PlayerPaletteTheme.onColorFor() (igual que los
+    // controles del panel) para que siga siendo legible sin importar que
+    // tan claro u oscuro sea el acento extraido de la caratula.
     private fun styleChip(chip: TextView, selected: Boolean) {
-        chip.setBackgroundResource(
-            if (selected) R.drawable.bg_chip_eq_preset_selected else R.drawable.bg_chip_eq_preset_unselected
-        )
-        chip.setTextColor(
-            ContextCompat.getColor(
-                this,
-                if (selected) R.color.spotify_black else R.color.text_primary_light
-            )
-        )
+        if (selected) {
+            chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_selected)
+            chip.backgroundTintList = ColorStateList.valueOf(currentAccentColor)
+            chip.setTextColor(PlayerPaletteTheme.onColorFor(currentAccentColor))
+        } else {
+            chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_unselected)
+            chip.backgroundTintList = null
+            chip.setTextColor(ContextCompat.getColor(this, R.color.text_primary_light))
+        }
     }
 
     // Resalta el chip cuyo label coincide con "label" y actualiza el
     // texto de estado. label == null significa que los valores actuales
     // no coinciden con ningun preset (ajuste manual).
     private fun highlightChip(label: String?) {
+        currentPresetLabel = label
         presetChipViews.forEach { chip -> styleChip(chip, chip.tag == label) }
         tvSelectedPreset.text = if (label != null) "Preset: $label" else "Ajuste personalizado"
     }
@@ -302,10 +355,58 @@ class EqualizerActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- Tema dinamico: carga y aplicacion ----------
+
+    private fun loadThemeFromCurrentSong() {
+        val song = musicService.getCurrentSong()
+        if (song == null) {
+            applyThemeFallback()
+            return
+        }
+        AlbumArtRepository.loadCover(this, song, object : AlbumArtRepository.Callback {
+            override fun onCoverReady(bitmap: Bitmap) {
+                applyThemeFromBitmap(bitmap)
+            }
+        })
+        // Si no hay caratula en cache ni en red, loadCover simplemente no
+        // llama al callback: la pantalla se queda con el fallback ya
+        // aplicado arriba (fondo background_dark, acento spotify_green).
+    }
+
+    private fun applyThemeFromBitmap(bitmap: Bitmap) {
+        PlayerPaletteTheme.applyFromBitmap(bitmap, rootLayout, defaultBannerColor)
+        PlayerPaletteTheme.applyAccentFromBitmap(
+            bitmap, defaultAccentColor, currentAccentColor
+        ) { color ->
+            currentAccentColor = color
+            applyAccentToControls(color)
+        }
+    }
+
+    private fun applyThemeFallback() {
+        PlayerPaletteTheme.applyFallback(rootLayout, defaultBannerColor)
+        PlayerPaletteTheme.applyAccentFallback(defaultAccentColor, currentAccentColor) { color ->
+            currentAccentColor = color
+            applyAccentToControls(color)
+        }
+    }
+
+    private fun applyAccentToControls(color: Int) {
+        val accentTint = ColorStateList.valueOf(color)
+        switchEnabled.thumbTintList = accentTint
+        btnReset.backgroundTintList = accentTint
+        tvSelectedPreset.setTextColor(color)
+        presetChipViews.forEach { chip -> styleChip(chip, chip.tag == currentPresetLabel) }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         runningAnimators.forEach { it.cancel() }
         runningAnimators.clear()
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
