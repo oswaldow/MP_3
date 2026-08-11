@@ -1,6 +1,7 @@
 package com.learnlayout.mp_3
 
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.drawable.AnimationDrawable
 import android.text.Editable
 import android.text.TextWatcher
@@ -57,6 +58,17 @@ class TopBarController(
 
     private lateinit var swipeGestureDetector: GestureDetector
 
+    // ---------- Tema dinamico (Material You / PlayerPaletteTheme) ----------
+    // Mismo acento que ya sigue el panel del reproductor (extraido de la
+    // caratula de la cancion actual). Se aplica al titulo "MP_3", los
+    // iconos de buscar/ordenar/config y el fondo de la pestana activa.
+    // El color del borde de la cancion sonando en la lista (bg_item_song_playing)
+    // NO se toca aqui ni en ningun otro lado: eso queda fijo a proposito.
+    // Arranca en spotify_green, el mismo morado que bg_tab_selected ya
+    // traia fijo, para que no haya salto visual antes de que llegue el
+    // primer acento real.
+    private var currentAccentColor: Int = ContextCompat.getColor(activity, R.color.spotify_green)
+
     fun setup() {
         btnSearch.setOnClickListener {
             toggleInlineSearch()
@@ -87,6 +99,8 @@ class TopBarController(
         }
 
         setupSwipeGesture()
+
+        applyAccentColorToViews()
     }
 
     fun startMascotAnimation() {
@@ -101,6 +115,40 @@ class TopBarController(
         if (::swipeGestureDetector.isInitialized) {
             swipeGestureDetector.onTouchEvent(ev)
         }
+    }
+
+    // ---------- Tema dinamico: aplicacion ----------
+
+    /** Llamado desde SongListActivity cada vez que cambia el acento del panel. */
+    fun applyAccentColor(color: Int) {
+        currentAccentColor = color
+        applyAccentColorToViews()
+    }
+
+    private fun applyAccentColorToViews() {
+        tvAppName.setTextColor(currentAccentColor)
+
+        val iconTint = ColorStateList.valueOf(currentAccentColor)
+        btnSearch.imageTintList = iconTint
+        btnSort.imageTintList = iconTint
+        btnSettings.imageTintList = iconTint
+
+        styleTabBackgrounds()
+    }
+
+    // Reaplica el fondo de la pestana activa con el acento actual. Se llama
+    // tanto al cambiar de pestana como al cambiar de acento, para que
+    // ambos casos queden siempre sincronizados.
+    private fun styleTabBackgrounds() {
+        val activeTab = if (isPlaylistsTabActive) tabPlaylists else tabSongs
+        val inactiveTab = if (isPlaylistsTabActive) tabSongs else tabPlaylists
+
+        activeTab.setBackgroundResource(R.drawable.bg_tab_selected)
+        activeTab.backgroundTintList = ColorStateList.valueOf(currentAccentColor)
+        activeTab.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
+
+        inactiveTab.background = null
+        inactiveTab.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
     }
 
     private fun toggleInlineSearch() {
@@ -218,11 +266,7 @@ class TopBarController(
         if (!isPlaylistsTabActive) return
 
         isPlaylistsTabActive = false
-
-        tabSongs.setBackgroundResource(R.drawable.bg_tab_selected)
-        tabSongs.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        tabPlaylists.background = null
-        tabPlaylists.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
+        styleTabBackgrounds()
 
         btnSearch.visibility = View.VISIBLE
 
@@ -237,11 +281,7 @@ class TopBarController(
         if (isPlaylistsTabActive) return
 
         isPlaylistsTabActive = true
-
-        tabPlaylists.setBackgroundResource(R.drawable.bg_tab_selected)
-        tabPlaylists.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        tabSongs.background = null
-        tabSongs.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
+        styleTabBackgrounds()
 
         tvEmptyState.visibility = View.GONE
 

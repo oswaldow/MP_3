@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
@@ -18,6 +19,13 @@ class SongAdapter(
 ) : RecyclerView.Adapter<SongAdapter.SongViewHolder>() {
 
     private var currentPlayingId: Long? = null
+
+    // Duracion del fade entre el placeholder (ic_music_note) y la caratula
+    // real cuando llega de red/disco. Mismo criterio de suavidad que ya usa
+    // PlayerPaletteTheme (ANIM_DURATION_MS) para las animaciones de color.
+    private companion object {
+        const val ALBUM_ART_FADE_MS = 220L
+    }
 
     inner class SongViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val ivAlbumArt: ImageView = itemView.findViewById(R.id.ivItemAlbumArt)
@@ -68,20 +76,57 @@ class SongAdapter(
         // recicla antes de que llegue la respuesta de red, el tag ya no
         // coincide y se descarta el bitmap para no pisar el item equivocado.
         holder.ivAlbumArt.tag = song.id
+        holder.ivAlbumArt.animate().cancel()
         showPlaceholder(holder)
 
-        AlbumArtRepository.loadCover(holder.itemView.context, song, object : AlbumArtRepository.Callback {
-            override fun onCoverReady(bitmap: Bitmap) {
-                if (holder.ivAlbumArt.tag != song.id) return
+        AlbumArtRepository.loadCover(
+            context = holder.itemView.context,
+            song = song,
+            callback = object : AlbumArtRepository.Callback {
+                override fun onCoverReady(bitmap: Bitmap) {
+                    if (holder.ivAlbumArt.tag != song.id) return
+                    applyAlbumArtWithFade(holder, song, bitmap)
+                }
+            },
+            // Si mientras la tarea esperaba turno en el pool de hilos la
+            // vista ya se reciclo para otra cancion (scroll rapido), se
+            // descarta enseguida en vez de gastar un hilo en algo que ya
+            // no se va a mostrar.
+            isStillNeeded = { holder.ivAlbumArt.tag == song.id }
+        )
+    }
+
+    // Reemplaza el placeholder por la caratula real con un fundido corto en
+    // vez del salto abrupto de antes (setImageBitmap de golpe). Primero se
+    // desvanece el placeholder a alpha 0, se cambia el bitmap ya invisible
+    // (evita el "flash" del cambio a mitad de la animacion), y se vuelve a
+    // aparecer con fade in.
+    private fun applyAlbumArtWithFade(holder: SongViewHolder, song: Song, bitmap: Bitmap) {
+        holder.ivAlbumArt.animate()
+            .alpha(0f)
+            .setDuration(ALBUM_ART_FADE_MS / 2)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                // Si mientras se desvanecia la vista se reciclo para otra
+                // cancion, no se pisa: se deja como quedo para el nuevo tag.
+                if (holder.ivAlbumArt.tag != song.id) return@withEndAction
+
                 holder.ivAlbumArt.setPadding(0, 0, 0, 0)
                 holder.ivAlbumArt.imageTintList = null
                 holder.ivAlbumArt.scaleType = ImageView.ScaleType.CENTER_CROP
                 holder.ivAlbumArt.setImageBitmap(bitmap)
+
+                holder.ivAlbumArt.animate()
+                    .alpha(1f)
+                    .setDuration(ALBUM_ART_FADE_MS / 2)
+                    .setInterpolator(DecelerateInterpolator())
+                    .start()
             }
-        })
+            .start()
     }
 
     private fun showPlaceholder(holder: SongViewHolder) {
+        holder.ivAlbumArt.alpha = 1f
         val padding = holder.albumArtBasePadding
         holder.ivAlbumArt.setPadding(padding[0], padding[1], padding[2], padding[3])
         holder.ivAlbumArt.scaleType = ImageView.ScaleType.FIT_CENTER

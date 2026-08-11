@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.doOnLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 
@@ -57,6 +58,13 @@ class PlayerPanelController(
     private val onAlbumArtChanged: (Bitmap?) -> Unit,
     private val onAccentColorChanged: (Int) -> Unit = {}
 ) {
+
+    private companion object {
+        // Opacidad (0-255) del icono del sleep timer cuando esta inactivo.
+        // Es una version atenuada del acento actual en vez de un gris fijo,
+        // para que igual se sienta parte de la paleta Material You.
+        const val SLEEP_TIMER_INACTIVE_ALPHA = 140
+    }
 
     private lateinit var behavior: BottomSheetBehavior<FrameLayout>
 
@@ -457,15 +465,21 @@ class PlayerPanelController(
         Toast.makeText(activity, "Se pausara en $minutes min", Toast.LENGTH_SHORT).show()
     }
 
-    // Icono gris cuando no hay timer activo, o teñido con el color de acento
-    // actual (mismo que play/pause) cuando si lo hay. Se vuelve a llamar en
-    // cada tick de updateProgress() para que el icono se apague solo cuando
-    // el timer por minutos termina y pausa la musica.
+    // Version atenuada (mismo tono, menos opaca) del acento actual cuando
+    // no hay timer activo, o el acento completo cuando si lo hay. Antes
+    // usaba un gris fijo para el estado inactivo, lo que lo dejaba fuera
+    // de la paleta Material You que ya siguen el resto de los controles.
+    // Se vuelve a llamar en cada tick de updateProgress() para que el
+    // icono se apague solo cuando el timer por minutos termina y pausa
+    // la musica.
     private fun updateSleepTimerIcon() {
         val active = getMusicService()?.isSleepTimerActive() == true
-        btnPanelSleepTimer.imageTintList = ColorStateList.valueOf(
-            if (active) currentAccentColor else ContextCompat.getColor(activity, R.color.spotify_gray)
-        )
+        val color = if (active) {
+            currentAccentColor
+        } else {
+            ColorUtils.setAlphaComponent(currentAccentColor, SLEEP_TIMER_INACTIVE_ALPHA)
+        }
+        btnPanelSleepTimer.imageTintList = ColorStateList.valueOf(color)
     }
 
     // ---------- Caratula del album (iTunes / Deezer) ----------
@@ -543,11 +557,17 @@ class PlayerPanelController(
         btnPanelPlayPause.backgroundTintList = accentTint
         btnPanelPlayPause.imageTintList = onColorTint
 
+        btnPanelBack.imageTintList = accentTint
         btnPanelPrevious.imageTintList = accentTint
         btnPanelNext.imageTintList = accentTint
         btnPanelQueue.imageTintList = accentTint
         btnMiniPlayMode.imageTintList = accentTint
         btnMiniPlayPause.imageTintList = accentTint
+
+        // El icono del sleep timer no se tiñe aca: su color depende ademas
+        // de si el timer esta activo (ver updateSleepTimerIcon), pero
+        // igual necesita re-tintarse cada vez que cambia el acento.
+        updateSleepTimerIcon()
 
         onAccentColorChanged(color)
     }

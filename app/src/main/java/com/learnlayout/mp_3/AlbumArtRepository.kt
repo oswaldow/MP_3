@@ -19,10 +19,17 @@ import java.util.concurrent.Executors
 object AlbumArtRepository {
 
     private const val CACHE_DIR_NAME = "album_art_cache"
-    private const val MEMORY_CACHE_SIZE = 60
+    private const val MEMORY_CACHE_SIZE = 100
     private const val CANDIDATES_LIMIT_PER_SOURCE = 6
 
-    private val executor: ExecutorService = Executors.newFixedThreadPool(2)
+    // Tamano maximo (en px, en el lado mas largo) al que se decodifican las
+    // caratulas. Cubre tanto el item chico de la lista (48dp) como el
+    // reproductor expandido (que ocupa casi todo el ancho de pantalla), asi
+    // que no se ve borroso ahi, pero evita decodificar bitmaps gigantes
+    // (600x600+ de red, o mas grandes todavia de Deezer) para nada.
+    private const val TARGET_MAX_DIMENSION_PX = 480
+
+    private val executor: ExecutorService = Executors.newFixedThreadPool(4)
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val memoryCache = object : LruCache<Long, Bitmap>(MEMORY_CACHE_SIZE) {}
@@ -47,13 +54,25 @@ object AlbumArtRepository {
 
     /**
      * Pide la caratula de [song]. Llama a [callback] en el hilo principal
-     * SOLO si la encuentra (memoria, disco o red). Si no hay caratula
-     * disponible, no llama a [callback]: quien la pidio debe dejar el
-     * placeholder que ya tenia puesto.
+     * SOLO si la encuentra (memoria, disco o red) y sigue siendo necesaria.
+     * Si no hay caratula disponible, no llama a [callback]: quien la pidio
+     * debe dejar el placeholder que ya tenia puesto.
+     *
+     * [isStillNeeded] es opcional y sirve para que quien pide la caratula
+     * (tipicamente un RecyclerView.Adapter) avise si la vista que la pidio
+     * ya se reciclo para otra cancion. Se chequea antes de tocar disco/red
+     * y antes de entregar el resultado: si durante un scroll rapido la
+     * vista ya no necesita esta caratula, la tarea se descarta enseguida en
+     * vez de competir por un hilo del pool con las que si son visibles.
      */
-    fun loadCover(context: Context, song: Song, callback: Callback) {
+    fun loadCover(
+        context: Context,
+        song: Song,
+        callback: Callback,
+        isStillNeeded: () -> Boolean = { true }
+    ) {
         memoryCache.get(song.id)?.let {
-            callback.onCoverReady(it)
+            if (isStillNeeded()) callback.onCoverReady(it)
             return
         }
 
@@ -62,20 +81,28 @@ object AlbumArtRepository {
         val appContext = context.applicationContext
         executor.execute {
             try {
+                // Chequeo temprano: si ya no se necesita, ni se abre el
+                // archivo de cache. Esto es lo que libera el pool rapido
+                // cuando el usuario scrollea mas rapido de lo que tardan
+                // las cargas anteriores en resolverse.
+                if (!isStillNeeded()) return@execute
+
                 val cacheKey = cacheKeyFor(song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
 
                 val fromDisk = if (diskFile.exists()) {
-                    BitmapFactory.decodeFile(diskFile.absolutePath)
+                    decodeSampledBitmapFromFile(diskFile)
                 } else null
 
-                val bitmap = fromDisk ?: fetchFromNetwork(song)?.also { bmp ->
-                    saveToDisk(diskFile, bmp)
-                }
+                val bitmap = fromDisk ?: if (isStillNeeded()) {
+                    fetchFromNetwork(song)?.also { bmp -> saveToDisk(diskFile, bmp) }
+                } else null
 
                 if (bitmap != null) {
                     memoryCache.put(song.id, bitmap)
-                    mainHandler.post { callback.onCoverReady(bitmap) }
+                    if (isStillNeeded()) {
+                        mainHandler.post { callback.onCoverReady(bitmap) }
+                    }
                 }
             } finally {
                 inFlight.remove(song.id)
@@ -250,7 +277,8 @@ object AlbumArtRepository {
                 readTimeout = 8000
             }
             if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
-            connection.inputStream.use { BitmapFactory.decodeStream(it) }
+            val bytes = connection.inputStream.use { it.readBytes() }
+            decodeSampledBitmapFromBytes(bytes)
         } catch (e: Exception) {
             null
         } finally {
@@ -275,5 +303,55 @@ object AlbumArtRepository {
         val raw = "${song.artist}|${song.title}".lowercase()
         val digest = MessageDigest.getInstance("MD5").digest(raw.toByteArray())
         return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    // ---------- Decode con downsampling ----------
+    // Decodificar un bitmap a su tamano original solo para mostrarlo en un
+    // ImageView chico (o incluso en el panel expandido) desperdicia tiempo
+    // de CPU y memoria. Estas funciones calculan un inSampleSize con el
+    // truco estandar de Android (leer primero solo las dimensiones con
+    // inJustDecodeBounds) para decodificar directamente a un tamano cercano
+    // al que realmente se va a usar.
+
+    private fun calculateInSampleSize(width: Int, height: Int, targetSize: Int): Int {
+        var inSampleSize = 1
+        if (width > targetSize || height > targetSize) {
+            val halfWidth = width / 2
+            val halfHeight = height / 2
+            while (halfWidth / inSampleSize >= targetSize && halfHeight / inSampleSize >= targetSize) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+    private fun decodeSampledBitmapFromFile(file: File): Bitmap? {
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
+        if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateInSampleSize(
+                boundsOptions.outWidth,
+                boundsOptions.outHeight,
+                TARGET_MAX_DIMENSION_PX
+            )
+        }
+        return BitmapFactory.decodeFile(file.absolutePath, options)
+    }
+
+    private fun decodeSampledBitmapFromBytes(bytes: ByteArray): Bitmap? {
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+        if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateInSampleSize(
+                boundsOptions.outWidth,
+                boundsOptions.outHeight,
+                TARGET_MAX_DIMENSION_PX
+            )
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
 }
