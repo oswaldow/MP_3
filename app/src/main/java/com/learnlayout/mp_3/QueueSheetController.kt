@@ -28,7 +28,11 @@ class QueueSheetController(
     private val getMusicService: () -> MusicService?,
     private val getAccentColor: () -> Int = {
         ContextCompat.getColor(activity, R.color.text_primary_light)
-    }
+    },
+    // Avisa cada vez que el modo de reproduccion cambia desde esta hoja,
+    // para que quien arme este controller pueda sincronizar el icono de
+    // modo que se muestra en el reproductor normal (btnMiniPlayMode).
+    private val onModeChanged: () -> Unit = {}
 ) {
 
     private var dialog: BottomSheetDialog? = null
@@ -95,18 +99,21 @@ class QueueSheetController(
             getMusicService()?.setPlaybackMode(MusicService.PlaybackMode.NORMAL)
             refreshModeButtons()
             refreshList()
+            onModeChanged()
         }
 
         btnModeRepeat?.setOnClickListener {
             getMusicService()?.setPlaybackMode(MusicService.PlaybackMode.REPEAT_ONE)
             refreshModeButtons()
             refreshList()
+            onModeChanged()
         }
 
         btnModeShuffle?.setOnClickListener {
             getMusicService()?.setPlaybackMode(MusicService.PlaybackMode.SHUFFLE)
             refreshModeButtons()
             refreshList()
+            onModeChanged()
         }
 
         sheetDialog.setOnDismissListener {

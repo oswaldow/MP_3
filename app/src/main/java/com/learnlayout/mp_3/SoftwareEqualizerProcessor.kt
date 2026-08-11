@@ -10,12 +10,16 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.tanh
 
 /**
  * Ecualizador de 5 bandas implementado en software (filtros biquad
- * "peaking" en cascada, formulas del Audio EQ Cookbook de RBJ), que se
+ * "peaking" en cascada para las 3 bandas medias, y "shelf" para las 2
+ * bandas extremas, formulas del Audio EQ Cookbook de RBJ), que se
  * inyecta directo en la cadena de AudioProcessor de ExoPlayer (ver
  * EqAudioSinkRenderersFactory / MusicService.buildPlayer()).
  *
@@ -111,6 +115,11 @@ class SoftwareEqualizerProcessor : AudioProcessor {
     private var channelStates: Array<Array<ChannelBandState>> = emptyArray()
     private var appliedVersion = -1
 
+    // Atenuacion global aplicada ANTES de filtrar, para dejar headroom
+    // cuando hay varias bandas boosteadas a la vez (ver computeHeadroomGain).
+    // 1.0 = sin atenuar.
+    private var preGainLinear = 1.0
+
     private var buffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
@@ -141,16 +150,41 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         if (appliedVersion == configVersion) return
         val sampleRate = inputAudioFormat.sampleRate
         val gains = bandGainsMillibel
+
+        // Bandas extremas (Graves y Brillo) usan filtro shelf: mueven TODO
+        // el rango por debajo/encima de la frecuencia, no solo una campana
+        // angosta ahi. Se siente mucho mas parecido a lo que la gente
+        // espera de "graves"/"agudos" en un ecualizador de telefono. Las
+        // 3 bandas del medio siguen siendo peaking (campana), que es lo
+        // correcto para frecuencias intermedias.
         coeffs = Array(NUM_BANDS) { band ->
-            computeBiquadPeaking(
-                freqHz = CENTER_FREQS_HZ[band].toDouble(),
-                sampleRate = sampleRate,
-                gainDb = gains[band] / 100.0,
-                q = Q
-            )
+            val gainDb = gains[band] / 100.0
+            when (band) {
+                0 -> computeLowShelf(CENTER_FREQS_HZ[band].toDouble(), sampleRate, gainDb)
+                NUM_BANDS - 1 -> computeHighShelf(CENTER_FREQS_HZ[band].toDouble(), sampleRate, gainDb)
+                else -> computeBiquadPeaking(CENTER_FREQS_HZ[band].toDouble(), sampleRate, gainDb, Q)
+            }
         }
+
+        preGainLinear = computeHeadroomGain(gains)
         appliedVersion = configVersion
-        Log.d(TAG_EQ, "recomputeCoeffsIfNeeded: recalculado, appliedVersion=$appliedVersion gains=${gains.toList()} instance=${System.identityHashCode(this)}")
+        val preGainDb = 20.0 * log10(preGainLinear)
+        Log.d(TAG_EQ, "recomputeCoeffsIfNeeded: recalculado, appliedVersion=$appliedVersion gains=${gains.toList()} preGainDb=$preGainDb instance=${System.identityHashCode(this)}")
+    }
+
+    /**
+     * Si varias bandas estan boosteadas al mismo tiempo, sus picos se
+     * pueden sumar en ciertas frecuencias y superar el rango de 16 bits.
+     * Antes eso se resolvia con un recorte seco (hard clip) que suena
+     * distorsionado. Ahora, en vez de eso, se le resta un poco de volumen
+     * a TODA la senal antes de filtrar (headroom), proporcional a cuanto
+     * boost total se esta pidiendo, para que el pico ya casi no llegue a
+     * necesitar el limiter de la funcion softLimit().
+     */
+    private fun computeHeadroomGain(gainsMillibel: IntArray): Double {
+        val totalBoostDb = gainsMillibel.filter { it > 0 }.sumOf { it / 100.0 }
+        val headroomDb = (totalBoostDb * 0.5).coerceAtMost(12.0)
+        return 10.0.pow(-headroomDb / 20.0)
     }
 
     private fun computeBiquadPeaking(freqHz: Double, sampleRate: Int, gainDb: Double, q: Double): Coeffs {
@@ -169,8 +203,48 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         return Coeffs(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
     }
 
+    // Formulas del Audio EQ Cookbook de RBJ para shelf filters, con
+    // pendiente de estante S=1.0 (la mas comun/pareja para EQs de audio).
+    private fun computeLowShelf(freqHz: Double, sampleRate: Int, gainDb: Double): Coeffs {
+        val a = 10.0.pow(gainDb / 40.0)
+        val w0 = 2.0 * PI * freqHz / sampleRate
+        val cosw0 = cos(w0)
+        val sinw0 = sin(w0)
+        val shelfSlope = 1.0
+        val alpha = sinw0 / 2.0 * sqrt((a + 1.0 / a) * (1.0 / shelfSlope - 1.0) + 2.0)
+        val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
+
+        val b0 = a * ((a + 1) - (a - 1) * cosw0 + twoSqrtAAlpha)
+        val b1 = 2 * a * ((a - 1) - (a + 1) * cosw0)
+        val b2 = a * ((a + 1) - (a - 1) * cosw0 - twoSqrtAAlpha)
+        val a0 = (a + 1) + (a - 1) * cosw0 + twoSqrtAAlpha
+        val a1 = -2 * ((a - 1) + (a + 1) * cosw0)
+        val a2 = (a + 1) + (a - 1) * cosw0 - twoSqrtAAlpha
+
+        return Coeffs(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
+    private fun computeHighShelf(freqHz: Double, sampleRate: Int, gainDb: Double): Coeffs {
+        val a = 10.0.pow(gainDb / 40.0)
+        val w0 = 2.0 * PI * freqHz / sampleRate
+        val cosw0 = cos(w0)
+        val sinw0 = sin(w0)
+        val shelfSlope = 1.0
+        val alpha = sinw0 / 2.0 * sqrt((a + 1.0 / a) * (1.0 / shelfSlope - 1.0) + 2.0)
+        val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
+
+        val b0 = a * ((a + 1) + (a - 1) * cosw0 + twoSqrtAAlpha)
+        val b1 = -2 * a * ((a - 1) + (a + 1) * cosw0)
+        val b2 = a * ((a + 1) + (a - 1) * cosw0 - twoSqrtAAlpha)
+        val a0 = (a + 1) - (a - 1) * cosw0 + twoSqrtAAlpha
+        val a1 = 2 * ((a - 1) - (a + 1) * cosw0)
+        val a2 = (a + 1) - (a - 1) * cosw0 - twoSqrtAAlpha
+
+        return Coeffs(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+    }
+
     private fun processSample(channel: Int, input: Double): Double {
-        var x = input
+        var x = input * preGainLinear
         val states = channelStates[channel]
         for (band in 0 until NUM_BANDS) {
             val c = coeffs[band]
@@ -208,8 +282,7 @@ class SoftwareEqualizerProcessor : AudioProcessor {
             var channel = 0
             while (src.remaining() >= 2) {
                 val sampleIn = src.short.toDouble()
-                val sampleOut = processSample(channel, sampleIn)
-                    .coerceIn(-32768.0, 32767.0)
+                val sampleOut = softLimit(processSample(channel, sampleIn))
                 out.putShort(sampleOut.toInt().toShort())
                 channel = (channel + 1) % channelCount
             }
@@ -226,6 +299,28 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         }
         outputBuffer = buffer
         return buffer
+    }
+
+    // Red de seguridad final: en vez de recortar seco (lo que sonaba
+    // "feo"/distorsionado), si una muestra se acerca al limite de 16 bits
+    // la comprime suave con una curva tanh. Por debajo del umbral no toca
+    // nada, asi que en volumen normal es completamente transparente.
+    private fun softLimit(sample: Double): Double {
+        val threshold = 28000.0
+        val ceilingPos = 32767.0
+        val ceilingNeg = -32768.0
+
+        return when {
+            sample > threshold -> {
+                val range = ceilingPos - threshold
+                (threshold + range * tanh((sample - threshold) / range)).coerceAtMost(ceilingPos)
+            }
+            sample < -threshold -> {
+                val range = -ceilingNeg - threshold
+                (-threshold + range * tanh((sample + threshold) / range)).coerceAtLeast(ceilingNeg)
+            }
+            else -> sample
+        }
     }
 
     override fun queueEndOfStream() {

@@ -434,6 +434,7 @@ class PlayerPanelController(
 
         btnPanelPrevious.imageTintList = accentTint
         btnPanelNext.imageTintList = accentTint
+        btnPanelQueue.imageTintList = accentTint
         btnMiniPlayMode.imageTintList = accentTint
         btnMiniPlayPause.imageTintList = accentTint
 

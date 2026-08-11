@@ -113,7 +113,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         QueueSheetController(
             activity = this,
             getMusicService = { musicService },
-            getAccentColor = { playerPanelController.getAccentColor() }
+            getAccentColor = { playerPanelController.getAccentColor() },
+            onModeChanged = {
+                musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
+            }
         )
     }
 
