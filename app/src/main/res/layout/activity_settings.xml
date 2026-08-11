@@ -172,6 +172,67 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"
                 android:layout_marginBottom="10dp"
+                android:text="Sonido"
+                android:textColor="@color/text_secondary_light"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.05" />
+
+            <LinearLayout
+                android:id="@+id/rowEqualizer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_item_song"
+                android:clickable="true"
+                android:focusable="true"
+                android:padding="16dp">
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/ic_equalizer"
+                    android:contentDescription="Ecualizador" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="14dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Ecualizador"
+                        android:textColor="@color/text_primary_light"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Ajusta los graves, medios y agudos"
+                        android:textColor="@color/text_secondary_light"
+                        android:textSize="13sp" />
+
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/ic_chevron_right"
+                    android:contentDescription="Abrir" />
+
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:layout_marginBottom="10dp"
                 android:text="Dispositivos"
                 android:textColor="@color/text_secondary_light"
                 android:textSize="13sp"

@@ -1,10 +1,14 @@
 package com.learnlayout.mp_3
 
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 
 class SongAdapter(
@@ -16,9 +20,19 @@ class SongAdapter(
     private var currentPlayingId: Long? = null
 
     inner class SongViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val ivAlbumArt: ImageView = itemView.findViewById(R.id.ivItemAlbumArt)
         val tvTitle: TextView = itemView.findViewById(R.id.tvItemTitle)
         val tvArtist: TextView = itemView.findViewById(R.id.tvItemArtist)
         val btnMenu: ImageButton = itemView.findViewById(R.id.btnItemMenu)
+
+        // Padding original del placeholder (ic_music_note), para poder
+        // restaurarlo cuando la caratula real no aplica o cambia el item.
+        val albumArtBasePadding = intArrayOf(
+            ivAlbumArt.paddingLeft,
+            ivAlbumArt.paddingTop,
+            ivAlbumArt.paddingRight,
+            ivAlbumArt.paddingBottom
+        )
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SongViewHolder {
@@ -45,6 +59,36 @@ class SongAdapter(
         } else {
             holder.btnMenu.visibility = View.GONE
         }
+
+        bindAlbumArt(holder, song)
+    }
+
+    private fun bindAlbumArt(holder: SongViewHolder, song: Song) {
+        // El tag marca que cancion "espera" este ViewHolder. Si la vista se
+        // recicla antes de que llegue la respuesta de red, el tag ya no
+        // coincide y se descarta el bitmap para no pisar el item equivocado.
+        holder.ivAlbumArt.tag = song.id
+        showPlaceholder(holder)
+
+        AlbumArtRepository.loadCover(holder.itemView.context, song, object : AlbumArtRepository.Callback {
+            override fun onCoverReady(bitmap: Bitmap) {
+                if (holder.ivAlbumArt.tag != song.id) return
+                holder.ivAlbumArt.setPadding(0, 0, 0, 0)
+                holder.ivAlbumArt.imageTintList = null
+                holder.ivAlbumArt.scaleType = ImageView.ScaleType.CENTER_CROP
+                holder.ivAlbumArt.setImageBitmap(bitmap)
+            }
+        })
+    }
+
+    private fun showPlaceholder(holder: SongViewHolder) {
+        val padding = holder.albumArtBasePadding
+        holder.ivAlbumArt.setPadding(padding[0], padding[1], padding[2], padding[3])
+        holder.ivAlbumArt.scaleType = ImageView.ScaleType.FIT_CENTER
+        holder.ivAlbumArt.setImageResource(R.drawable.ic_music_note)
+        holder.ivAlbumArt.imageTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(holder.itemView.context, R.color.spotify_gray)
+        )
     }
 
     override fun getItemCount(): Int = songs.size

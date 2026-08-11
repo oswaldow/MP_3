@@ -1,19 +1,24 @@
 package com.learnlayout.mp_3
 
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 
 /**
  * Encapsula el panel del reproductor: el mini player colapsado, el panel
  * expandido (estilo Spotify) y su BottomSheetBehavior, los controles de
- * reproduccion (play/pause/siguiente/anterior/modo/favorito/seek), y las
+ * reproduccion (play/pause/siguiente/anterior/modo/favorito/seek), la
+ * caratula del album (iTunes/Deezer via AlbumArtRepository) y las
  * actualizaciones de progreso.
  *
  * No guarda una referencia fija a MusicService: la pide via [getMusicService]
@@ -33,6 +38,7 @@ class PlayerPanelController(
     private val playerPanel: FrameLayout,
     private val groupExpanded: View,
     private val groupMini: View,
+    private val ivMiniAlbumArt: ImageView,
     private val tvMiniTitle: TextView,
     private val tvMiniArtist: TextView,
     private val btnMiniPlayPause: ImageButton,
@@ -42,6 +48,7 @@ class PlayerPanelController(
     private val btnPanelQueue: ImageButton,
     private val btnPanelFavorite: ImageButton,
     private val btnPanelLyricsSync: ImageButton,
+    private val ivPanelAlbumArt: ImageView,
     private val tvPanelSongTitle: TextView,
     private val tvPanelArtist: TextView,
     private val sbPanelProgress: WaveformSeekBar,
@@ -62,6 +69,22 @@ class PlayerPanelController(
 
     private val baseGroupMiniPaddingBottom: Int = groupMini.paddingBottom
     private val baseGroupExpandedPaddingBottom: Int = groupExpanded.paddingBottom
+
+    // Padding original de cada placeholder (ic_music_note), leido antes de
+    // tocarlo, para poder restaurarlo si una cancion no tiene caratula.
+    private val miniAlbumArtBasePadding = intArrayOf(
+        ivMiniAlbumArt.paddingLeft, ivMiniAlbumArt.paddingTop,
+        ivMiniAlbumArt.paddingRight, ivMiniAlbumArt.paddingBottom
+    )
+    private val panelAlbumArtBasePadding = intArrayOf(
+        ivPanelAlbumArt.paddingLeft, ivPanelAlbumArt.paddingTop,
+        ivPanelAlbumArt.paddingRight, ivPanelAlbumArt.paddingBottom
+    )
+
+    // Cancion "vigente": si la respuesta de red llega tarde y para entonces
+    // ya cambio la cancion, se descarta (evita pisar la caratula nueva con
+    // la de una cancion anterior).
+    private var currentArtSongId: Long? = null
 
     val isReady: Boolean
         get() = ::behavior.isInitialized
@@ -253,6 +276,7 @@ class PlayerPanelController(
         )
 
         updateFavoriteIcon(song.id)
+        loadAlbumArt(song)
         updatePeekHeight()
     }
 
@@ -301,6 +325,44 @@ class PlayerPanelController(
                 btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
             }
         }
+    }
+
+    // ---------- Caratula del album (iTunes / Deezer) ----------
+
+    private fun loadAlbumArt(song: Song) {
+        currentArtSongId = song.id
+
+        showAlbumArtPlaceholder()
+
+        AlbumArtRepository.loadCover(activity, song, object : AlbumArtRepository.Callback {
+            override fun onCoverReady(bitmap: Bitmap) {
+                // Si mientras se descargaba ya cambio la cancion, se descarta.
+                if (currentArtSongId != song.id) return
+                applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
+                applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
+            }
+        })
+    }
+
+    private fun applyAlbumArtBitmap(iv: ImageView, bitmap: Bitmap) {
+        iv.setPadding(0, 0, 0, 0)
+        iv.imageTintList = null
+        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+        iv.setImageBitmap(bitmap)
+    }
+
+    private fun showAlbumArtPlaceholder() {
+        applyPlaceholder(ivMiniAlbumArt, miniAlbumArtBasePadding)
+        applyPlaceholder(ivPanelAlbumArt, panelAlbumArtBasePadding)
+    }
+
+    private fun applyPlaceholder(iv: ImageView, basePadding: IntArray) {
+        iv.setPadding(basePadding[0], basePadding[1], basePadding[2], basePadding[3])
+        iv.scaleType = ImageView.ScaleType.FIT_CENTER
+        iv.setImageResource(R.drawable.ic_music_note)
+        iv.imageTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(activity, R.color.spotify_gray)
+        )
     }
 
     private fun updateFavoriteIcon(songId: Long?) {

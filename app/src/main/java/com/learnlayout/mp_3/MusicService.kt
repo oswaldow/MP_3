@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Binder
 import android.os.Build
 import android.os.Handler
@@ -43,6 +44,14 @@ class MusicService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var progressRunnable: Runnable? = null
+
+    // Una sola sesion de audio para TODOS los ExoPlayer que crea este
+    // servicio (normal, restore, crossfade). Ya no hace falta para el
+    // ecualizador (que ahora es por software, ver
+    // SoftwareEqualizerProcessor / EqAudioSinkRenderersFactory), pero se
+    // mantiene por si en el futuro se necesita para otro efecto de
+    // audio del sistema. Ver buildPlayer().
+    private var sharedAudioSessionId: Int = AudioManager.ERROR
 
     // --- Crossfade ---
     // Mientras se hace crossfade hay DOS ExoPlayer sonando a la vez:
@@ -85,6 +94,11 @@ class MusicService : Service() {
         //   adb logcat -s MP3_XFADE
         private const val TAG_XFADE = "MP3_XFADE"
 
+        // --- DEBUG: instrumentacion temporal para el ecualizador por software ---
+        // Filtrar en Logcat con:
+        //   adb logcat -s MP3_EQ
+        private const val TAG_EQ = "MP3_EQ"
+
         // AudioAttributes explicitos para todos los ExoPlayer de musica.
         private val MUSIC_AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
@@ -115,6 +129,12 @@ class MusicService : Service() {
 
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG_XFADE, "onPlayerError en player principal: ${error.message}")
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // El ecualizador ahora es por software y se inyecta directo en
+            // el pipeline de cada ExoPlayer (ver EqAudioSinkRenderersFactory /
+            // buildPlayer()), asi que ya no hace falta engancharlo aqui.
         }
     }
 
@@ -233,6 +253,8 @@ class MusicService : Service() {
     fun getCurrentIndex(): Int = currentIndex
 
     fun getPlaybackMode(): PlaybackMode = playbackMode
+
+    fun getAudioSessionId(): Int = sharedAudioSessionId
 
     fun cyclePlaybackMode(): PlaybackMode {
         val next = when (playbackMode) {
@@ -405,14 +427,35 @@ class MusicService : Service() {
                 .build()
         )
 
-        return ExoPlayer.Builder(this)
+        return ExoPlayer.Builder(this, EqAudioSinkRenderersFactory(this))
             .setTrackSelector(trackSelector)
             .build()
             .apply {
+                Log.d(TAG_EQ, "buildPlayer: player creado CON EqAudioSinkRenderersFactory (EQ inyectado)")
                 // handleAudioFocus = false: mismo comportamiento manual que
                 // tenia MediaPlayer (la app nunca gestiono audio focus).
                 setAudioAttributes(MUSIC_AUDIO_ATTRIBUTES, false)
                 volume = startVolume
+
+                if (sharedAudioSessionId != AudioManager.ERROR) {
+                    // Ya existe una sesion real (adoptada de un player
+                    // anterior): se la asignamos a este player nuevo para
+                    // que el Equalizer siga aplicando sin importar cual
+                    // player interno este sonando (cancion normal,
+                    // restore o el segundo player del crossfade).
+                    setAudioSessionId(sharedAudioSessionId)
+                } else {
+                    // Primer player del servicio: NO forzamos ninguna
+                    // sesion inventada. Dejamos que ExoPlayer/AudioTrack
+                    // genere su propia sesion nativa y la adoptamos como
+                    // sharedAudioSessionId para el resto de la vida del
+                    // servicio (ver comentario grande junto al campo).
+                    val ownSessionId = this.audioSessionId
+                    Log.d(TAG_XFADE, "buildPlayer: primer player, sesion propia de ExoPlayer=$ownSessionId")
+                    if (ownSessionId != AudioManager.ERROR && ownSessionId != 0) {
+                        sharedAudioSessionId = ownSessionId
+                    }
+                }
             }
     }
 

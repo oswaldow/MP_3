@@ -54,6 +54,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var playerPanel: FrameLayout
     private lateinit var groupExpanded: View
     private lateinit var groupMini: View
+    private lateinit var ivMiniAlbumArt: ImageView
     private lateinit var tvMiniTitle: TextView
     private lateinit var tvMiniArtist: TextView
     private lateinit var btnMiniPlayPause: ImageButton
@@ -62,6 +63,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnPanelBack: ImageButton
     private lateinit var btnPanelLyricsSync: ImageButton
     private lateinit var btnPanelQueue: ImageButton
+    private lateinit var ivPanelAlbumArt: ImageView
     private lateinit var tvPanelSongTitle: TextView
     private lateinit var tvPanelArtist: TextView
     private lateinit var sbPanelProgress: WaveformSeekBar
@@ -130,6 +132,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             playerPanel = playerPanel,
             groupExpanded = groupExpanded,
             groupMini = groupMini,
+            ivMiniAlbumArt = ivMiniAlbumArt,
             tvMiniTitle = tvMiniTitle,
             tvMiniArtist = tvMiniArtist,
             btnMiniPlayPause = btnMiniPlayPause,
@@ -139,6 +142,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnPanelQueue = btnPanelQueue,
             btnPanelFavorite = btnPanelFavorite,
             btnPanelLyricsSync = btnPanelLyricsSync,
+            ivPanelAlbumArt = ivPanelAlbumArt,
             tvPanelSongTitle = tvPanelSongTitle,
             tvPanelArtist = tvPanelArtist,
             sbPanelProgress = sbPanelProgress,
@@ -389,6 +393,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         playerPanel = findViewById(R.id.playerPanel)
         groupExpanded = findViewById(R.id.groupExpanded)
         groupMini = findViewById(R.id.groupMini)
+        ivMiniAlbumArt = findViewById(R.id.ivMiniAlbumArt)
         tvMiniTitle = findViewById(R.id.tvMiniTitle)
         tvMiniArtist = findViewById(R.id.tvMiniArtist)
         btnMiniPlayPause = findViewById(R.id.btnMiniPlayPause)
@@ -398,6 +403,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnPanelQueue = findViewById(R.id.btnPanelQueue)
         btnPanelFavorite = findViewById(R.id.btnPanelFavorite)
         btnPanelLyricsSync = findViewById(R.id.btnPanelLyricsSync)
+        ivPanelAlbumArt = findViewById(R.id.ivPanelAlbumArt)
         tvPanelSongTitle = findViewById(R.id.tvPanelSongTitle)
         tvPanelArtist = findViewById(R.id.tvPanelArtist)
         sbPanelProgress = findViewById(R.id.sbPanelProgress)

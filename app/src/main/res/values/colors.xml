@@ -5,20 +5,20 @@
          existentes en el proyecto (tabs, bordes, seekbar, chip de modo,
          item "reproduciendo", etc). Al repuntar sus valores aqui, toda
          la app cambia de golpe sin tocar cada XML individualmente. -->
-    <color name="purple_primary">#FFD600</color>
+    <color name="purple_primary">#9C27B0</color>
     <color name="purple_dark">#1C1C1C</color>
-    <color name="purple_light">#66FFD600</color>
+    <color name="purple_light">#669C27B0</color>
 
-    <color name="blue_primary">#FFD600</color>
+    <color name="blue_primary">#9C27B0</color>
     <color name="blue_dark">#0A0A0A</color>
-    <color name="blue_light">#66FFD600</color>
+    <color name="blue_light">#669C27B0</color>
 
     <color name="gradient_start">#000000</color>
     <color name="gradient_end">#1C1C1C</color>
 
-    <!-- Paleta principal: negro, blanco y amarillo fuerte -->
-    <color name="spotify_green">#FFD600</color>
-    <color name="spotify_green_dark">#C7A600</color>
+    <!-- Paleta principal: negro, blanco y morado fuerte -->
+    <color name="spotify_green">#9C27B0</color>
+    <color name="spotify_green_dark">#7B1FA2</color>
     <color name="spotify_black">#000000</color>
     <color name="spotify_elevated">#101010</color>
     <color name="spotify_card">#1C1C1C</color>
@@ -37,7 +37,7 @@
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
 
-    <!-- Marco amarillo para diferenciar el panel de letra deslizable -->
-    <color name="lyrics_banner_border">#FFEB3B</color>
+    <!-- Marco morado para diferenciar el panel de letra deslizable -->
+    <color name="lyrics_banner_border">#E040FB</color>
 
 </resources>

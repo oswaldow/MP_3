@@ -20,6 +20,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var seekCrossfadeSeconds: SeekBar
     private lateinit var tvCrossfadeSeconds: TextView
     private lateinit var rowBluetooth: LinearLayout
+    private lateinit var rowEqualizer: LinearLayout
 
     private lateinit var rowDownloadLyrics: LinearLayout
     private lateinit var tvDownloadLyricsSummary: TextView
@@ -42,6 +43,7 @@ class SettingsActivity : AppCompatActivity() {
         seekCrossfadeSeconds = findViewById(R.id.seekCrossfadeSeconds)
         tvCrossfadeSeconds = findViewById(R.id.tvCrossfadeSeconds)
         rowBluetooth = findViewById(R.id.rowBluetooth)
+        rowEqualizer = findViewById(R.id.rowEqualizer)
 
         rowDownloadLyrics = findViewById(R.id.rowDownloadLyrics)
         tvDownloadLyricsSummary = findViewById(R.id.tvDownloadLyricsSummary)
@@ -81,6 +83,10 @@ class SettingsActivity : AppCompatActivity() {
 
         rowBluetooth.setOnClickListener {
             startActivity(Intent(this, BluetoothAudioActivity::class.java))
+        }
+
+        rowEqualizer.setOnClickListener {
+            startActivity(Intent(this, EqualizerActivity::class.java))
         }
 
         rowDownloadLyrics.setOnClickListener {
@@ -133,9 +139,6 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         fun processNext() {
-            // Salta de una vez las canciones que ya tienen letra guardada,
-            // sin llamadas de red. Es un while, no recursion, para no
-            // acumular stack si hay muchas canciones ya guardadas seguidas.
             while (index < songs.size && SavedLyricsRepository.isSaved(this, songs[index].id)) {
                 foundCount++
                 index++

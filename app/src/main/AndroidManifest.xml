@@ -25,6 +25,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MP_3">
 
+        <activity android:name=".EqualizerActivity" android:exported="false" />
+
         <activity
             android:name=".SongListActivity"
             android:exported="true"
