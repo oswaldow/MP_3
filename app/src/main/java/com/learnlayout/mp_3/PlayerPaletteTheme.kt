@@ -11,37 +11,29 @@ import android.view.animation.DecelerateInterpolator
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
 
-/**
- * Extrae un color representativo de la caratula del album (estilo Material
- * You) y lo aplica animado como fondo de una vista del reproductor
- * expandido (ver viewPanelArtBanner en activity_song_list.xml, detras de
- * btnPanelBack / ivMonito / ivPanelAlbumArt) o, via [applyToDrawable], como
- * relleno del GradientDrawable del panel de letra (LyricsPanelController),
- * que ademas tiene su propio borde blanco fijo (no se toca aca).
- *
- * Orden de preferencia del swatch: oscuro y con algo de saturacion se lee
- * mejor detras del status bar y de iconos/texto blancos que un color muy
- * claro o muy gris plano, por eso el fallback va de
- * DarkVibrant -> DarkMuted -> Vibrant -> Muted -> dominante -> color por
- * defecto que pase quien llama (normalmente surface_dark).
- */
 object PlayerPaletteTheme {
 
     private const val ANIM_DURATION_MS = 400L
 
-    // Baja un poco el brillo (luminosidad HSL) del color extraido para que
-    // el reloj/iconos del status bar y los botones blancos de arriba
-    // siempre se lean bien encima, incluso con swatches muy brillantes.
     private const val DARKEN_FACTOR = 0.82f
+
+    // Tope de luminosidad (HSL lightness) para el fondo del banner y del
+    // panel de letras. tvPanelSongTitle/tvPanelArtist e item_lyrics_line
+    // usan texto blanco/gris claro FIJO (text_primary_light, spotify_gray),
+    // no recalculan su color segun el fondo. DARKEN_FACTOR por si solo no
+    // basta: escala el lightness original de forma proporcional, asi que
+    // una caratula muy clara (blanca, pastel, monocromatica) puede seguir
+    // quedando por encima de 0.7-0.8 de lightness aun despues de oscurecer,
+    // y el texto claro se pierde. Este tope garantiza que el fondo nunca
+    // quede tan claro como para romper ese contraste, sin importar que tan
+    // clara sea la caratula de origen.
+    private const val MAX_BACKGROUND_LIGHTNESS = 0.30f
+
+    private const val MIN_ACCENT_SATURATION = 0.20f
 
     private val argbEvaluator = ArgbEvaluator()
 
-    /**
-     * Genera la paleta de [bitmap] en background (Palette ya usa su propio
-     * hilo internamente) y anima el fondo de [targetView] al color elegido.
-     * Si por lo que sea no se pudo generar paleta o no hay swatch usable,
-     * cae en [fallbackColor].
-     */
+
     fun applyFromBitmap(bitmap: Bitmap, targetView: View, fallbackColor: Int) {
         Palette.from(bitmap)
             .clearFilters() // no descartar tonos muy oscuros/claros: queremos el color real del album
@@ -50,17 +42,11 @@ object PlayerPaletteTheme {
             }
     }
 
-    /** Para cuando no hay caratula (placeholder): vuelve al color por defecto. */
     fun applyFallback(targetView: View, fallbackColor: Int) {
         animateBackground(targetView, fallbackColor)
     }
 
-    /**
-     * Igual que [applyFromBitmap] pero para un [GradientDrawable] en vez de
-     * la vista completa. Se usa en el panel de letra (LyricsPanelController),
-     * que necesita mantener su borde y sus esquinas redondeadas animadas
-     * (GradientDrawable) en vez de solo un ColorDrawable de fondo.
-     */
+
     fun applyToDrawable(bitmap: Bitmap, drawable: GradientDrawable, fallbackColor: Int) {
         Palette.from(bitmap)
             .clearFilters()
@@ -69,7 +55,6 @@ object PlayerPaletteTheme {
             }
     }
 
-    /** Para cuando no hay caratula: vuelve el GradientDrawable al color por defecto. */
     fun applyDrawableFallback(drawable: GradientDrawable, fallbackColor: Int) {
         animateDrawableColor(drawable, fallbackColor)
     }
@@ -102,7 +87,11 @@ object PlayerPaletteTheme {
     private fun darken(color: Int): Int {
         val hsl = FloatArray(3)
         ColorUtils.colorToHSL(color, hsl)
-        hsl[2] = (hsl[2] * DARKEN_FACTOR).coerceIn(0f, 1f)
+        // Se escala primero por DARKEN_FACTOR (para que colores ya oscuros
+        // no se vean planos) y despues se aplica el tope: el resultado nunca
+        // puede superar MAX_BACKGROUND_LIGHTNESS, sin importar que tan claro
+        // sea el color de entrada.
+        hsl[2] = (hsl[2] * DARKEN_FACTOR).coerceIn(0f, MAX_BACKGROUND_LIGHTNESS)
         return ColorUtils.HSLToColor(hsl)
     }
 
@@ -120,16 +109,6 @@ object PlayerPaletteTheme {
         }
     }
 
-    // ---------- Color de acento para los controles (play/pause, siguiente,
-    // anterior, etc.) ----------
-
-    /**
-     * Extrae de [bitmap] un color de acento (vibrante, sin oscurecer a
-     * proposito, a diferencia del banner) y anima la transicion desde
-     * [currentColor] hasta ese color, llamando a [onColorAnimated] en cada
-     * frame. Pensado para tintar varios botones a la vez (no una sola
-     * vista), por eso no recibe una View sino un callback de color.
-     */
     fun applyAccentFromBitmap(
         bitmap: Bitmap,
         fallbackColor: Int,
@@ -148,25 +127,26 @@ object PlayerPaletteTheme {
         animateColor(currentColor, fallbackColor, onColorAnimated)
     }
 
-    /**
-     * A diferencia de [pickColor] (que oscurece para el fondo del banner),
-     * este toma el swatch mas vibrante SIN oscurecer, porque va a tintar
-     * iconos y el circulo del boton de play, que necesitan verse saturados.
-     */
     private fun pickAccentColor(palette: Palette?, fallbackColor: Int): Int {
         val swatch = palette?.vibrantSwatch
             ?: palette?.lightVibrantSwatch
             ?: palette?.mutedSwatch
             ?: palette?.dominantSwatch
             ?: return fallbackColor
-        return swatch.rgb
+
+        return if (saturationOf(swatch.rgb) >= MIN_ACCENT_SATURATION) {
+            swatch.rgb
+        } else {
+            fallbackColor
+        }
     }
 
-    /**
-     * Blanco o negro, segun cual contraste mejor sobre [backgroundColor].
-     * Se usa para el icono del boton grande de play/pause, cuyo fondo
-     * ahora es el color de acento (antes era @color/white fijo).
-     */
+    private fun saturationOf(color: Int): Float {
+        val hsl = FloatArray(3)
+        ColorUtils.colorToHSL(color, hsl)
+        return hsl[1]
+    }
+
     fun onColorFor(backgroundColor: Int): Int {
         return if (ColorUtils.calculateLuminance(backgroundColor) > 0.5) Color.BLACK else Color.WHITE
     }

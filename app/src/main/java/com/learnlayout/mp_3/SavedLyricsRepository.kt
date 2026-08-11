@@ -15,6 +15,16 @@ object SavedLyricsRepository {
         return prefs(context).contains(keyFor(songId))
     }
 
+    /**
+     * Borra la letra guardada de [songId], si habia alguna. Se usa cuando
+     * la cancion se elimina del dispositivo.
+     */
+    fun remove(context: Context, songId: Long) {
+        if (prefs(context).contains(keyFor(songId))) {
+            prefs(context).edit().remove(keyFor(songId)).apply()
+        }
+    }
+
     fun getSavedLyrics(context: Context, songId: Long): LyricsResult? {
         val json = prefs(context).getString(keyFor(songId), null) ?: return null
         return try {

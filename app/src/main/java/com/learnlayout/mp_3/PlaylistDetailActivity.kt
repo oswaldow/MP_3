@@ -175,7 +175,14 @@ class PlaylistDetailActivity : AppCompatActivity() {
         val songs = playlistSongs.toList()
         val service = musicService
         if (service != null) {
-            service.setPlaylist(songs, startIndex)
+            // Si la cancion tocada ya es la que esta sonando, no la
+            // reiniciamos con setPlaylist: solo volvemos al reproductor
+            // tal como esta.
+            val tappedSong = songs.getOrNull(startIndex)
+            val isSameSongPlaying = tappedSong != null && service.getCurrentSong()?.id == tappedSong.id
+            if (!isSameSongPlaying) {
+                service.setPlaylist(songs, startIndex)
+            }
             returnToPlayer()
         } else {
             // El service aun no esta conectado (poco probable, se conecta

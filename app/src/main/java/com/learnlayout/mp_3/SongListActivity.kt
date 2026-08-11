@@ -1,5 +1,6 @@
 package com.learnlayout.mp_3
 
+import android.app.RecoverableSecurityException
 import android.graphics.drawable.AnimationDrawable
 import android.Manifest
 import android.content.ComponentName
@@ -12,9 +13,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.MediaStore
 import android.view.MotionEvent
 import android.view.View
 import androidx.activity.addCallback
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -98,7 +101,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             onSongMetadataChanged = {
                 lyricsPanelController.resetSongId()
                 loadSongs()
-            }
+            },
+            onDeleteSongFromDevice = { song -> requestDeleteSongFromDevice(song) }
         )
     }
 
@@ -108,6 +112,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var pendingCoverPlaylistId: String? = null
     private var pendingSongList: List<Song>? = null
     private var pendingStartIndex: Int = 0
+
+    // Cancion pendiente de borrar del dispositivo mientras se espera la
+    // confirmacion del usuario (dialogo del sistema en API 29+, o el
+    // permiso de escritura en versiones viejas). Ver requestDeleteSongFromDevice.
+    private var pendingDeleteSong: Song? = null
 
     private val queueSheet by lazy {
         QueueSheetController(
@@ -313,6 +322,40 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 Toast.LENGTH_LONG
             ).show()
             tvEmptyState.visibility = View.VISIBLE
+        }
+    }
+
+    // Lanza el dialogo de confirmacion del sistema para borrar el archivo
+    // (Android 10 via RecoverableSecurityException, Android 11+ via
+    // MediaStore.createDeleteRequest). Si el usuario acepta, el sistema ya
+    // borro el archivo y solo falta limpiar los datos propios de la app.
+    private val deleteSongIntentSenderLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val song = pendingDeleteSong
+        pendingDeleteSong = null
+        if (result.resultCode == RESULT_OK && song != null) {
+            finalizeSongDeletion(song)
+        } else {
+            Toast.makeText(this, "No se elimino la cancion", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Solo se usa en Android 9 (API 28) o menos, donde borrar un archivo de
+    // otra app con MediaStore todavia requiere este permiso en tiempo real.
+    private val writeStoragePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val song = pendingDeleteSong
+        if (granted && song != null) {
+            performDeleteFromDevice(song)
+        } else {
+            pendingDeleteSong = null
+            Toast.makeText(
+                this,
+                "Se necesita permiso para eliminar el archivo",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -706,12 +749,99 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private fun openPlayer(playlist: List<Song>, startIndex: Int) {
         val service = musicService
+        val tappedSong = playlist.getOrNull(startIndex)
         if (service != null) {
-            service.setPlaylist(playlist, startIndex)
+            // Si la cancion tocada es la misma que ya esta sonando, no la
+            // reiniciamos con setPlaylist (que siempre arranca desde el
+            // principio): solo abrimos el panel donde va quedo.
+            val isSameSongPlaying = tappedSong != null && service.getCurrentSong()?.id == tappedSong.id
+            if (!isSameSongPlaying) {
+                service.setPlaylist(playlist, startIndex)
+            }
             playerPanelController.expandWhenReady()
         } else {
             pendingSongList = playlist
             pendingStartIndex = startIndex
+        }
+    }
+
+    // ---------- Eliminar cancion del dispositivo ----------
+
+    /**
+     * Punto de entrada desde el menu de tres puntos (PlaylistDialogs, ya
+     * mostro su propio dialogo de confirmacion). Segun la version de
+     * Android, borrar un archivo que la app no creo requiere un flujo
+     * distinto: Android 11+ pide confirmacion nativa via
+     * MediaStore.createDeleteRequest, Android 10 puede lanzar
+     * RecoverableSecurityException al intentar borrar directo, y en
+     * versiones anteriores alcanza con el permiso de escritura clasico.
+     */
+    private fun requestDeleteSongFromDevice(song: Song) {
+        pendingDeleteSong = song
+        performDeleteFromDevice(song)
+    }
+
+    private fun performDeleteFromDevice(song: Song) {
+        when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
+                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, listOf(song.uri))
+                deleteSongIntentSenderLauncher.launch(
+                    IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                )
+            }
+            Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> {
+                try {
+                    contentResolver.delete(song.uri, null, null)
+                    pendingDeleteSong = null
+                    finalizeSongDeletion(song)
+                } catch (e: RecoverableSecurityException) {
+                    deleteSongIntentSenderLauncher.launch(
+                        IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build()
+                    )
+                }
+            }
+            else -> {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    try {
+                        contentResolver.delete(song.uri, null, null)
+                        pendingDeleteSong = null
+                        finalizeSongDeletion(song)
+                    } catch (e: SecurityException) {
+                        pendingDeleteSong = null
+                        Toast.makeText(this, "No se pudo eliminar el archivo", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    writeStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
+            }
+        }
+    }
+
+    /**
+     * El archivo ya se borro del dispositivo (MediaStore/almacenamiento):
+     * ahora limpiamos lo que la app guarda sobre esa cancion (playlists,
+     * nombre editado, letra guardada), la sacamos de la reproduccion
+     * actual si era la que estaba sonando, y recargamos la lista.
+     */
+    private fun finalizeSongDeletion(song: Song) {
+        PlaylistRepository.removeSongFromAllPlaylists(this, song.id)
+        SongMetadataRepository.removeOverride(this, song.id)
+        SavedLyricsRepository.remove(this, song.id)
+
+        if (musicService?.getCurrentSong()?.id == song.id) {
+            if ((musicService?.getSongList()?.size ?: 0) > 1) {
+                musicService?.playNext()
+            }
+        }
+
+        Toast.makeText(this, "\"${song.title}\" eliminada del dispositivo", Toast.LENGTH_SHORT).show()
+
+        lyricsPanelController.resetSongId()
+        loadSongs()
+        if (topBarController.isPlaylistsTabActive) {
+            loadPlaylists()
         }
     }
 

@@ -25,7 +25,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.common.util.UnstableApi
+import kotlin.math.cos
+import kotlin.math.sin
 
 class MusicService : Service() {
 
@@ -122,6 +127,20 @@ class MusicService : Service() {
     // setOnCompletionListener(...) / setOnCompletionListener(null)).
     private val mainPlayerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            // DEBUG: si el player que sigue sonando (el "viejo") entra en
+            // STATE_BUFFERING justo durante el crossfade, eso solo -sin
+            // tocar para nada el volumen- ya suena como un bajon fuerte
+            // seguido de una recuperacion cuando termina de bufferear.
+            // Si ves este log durante un crossfade, el problema NO es el
+            // fundido de volumen sino un stall de buffering.
+            val stateName = when (playbackState) {
+                Player.STATE_IDLE -> "IDLE"
+                Player.STATE_BUFFERING -> "BUFFERING"
+                Player.STATE_READY -> "READY"
+                Player.STATE_ENDED -> "ENDED"
+                else -> "?"
+            }
+            Log.d(TAG_XFADE, "mainPlayerListener.onPlaybackStateChanged -> $stateName (isCrossfading=$isCrossfading)")
             if (playbackState == Player.STATE_ENDED) {
                 onCurrentPlayerCompleted()
             }
@@ -132,9 +151,9 @@ class MusicService : Service() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            // El ecualizador ahora es por software y se inyecta directo en
-            // el pipeline de cada ExoPlayer (ver EqAudioSinkRenderersFactory /
-            // buildPlayer()), asi que ya no hace falta engancharlo aqui.
+            // DEBUG: si esto se vuelve false durante isCrossfading=true sin
+            // que nosotros lo hayamos pausado, es la causa del bajon.
+            Log.d(TAG_XFADE, "mainPlayerListener.onIsPlayingChanged -> $isPlaying (isCrossfading=$isCrossfading)")
         }
     }
 
@@ -408,6 +427,114 @@ class MusicService : Service() {
         playSongAt(currentIndex)
     }
 
+    // DEBUG: engancha diagnostico profundo de audio a un player. Esto NO
+    // cambia comportamiento, solo agrega logs. El objetivo es distinguir
+    // entre 3 causas MUY distintas para el mismo sintoma ("se escucha
+    // menos y luego vuelve a lo normal"):
+    //
+    //  1) Nuestra propia matematica de volumen esta mal          -> ya
+    //     deberia estar descartado con el fundido equal-power.
+    //  2) El AudioTrack real sufre un UNDERRUN (se queda sin datos
+    //     un instante) durante el cruce                          -> se ve
+    //     como "onAudioUnderrun" en el log.
+    //  3) El sistema (MIUI/HyperOS/Dolby/etc) esta RECONFIGURANDO la
+    //     cadena de audio (por ejemplo al pasar de 1 a 2 AudioTrack
+    //     activos, o algun efecto global) cuando aparece el segundo
+    //     player                                                  -> se ve
+    //     como un "onAudioTrackInitialized"/"onAudioTrackReleased"
+    //     inesperado justo durante isCrossfading=true, o como un salto de
+    //     "streamVol"/"onVolumeChanged" que NO viene de nuestro propio
+    //     runCatching { ...volume = ... }.
+    //
+    // Filtra en Logcat con:  adb logcat -s MP3_XFADE
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun attachAudioDiagnostics(player: ExoPlayer, label: String) {
+        val playerId = System.identityHashCode(player)
+
+        player.addListener(object : Player.Listener {
+            override fun onVolumeChanged(volume: Float) {
+                // Si esto se dispara con un valor que NO coincide con lo
+                // que el crossfadeRunnable acaba de mandar, algo mas esta
+                // tocando el volumen del player (por ejemplo otra parte
+                // del codigo, o el propio framework).
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onVolumeChanged -> $volume (isCrossfading=$isCrossfading)"
+                )
+            }
+
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioSessionIdChanged -> $audioSessionId (isCrossfading=$isCrossfading) <-- si pasa durante el cruce, la sesion de audio se esta reasignando"
+                )
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                Log.d(
+                    TAG_XFADE,
+                    "[$label #$playerId] onPlayWhenReadyChanged -> $playWhenReady reason=$reason (isCrossfading=$isCrossfading)"
+                )
+            }
+        })
+
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioUnderrun(
+                eventTime: AnalyticsListener.EventTime,
+                bufferSize: Int,
+                bufferSizeMs: Long,
+                elapsedSinceLastFeedMs: Long
+            ) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] *** onAudioUnderrun *** bufferSizeMs=$bufferSizeMs " +
+                            "elapsedSinceLastFeedMs=$elapsedSinceLastFeedMs (isCrossfading=$isCrossfading) " +
+                            "<-- CANDIDATO PRINCIPAL: el hilo de audio se quedo sin datos un instante, " +
+                            "eso se oye exactamente como 'bajon y vuelve'"
+                )
+            }
+
+            override fun onAudioTrackInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                audioTrackConfig: AudioSink.AudioTrackConfig
+            ) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioTrackInitialized encoding=${audioTrackConfig.encoding} " +
+                            "sampleRate=${audioTrackConfig.sampleRate} channelConfig=${audioTrackConfig.channelConfig} " +
+                            "bufferSize=${audioTrackConfig.bufferSize} offload=${audioTrackConfig.offload} " +
+                            "tunneling=${audioTrackConfig.tunneling} (isCrossfading=$isCrossfading) " +
+                            "<-- si esto aparece DURANTE el cruce (no solo al arrancar el player), " +
+                            "el sistema esta reconstruyendo el AudioTrack a mitad del fundido"
+                )
+            }
+
+            override fun onAudioTrackReleased(
+                eventTime: AnalyticsListener.EventTime,
+                audioTrackConfig: AudioSink.AudioTrackConfig
+            ) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioTrackReleased (isCrossfading=$isCrossfading)"
+                )
+            }
+
+            override fun onAudioSinkError(
+                eventTime: AnalyticsListener.EventTime,
+                audioSinkError: Exception
+            ) {
+                Log.e(TAG_XFADE, "[$label #$playerId] onAudioSinkError: ${audioSinkError.message}", audioSinkError)
+            }
+
+            override fun onAudioCodecError(
+                eventTime: AnalyticsListener.EventTime,
+                audioCodecError: Exception
+            ) {
+                Log.e(TAG_XFADE, "[$label #$playerId] onAudioCodecError: ${audioCodecError.message}", audioCodecError)
+            }
+        })
+    }
+
     // Crea un ExoPlayer con audio offload DESACTIVADO explicitamente. Esto es
     // lo que evita el corte: sin esto, en cuanto solo hay un AudioTrack
     // activo el sistema (MIUI/Dolby) lo pone en modo offload, y al abrir el
@@ -466,6 +593,7 @@ class MusicService : Service() {
 
         val player = buildPlayer(startVolume = 1f)
         player.addListener(mainPlayerListener)
+        attachAudioDiagnostics(player, "MAIN idx=$index")
         player.setMediaItem(MediaItem.fromUri(song.uri))
         player.prepare()
         player.playWhenReady = true
@@ -617,6 +745,7 @@ class MusicService : Service() {
 
         val player = buildPlayer(startVolume = 0f)
         player.addListener(createNextPlayerListener(index, player))
+        attachAudioDiagnostics(player, "NEXT idx=$index")
         player.setMediaItem(MediaItem.fromUri(song.uri))
         player.prepare()
         // playWhenReady = true desde ya: en cuanto termine de bufferear
@@ -642,6 +771,13 @@ class MusicService : Service() {
                         preparedNextPlayer = player
                         preparedNextIndex = index
                     }
+                } else if (playbackState == Player.STATE_BUFFERING) {
+                    // DEBUG: si el player ENTRANTE bufferea de nuevo despues
+                    // de ya estar listo (por ejemplo, justo cuando arranca
+                    // el fundido), tambien puede sonar como un bajon raro
+                    // -distinto al fundido normal- aunque el volumen este
+                    // bien calculado.
+                    Log.d(TAG_XFADE, "player entrante indice=$index -> BUFFERING (isCrossfading=$isCrossfading)")
                 }
             }
 
@@ -677,6 +813,16 @@ class MusicService : Service() {
         val readyPosBefore = runCatching { readyPlayer.currentPosition }.getOrDefault(-1L)
         val currentPos = runCatching { current.currentPosition }.getOrDefault(-1L)
         Log.d(TAG_XFADE, "beginCrossfade() indice=$upcomingIndex durationMs=$durationMs | readyIsPlayingBefore=$readyIsPlayingBefore readyPosBefore=$readyPosBefore currentPos=$currentPos")
+
+        // DEBUG: volumen fisico del stream ANTES de arrancar el fundido,
+        // para comparar contra los "streamVol" que se van a loguear en
+        // cada TICK. Si streamVol cambia durante el crossfade, hay algo
+        // externo (tecla de volumen, otra app, el propio sistema) bajando
+        // el volumen real del telefono, no nuestro fundido interno.
+        val streamVolBefore = runCatching {
+            (getSystemService(AUDIO_SERVICE) as AudioManager).getStreamVolume(AudioManager.STREAM_MUSIC)
+        }.getOrNull()
+        Log.d(TAG_XFADE, "beginCrossfade() streamVolAntes=$streamVolBefore")
 
         nextMediaPlayer = readyPlayer
         nextIndexDuringCrossfade = upcomingIndex
@@ -722,11 +868,56 @@ class MusicService : Service() {
                 crossfadeElapsedMs += FADE_STEP_MS
                 val fraction = (crossfadeElapsedMs.toFloat() / crossfadeTotalMs.toFloat()).coerceIn(0f, 1f)
 
-                val outgoingVolume = 1f - fraction
-                val incomingVolume = fraction
+                // Curva de potencia constante (equal-power) en vez de lineal:
+                // con una rampa lineal (1-f / f), la suma de potencia percibida
+                // (1-f)^2 + f^2 cae hasta la mitad justo en fraction=0.5 y
+                // vuelve a subir en los extremos -eso es el "bajon y luego
+                // sube" que se oye a la mitad del crossfade-. Con seno/coseno,
+                // outgoingVolume^2 + incomingVolume^2 = 1 se mantiene
+                // constante durante todo el cruce (identidad cos^2+sin^2=1).
+                val angle = fraction * (Math.PI.toFloat() / 2f)
+                val outgoingVolume = cos(angle)
+                val incomingVolume = sin(angle)
 
                 runCatching { mediaPlayer?.volume = outgoingVolume }
                 runCatching { nextMediaPlayer?.volume = incomingVolume }
+
+                // DEBUG: volumen que calculamos vs. el que ExoPlayer dice
+                // tener aplicado de verdad (readback), y el volumen fisico
+                // del stream de musica del telefono. Si "readback" no
+                // coincide con lo que mandamos, ExoPlayer/el sistema esta
+                // pisando el valor. Si el volumen del stream cambia solo
+                // (streamVol), fue una tecla de volumen o algo del sistema,
+                // no el fundido. Se loguea siempre (dura pocos segundos).
+                val outReadback = runCatching { mediaPlayer?.volume }.getOrNull()
+                val inReadback = runCatching { nextMediaPlayer?.volume }.getOrNull()
+                val outState = runCatching { mediaPlayer?.playbackState }.getOrNull()
+                val inState = runCatching { nextMediaPlayer?.playbackState }.getOrNull()
+                // DEBUG: si outIsPlaying o inIsPlaying se vuelven false a
+                // mitad del fundido sin que nosotros hayamos pausado nada,
+                // es una senal fuerte de underrun/glitch del AudioTrack real
+                // (ExoPlayer reporta isPlaying=false cuando el sink se queda
+                // sin datos), aunque nuestro volumen calculado (outSet/inSet)
+                // siga viendose "correcto" en el log.
+                val outIsPlaying = runCatching { mediaPlayer?.isPlaying }.getOrNull()
+                val inIsPlaying = runCatching { nextMediaPlayer?.isPlaying }.getOrNull()
+                val streamVol = runCatching {
+                    (getSystemService(AUDIO_SERVICE) as AudioManager).getStreamVolume(AudioManager.STREAM_MUSIC)
+                }.getOrNull()
+                // DEBUG: isMusicActive() consulta si el sistema considera que
+                // HAY musica sonando ahora mismo (a nivel de mixer). Si esto
+                // parpadea a false durante el cruce, algo por debajo de
+                // ExoPlayer esta cortando el audio, no nuestro codigo.
+                val musicActive = runCatching {
+                    (getSystemService(AUDIO_SERVICE) as AudioManager).isMusicActive
+                }.getOrNull()
+                Log.d(
+                    TAG_XFADE,
+                    "TICK fraction=${"%.2f".format(fraction)} " +
+                            "outSet=${"%.2f".format(outgoingVolume)} outReadback=$outReadback outState=$outState outIsPlaying=$outIsPlaying " +
+                            "inSet=${"%.2f".format(incomingVolume)} inReadback=$inReadback inState=$inState inIsPlaying=$inIsPlaying " +
+                            "streamVol=$streamVol musicActive=$musicActive"
+                )
 
                 if (fraction >= 1f) {
                     finishCrossfade()

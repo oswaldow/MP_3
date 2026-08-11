@@ -21,6 +21,19 @@ object SongMetadataRepository {
         prefs(context).edit().putString(KEY_OVERRIDES, all.toString()).apply()
     }
 
+    /**
+     * Quita el override de titulo/artista de [songId]. Se usa cuando la
+     * cancion se borra del dispositivo, para no dejar datos huerfanos de
+     * un archivo que ya no existe.
+     */
+    fun removeOverride(context: Context, songId: Long) {
+        val all = readAll(context)
+        if (all.has(songId.toString())) {
+            all.remove(songId.toString())
+            prefs(context).edit().putString(KEY_OVERRIDES, all.toString()).apply()
+        }
+    }
+
     fun apply(context: Context, song: Song): Song {
         val obj = readAll(context).optJSONObject(song.id.toString()) ?: return song
         val title = obj.optString("title", "").ifBlank { song.title }
@@ -49,3 +62,4 @@ object SongMetadataRepository {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 }
+

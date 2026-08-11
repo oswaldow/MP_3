@@ -128,6 +128,24 @@ object PlaylistRepository {
         savePlaylists(context, playlists)
     }
 
+    /**
+     * Quita [songId] de TODAS las playlists (incluida Favoritos). Se usa
+     * cuando la cancion se borra del dispositivo, para que no queden
+     * referencias colgando a un archivo que ya no existe.
+     */
+    fun removeSongFromAllPlaylists(context: Context, songId: Long) {
+        val playlists = getAllPlaylists(context)
+        var changed = false
+        playlists.forEach { playlist ->
+            if (playlist.songIds.remove(songId)) {
+                changed = true
+            }
+        }
+        if (changed) {
+            savePlaylists(context, playlists)
+        }
+    }
+
     fun getPlaylistById(context: Context, playlistId: String): Playlist? {
         return getAllPlaylists(context).find { it.id == playlistId }
     }

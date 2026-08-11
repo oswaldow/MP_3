@@ -12,7 +12,12 @@ class PlaylistDialogs(
     private val context: Context,
     private val isPlaylistsTabActive: () -> Boolean,
     private val onPlaylistsChanged: () -> Unit,
-    private val onSongMetadataChanged: () -> Unit
+    private val onSongMetadataChanged: () -> Unit,
+    // Se llama luego de que el usuario confirma que quiere borrar la
+    // cancion del dispositivo (no solo de la app). Quien construye este
+    // dialogo (la Activity) es quien de verdad ejecuta el borrado, porque
+    // necesita permisos/IntentSender que solo una Activity puede pedir.
+    private val onDeleteSongFromDevice: (Song) -> Unit
 ) {
 
     fun showCreatePlaylistDialog(songIdToAdd: Long?) {
@@ -44,14 +49,35 @@ class PlaylistDialogs(
     }
 
     fun showSongItemMenu(song: Song) {
-        val options = arrayOf("Agregar a playlist", "Editar nombre y artista")
+        val options = arrayOf("Agregar a playlist", "Editar nombre y artista", "Eliminar del dispositivo")
         AlertDialog.Builder(context, R.style.RoundedAlertDialog)
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> showAddToPlaylistDialog(song)
                     1 -> showEditSongMetadataDialog(song)
+                    2 -> confirmDeleteSongFromDevice(song)
                 }
             }
+            .show()
+    }
+
+    /**
+     * Confirmacion extra antes de borrar: a diferencia de "Quitar de la
+     * playlist", esto borra el archivo de audio real del dispositivo, no
+     * solo la referencia dentro de la app. Solo si el usuario confirma se
+     * llama a [onDeleteSongFromDevice], que ejecuta el borrado real.
+     */
+    fun confirmDeleteSongFromDevice(song: Song) {
+        AlertDialog.Builder(context, R.style.RoundedAlertDialog)
+            .setTitle("Eliminar del dispositivo")
+            .setMessage(
+                "\"${song.title}\" se eliminara permanentemente de tu dispositivo, " +
+                        "no solo de esta app. Esta accion no se puede deshacer. Continuar?"
+            )
+            .setPositiveButton("Eliminar") { _, _ ->
+                onDeleteSongFromDevice(song)
+            }
+            .setNegativeButton("Cancelar", null)
             .show()
     }
 
