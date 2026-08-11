@@ -50,7 +50,8 @@ class PlayerPanelController(
     // Avisa cada vez que cambia la caratula (o se va a placeholder, bitmap
     // null) para que quien arme este controller pueda enterar a otras
     // vistas, p.ej. el banner del panel de letra (Material You).
-    private val onAlbumArtChanged: (Bitmap?) -> Unit
+    private val onAlbumArtChanged: (Bitmap?) -> Unit,
+    private val onAccentColorChanged: (Int) -> Unit = {}
 ) {
 
     private lateinit var behavior: BottomSheetBehavior<FrameLayout>
@@ -88,6 +89,8 @@ class PlayerPanelController(
     private val defaultAccentColor: Int =
         ContextCompat.getColor(activity, R.color.text_primary_light)
     private var currentAccentColor: Int = defaultAccentColor
+
+    fun getAccentColor(): Int = currentAccentColor
 
     init {
         // Caratula "un poco redondeada": setImageBitmap() por si solo pinta
@@ -343,17 +346,15 @@ class PlayerPanelController(
         when (mode) {
             MusicService.PlaybackMode.NORMAL -> {
                 btnMiniPlayMode.setImageResource(R.drawable.ic_repeat)
-                btnMiniPlayMode.setBackgroundResource(R.drawable.bg_icon_button_circle)
             }
             MusicService.PlaybackMode.REPEAT_ONE -> {
                 btnMiniPlayMode.setImageResource(R.drawable.ic_repeat_one)
-                btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
             }
             MusicService.PlaybackMode.SHUFFLE -> {
                 btnMiniPlayMode.setImageResource(R.drawable.ic_shuffle)
-                btnMiniPlayMode.setBackgroundResource(R.drawable.btn_primary_round)
             }
         }
+        btnMiniPlayMode.background = null
     }
 
     // ---------- Caratula del album (iTunes / Deezer) ----------
@@ -423,14 +424,6 @@ class PlayerPanelController(
         }
     }
 
-    /**
-     * Tinta los controles de reproduccion con [color] (extraido de la
-     * caratula o el fallback neutro). El boton grande de play/pause tinta
-     * su fondo circular (antes @color/white fijo) y su icono se recalcula
-     * a blanco o negro segun cual contraste mejor. El resto de botones
-     * (anterior, siguiente, modo, mini play/pause) solo tintan el icono,
-     * ya que su fondo es transparente.
-     */
     private fun applyControlsAccent(color: Int) {
         val onColor = PlayerPaletteTheme.onColorFor(color)
         val accentTint = ColorStateList.valueOf(color)
@@ -443,6 +436,8 @@ class PlayerPanelController(
         btnPanelNext.imageTintList = accentTint
         btnMiniPlayMode.imageTintList = accentTint
         btnMiniPlayPause.imageTintList = accentTint
+
+        onAccentColorChanged(color)
     }
 
     private fun applyPlaceholder(iv: ImageView, basePadding: IntArray) {

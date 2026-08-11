@@ -1,5 +1,6 @@
 package com.learnlayout.mp_3
 
+import android.content.res.ColorStateList
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
@@ -7,6 +8,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -23,7 +25,10 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
  */
 class QueueSheetController(
     private val activity: AppCompatActivity,
-    private val getMusicService: () -> MusicService?
+    private val getMusicService: () -> MusicService?,
+    private val getAccentColor: () -> Int = {
+        ContextCompat.getColor(activity, R.color.text_primary_light)
+    }
 ) {
 
     private var dialog: BottomSheetDialog? = null
@@ -161,15 +166,19 @@ class QueueSheetController(
 
     fun refreshModeButtons() {
         val currentMode = getMusicService()?.getPlaybackMode() ?: MusicService.PlaybackMode.NORMAL
-        btnModeNormal?.setBackgroundResource(
-            if (currentMode == MusicService.PlaybackMode.NORMAL) R.drawable.bg_mode_pill_active else 0
+        val activeTint = ColorStateList.valueOf(getAccentColor())
+        val inactiveTint = ColorStateList.valueOf(
+            ContextCompat.getColor(activity, R.color.spotify_gray)
         )
-        btnModeRepeat?.setBackgroundResource(
-            if (currentMode == MusicService.PlaybackMode.REPEAT_ONE) R.drawable.bg_mode_pill_active else 0
-        )
-        btnModeShuffle?.setBackgroundResource(
-            if (currentMode == MusicService.PlaybackMode.SHUFFLE) R.drawable.bg_mode_pill_active else 0
-        )
+
+        fun applyMode(button: ImageButton?, isActive: Boolean) {
+            button?.background = null
+            button?.imageTintList = if (isActive) activeTint else inactiveTint
+        }
+
+        applyMode(btnModeNormal, currentMode == MusicService.PlaybackMode.NORMAL)
+        applyMode(btnModeRepeat, currentMode == MusicService.PlaybackMode.REPEAT_ONE)
+        applyMode(btnModeShuffle, currentMode == MusicService.PlaybackMode.SHUFFLE)
     }
 
     // Llamado desde el poller de progreso de la Activity (cada 500ms).

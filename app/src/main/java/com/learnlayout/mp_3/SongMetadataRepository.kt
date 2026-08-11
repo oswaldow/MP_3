@@ -28,6 +28,20 @@ object SongMetadataRepository {
         return song.copy(title = title, artist = artist)
     }
 
+    fun getAllOverrides(context: Context): Map<Long, Pair<String, String>> {
+        val all = readAll(context)
+        val map = HashMap<Long, Pair<String, String>>(all.length())
+        all.keys().asSequence().forEach { key ->
+            key.toLongOrNull()?.let { id ->
+                val obj = all.optJSONObject(key)
+                if (obj != null) {
+                    map[id] = obj.optString("title", "") to obj.optString("artist", "")
+                }
+            }
+        }
+        return map
+    }
+
     private fun readAll(context: Context): JSONObject {
         val json = prefs(context).getString(KEY_OVERRIDES, null) ?: return JSONObject()
         return try { JSONObject(json) } catch (e: Exception) { JSONObject() }

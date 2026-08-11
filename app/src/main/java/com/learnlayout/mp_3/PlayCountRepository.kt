@@ -22,11 +22,14 @@ object PlayCountRepository {
         return getJson(context, KEY_LAST_PLAYED).optLong(songId.toString(), 0L)
     }
 
-    /**
-     * Registra una reproduccion: sube el contador de veces reproducida y
-     * actualiza la marca de tiempo usada para "Recientes". Se debe llamar
-     * cada vez que una cancion arranca a sonar.
-     */
+    fun getAllPlayCounts(context: Context): Map<Long, Int> {
+        val counts = getJson(context, KEY_COUNTS)
+        val map = HashMap<Long, Int>(counts.length())
+        counts.keys().asSequence().forEach { key ->
+            key.toLongOrNull()?.let { id -> map[id] = counts.optInt(key, 0) }
+        }
+        return map
+    }
     fun incrementPlayCount(context: Context, songId: Long) {
         val counts = getJson(context, KEY_COUNTS)
         val current = counts.optInt(songId.toString(), 0)

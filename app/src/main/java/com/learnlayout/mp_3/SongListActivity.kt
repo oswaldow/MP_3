@@ -110,7 +110,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var pendingStartIndex: Int = 0
 
     private val queueSheet by lazy {
-        QueueSheetController(this) { musicService }
+        QueueSheetController(
+            activity = this,
+            getMusicService = { musicService },
+            getAccentColor = { playerPanelController.getAccentColor() }
+        )
     }
 
     private val lyricsPanelController: LyricsPanelController by lazy {
@@ -185,7 +189,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 } else {
                     lyricsPanelController.applyAlbumArtFallback()
                 }
-            }
+            },
+            onAccentColorChanged = { queueSheet.refreshModeButtons() }
         )
     }
 
@@ -573,7 +578,25 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun loadSongs() {
-        allSongs = SongRepository.getAllSongs(this).map { SongMetadataRepository.apply(this, it) }
+        val t0 = System.currentTimeMillis()
+        val rawSongs = SongRepository.getAllSongs(this)
+        val t1 = System.currentTimeMillis()
+        android.util.Log.d("PERF_DEBUG", "getAllSongs(): ${t1 - t0} ms, ${rawSongs.size} canciones")
+
+        val overrides = SongMetadataRepository.getAllOverrides(this)
+        allSongs = rawSongs.map { song ->
+            val override = overrides[song.id]
+            if (override != null) {
+                song.copy(
+                    title = override.first.ifBlank { song.title },
+                    artist = override.second.ifBlank { song.artist }
+                )
+            } else {
+                song
+            }
+        }
+        val t2 = System.currentTimeMillis()
+        android.util.Log.d("PERF_DEBUG", "overrides x${rawSongs.size}: ${t2 - t1} ms")
 
         if (allSongs.isEmpty()) {
             tvEmptyState.visibility = View.VISIBLE
@@ -582,15 +605,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
 
         applyFilterAndSort()
+        val t3 = System.currentTimeMillis()
+        android.util.Log.d("PERF_DEBUG", "loadSongs() TOTAL: ${t3 - t0} ms")
     }
 
-    // Si el servicio de musica arranco "en frio" (sin ninguna cancion
-    // cargada en memoria, porque el proceso murio en algun momento),
-    // busca la ultima cancion guardada y la deja preparada en pausa en la
-    // posicion donde se habia quedado. Si allSongs todavia no cargo (ej.
-    // el permiso de audio aun no se concedio), simplemente no restaura
-    // nada; la proxima vez que se abra la app con permiso concedido si
-    // funcionara, porque el dato queda guardado en SharedPreferences.
     private fun tryRestoreLastSong() {
         val lastSongId = PlaybackStateRepository.getLastSongId(this)
         if (lastSongId == -1L) return
@@ -606,6 +624,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private fun applyFilterAndSort() {
         if (topBarController.isPlaylistsTabActive) return
 
+        val tStart = System.currentTimeMillis()
         var list = allSongs
 
         if (searchQuery.isNotBlank()) {
@@ -614,16 +633,22 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                         it.artist.contains(searchQuery, ignoreCase = true)
             }
         }
+        val tFilter = System.currentTimeMillis()
 
         list = when (currentSort) {
             SortType.TITLE -> list.sortedBy { it.title.lowercase() }
             SortType.ARTIST -> list.sortedBy { it.artist.lowercase() }
             SortType.DURATION -> list.sortedBy { it.duration }
             SortType.DATE_ADDED -> list.sortedByDescending { it.dateAdded }
-            SortType.MOST_PLAYED -> list.sortedByDescending { PlayCountRepository.getPlayCount(this, it.id) }
+            SortType.MOST_PLAYED -> {
+                val counts = PlayCountRepository.getAllPlayCounts(this)
+                list.sortedByDescending { counts[it.id] ?: 0 }
+            }
         }
+        val tSort = System.currentTimeMillis()
 
         songAdapter.updateData(list)
+        val tAdapter = System.currentTimeMillis()
 
         val hasResults = list.isNotEmpty()
         tvEmptyState.visibility = if (hasResults) View.GONE else View.VISIBLE
@@ -634,6 +659,14 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         musicService?.getCurrentSong()?.let {
             songAdapter.setCurrentPlayingId(it.id)
         }
+        val tEnd = System.currentTimeMillis()
+
+        android.util.Log.d(
+            "PERF_DEBUG",
+            "applyFilterAndSort(query='$searchQuery', sort=$currentSort, total=${allSongs.size}, resultado=${list.size}) -> " +
+                    "filter=${tFilter - tStart}ms sort=${tSort - tFilter}ms " +
+                    "adapter.updateData=${tAdapter - tSort}ms resto=${tEnd - tAdapter}ms TOTAL=${tEnd - tStart}ms"
+        )
     }
 
     private fun loadPlaylists() {
@@ -641,12 +674,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         playlistAdapter.updateData(playlists)
     }
 
-    /**
-     * Arma las playlists automaticas de historial ("Recientes" y "Mas
-     * escuchadas") a partir de PlayCountRepository. No se guardan en disco:
-     * se recalculan cada vez que se abre la pestana de playlists. Solo se
-     * muestran si ya hay al menos una reproduccion registrada.
-     */
     private fun buildAutoPlaylists(): List<Playlist> {
         val autoPlaylists = mutableListOf<Playlist>()
 
