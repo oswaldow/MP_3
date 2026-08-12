@@ -1,19 +1,14 @@
 package com.learnlayout.mp_3
 
-import android.app.RecoverableSecurityException
 import android.graphics.drawable.AnimationDrawable
 import android.Manifest
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
-import android.provider.MediaStore
+import android.content.pm.PackageManager
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
@@ -56,6 +51,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var tabPlaylists: TextView
     private lateinit var homeView: View
     private lateinit var homeController: HomeController
+    private lateinit var homeNavigationController: HomeNavigationController
 
     private lateinit var playerPanel: FrameLayout
     private lateinit var groupExpanded: View
@@ -110,7 +106,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     queueSheet.refreshList()
                 }
             },
-            onDeleteSongFromDevice = { song -> requestDeleteSongFromDevice(song) }
+            onDeleteSongFromDevice = { song ->
+                songDeletionController.requestDelete(song)
+            }
         )
     }
 
@@ -118,13 +116,39 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var isBound = false
 
     private var pendingCoverPlaylistId: String? = null
-    private var pendingSongList: List<Song>? = null
-    private var pendingStartIndex: Int = 0
 
-    // Cancion pendiente de borrar del dispositivo mientras se espera la
-    // confirmacion del usuario (dialogo del sistema en API 29+, o el
-    // permiso de escritura en versiones viejas). Ver requestDeleteSongFromDevice.
-    private var pendingDeleteSong: Song? = null
+    private val musicServiceConnectionController by lazy {
+        MusicServiceConnectionController(
+            onServiceConnected = { service, pendingPlayback ->
+                musicService = service
+                musicService?.setListener(this@SongListActivity)
+                isBound = true
+
+                if (pendingPlayback != null) {
+                    service.setPlaylist(
+                        pendingPlayback.songs,
+                        pendingPlayback.startIndex
+                    )
+                    playerPanelController.expandWhenReady()
+                } else {
+                    val current = service.getCurrentSong()
+                    if (current != null) {
+                        showMiniPlayer(current, service.isPlaying())
+                        songAdapter.setCurrentPlayingId(current.id)
+                    } else {
+                        tryRestoreLastSong()
+                    }
+                }
+
+                playerPanelController.updateModeButtonIcon(service.getPlaybackMode())
+                startMiniProgressPolling()
+            },
+            onServiceDisconnected = {
+                musicService = null
+                isBound = false
+            }
+        )
+    }
 
     private val queueSheet: QueueSheetController by lazy {
         QueueSheetController(
@@ -227,6 +251,18 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         )
     }
 
+    private val playbackProgressController: PlaybackProgressController by lazy {
+        PlaybackProgressController(
+            getMusicService = { musicService },
+            isPlayerVisible = { playerPanelController.isVisible },
+            onProgress = { currentMs, totalMs ->
+                playerPanelController.updateProgress(currentMs, totalMs)
+                queueSheet.updateProgress(currentMs, totalMs)
+                lyricsPanelController.syncWithPosition(currentMs.toLong())
+            }
+        )
+    }
+
     private val topBarController by lazy {
         TopBarController(
             activity = this,
@@ -260,22 +296,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     enum class SortType { TITLE, ARTIST, DURATION, DATE_ADDED, MOST_PLAYED }
 
-    private val uiHandler = Handler(Looper.getMainLooper())
-    private val miniProgressPoller = object : Runnable {
-        override fun run() {
-            val service = musicService
-            if (service != null && playerPanelController.isVisible) {
-                val current = service.getCurrentPosition()
-                val total = service.getDuration()
-
-                playerPanelController.updateProgress(current, total)
-                queueSheet.updateProgress(current, total)
-                lyricsPanelController.syncWithPosition(current.toLong())
-            }
-            uiHandler.postDelayed(this, 500)
-        }
-    }
-
     private val pickCoverLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -293,38 +313,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             loadPlaylists()
         }
         pendingCoverPlaylistId = null
-    }
-
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val binder = service as MusicService.MusicBinder
-            musicService = binder.getService()
-            musicService?.setListener(this@SongListActivity)
-            isBound = true
-
-            val pending = pendingSongList
-            if (pending != null) {
-                pendingSongList = null
-                musicService?.setPlaylist(pending, pendingStartIndex)
-                playerPanelController.expandWhenReady()
-            } else {
-                val current = musicService?.getCurrentSong()
-                if (current != null) {
-                    showMiniPlayer(current, musicService?.isPlaying() == true)
-                    songAdapter.setCurrentPlayingId(current.id)
-                } else {
-                    tryRestoreLastSong()
-                }
-            }
-
-            musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
-            startMiniProgressPolling()
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            musicService = null
-            isBound = false
-        }
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -347,38 +335,25 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 
-    // Lanza el dialogo de confirmacion del sistema para borrar el archivo
-    // (Android 10 via RecoverableSecurityException, Android 11+ via
-    // MediaStore.createDeleteRequest). Si el usuario acepta, el sistema ya
-    // borro el archivo y solo falta limpiar los datos propios de la app.
     private val deleteSongIntentSenderLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-        val song = pendingDeleteSong
-        pendingDeleteSong = null
-        if (result.resultCode == RESULT_OK && song != null) {
-            finalizeSongDeletion(song)
-        } else {
-            Toast.makeText(this, "No se elimino la cancion", Toast.LENGTH_SHORT).show()
-        }
+        songDeletionController.onDeleteIntentResult(result.resultCode)
     }
 
-    // Solo se usa en Android 9 (API 28) o menos, donde borrar un archivo de
-    // otra app con MediaStore todavia requiere este permiso en tiempo real.
     private val writeStoragePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        val song = pendingDeleteSong
-        if (granted && song != null) {
-            performDeleteFromDevice(song)
-        } else {
-            pendingDeleteSong = null
-            Toast.makeText(
-                this,
-                "Se necesita permiso para eliminar el archivo",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
+        songDeletionController.onWriteStoragePermissionResult(granted)
+    }
+
+    private val songDeletionController: SongDeletionController by lazy {
+        SongDeletionController(
+            activity = this,
+            deleteSongIntentSenderLauncher = deleteSongIntentSenderLauncher,
+            writeStoragePermissionLauncher = writeStoragePermissionLauncher,
+            onSongDeleted = ::finalizeSongDeletion
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -401,38 +376,49 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         val serviceIntent = Intent(this, MusicService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
-        bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+        bindService(
+            serviceIntent,
+            musicServiceConnectionController.connection,
+            Context.BIND_AUTO_CREATE
+        )
 
         topBarController.startMascotAnimation()
     }
+    private val monitoHandler = Handler(Looper.getMainLooper())
 
     private var monitoBlinkRunnable: Runnable? = null
 
     private fun resetMonitoToTop() {
         // Se llama al cerrar el panel: cancela cualquier bajada/parpadeo
-        // pendiente y deja al monito quieto en su frame inicial (arriba,
-        // cuerda corta), para que la proxima vez que abras el panel no se
-        // alcance a ver un instante el estado anterior (aterrizado) durante
-        // el fade-in del onSlide.
-        monitoBlinkRunnable?.let { uiHandler.removeCallbacks(it) }
+        // pendiente y deja al monito quieto en su frame inicial.
+        monitoBlinkRunnable?.let { monitoHandler.removeCallbacks(it) }
+
+        monitoBlinkRunnable = null
+
         (ivMonito.drawable as? AnimationDrawable)?.stop()
         ivMonito.setImageResource(R.drawable.ic_monito_frame1)
     }
 
     private fun startMonitoAnimation() {
-        // Si ya habia una bajada pendiente (p.ej. abriste/cerraste muy rapido),
-        // se cancela para que no se encimen dos animaciones.
-        monitoBlinkRunnable?.let { uiHandler.removeCallbacks(it) }
+        // Si ya habia una animacion pendiente, la cancelamos para evitar
+        // que se acumulen varias animaciones.
+        monitoBlinkRunnable?.let { monitoHandler.removeCallbacks(it) }
+
+        monitoBlinkRunnable = null
 
         ivMonito.setImageResource(R.drawable.anim_monito_descend)
+
         ivMonito.post {
-            val descendDrawable = ivMonito.drawable as? AnimationDrawable ?: return@post
+            val descendDrawable =
+                ivMonito.drawable as? AnimationDrawable
+                    ?: return@post
+
             descendDrawable.start()
 
-            // AnimationDrawable no avisa cuando termina un oneshot, asi que
-            // calculamos la duracion total sumando cada frame y programamos
-            // el cambio a la animacion de parpadeo justo cuando acaba.
+            // AnimationDrawable no proporciona un callback directo cuando
+            // termina, asi que calculamos su duracion total.
             var totalDuration = 0
+
             for (i in 0 until descendDrawable.numberOfFrames) {
                 totalDuration += descendDrawable.getDuration(i)
             }
@@ -441,8 +427,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 ivMonito.setImageResource(R.drawable.anim_monito_blink)
                 (ivMonito.drawable as? AnimationDrawable)?.start()
             }
+
             monitoBlinkRunnable = blinkRunnable
-            uiHandler.postDelayed(blinkRunnable, totalDuration.toLong())
+
+            monitoHandler.postDelayed(
+                blinkRunnable,
+                totalDuration.toLong()
+            )
         }
     }
 
@@ -547,6 +538,23 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun setupHome() {
+        val tabSelector = findViewById<View>(R.id.llTabSelector)
+
+        homeNavigationController = HomeNavigationController(
+            homeView = homeView,
+            tabSelector = tabSelector,
+            rvSongs = rvSongs,
+            rvPlaylists = rvPlaylists,
+            emptyState = tvEmptyState,
+            btnSearch = btnSearch,
+            btnSort = btnSort,
+            btnSettings = btnSettings,
+            topBarController = topBarController,
+            onHomeShown = {
+                homeController.refresh()
+            }
+        )
+
         homeController = HomeController(
             context = this,
             root = homeView,
@@ -585,11 +593,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     }
                 }
             },
-            onOpenSongs = { showSongsHomeTarget() }
+            onOpenSongs = { homeNavigationController.showSongs() }
         )
 
-        findViewById<View>(R.id.btnHomeSongs).setOnClickListener { showSongsHomeTarget() }
-        findViewById<View>(R.id.btnHomePlaylists).setOnClickListener { showPlaylistsHomeTarget() }
+        findViewById<View>(R.id.btnHomeSongs).setOnClickListener { homeNavigationController.showSongs() }
+        findViewById<View>(R.id.btnHomePlaylists).setOnClickListener { homeNavigationController.showPlaylists() }
         findViewById<View>(R.id.btnHomeFavorites).setOnClickListener {
             openPlaylistDetail(PlaylistRepository.getPlaylistById(this, PlaylistRepository.FAVORITES_PLAYLIST_ID)
                 ?: return@setOnClickListener)
@@ -605,41 +613,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         // La Activity abre directamente en Home. Las listas siguen disponibles
         // desde los accesos de Home y conservan las dos pestañas existentes.
-        showHome()
+        homeNavigationController.showHome()
     }
 
     private fun showHome() {
-        // Primero bloqueamos/ocultamos las listas y cancelamos cualquier
-        // animacion de cambio de pestaña. Esto evita que una animacion
-        // pendiente vuelva a hacer visible rvSongs despues de entrar a Home.
-        rvSongs.animate().cancel()
-        rvPlaylists.animate().cancel()
-        rvSongs.translationX = 0f
-        rvPlaylists.translationX = 0f
-        rvSongs.visibility = View.GONE
-        rvPlaylists.visibility = View.GONE
-        tvEmptyState.visibility = View.GONE
-
-        topBarController.setHomeActive(true)
-        homeView.visibility = View.VISIBLE
-        homeView.bringToFront()
-        findViewById<View>(R.id.llTabSelector).visibility = View.GONE
-        btnSearch.visibility = View.GONE
-        btnSort.visibility = View.GONE
-        btnSettings.visibility = View.VISIBLE
-        homeController.refresh()
-    }
-
-    private fun showSongsHomeTarget() {
-        homeView.visibility = View.GONE
-        findViewById<View>(R.id.llTabSelector).visibility = View.VISIBLE
-        topBarController.openSongsFromHome()
-    }
-
-    private fun showPlaylistsHomeTarget() {
-        homeView.visibility = View.GONE
-        findViewById<View>(R.id.llTabSelector).visibility = View.VISIBLE
-        topBarController.openPlaylistsFromHome()
+        homeNavigationController.showHome()
     }
 
     private fun setupEdgeToEdge() {
@@ -710,12 +688,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun startMiniProgressPolling() {
-        uiHandler.removeCallbacks(miniProgressPoller)
-        uiHandler.post(miniProgressPoller)
+        playbackProgressController.start()
     }
 
     private fun stopMiniProgressPolling() {
-        uiHandler.removeCallbacks(miniProgressPoller)
+        playbackProgressController.stop()
     }
 
     // ---------- Datos y permisos ----------
@@ -899,71 +876,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             Log.d("MP3_PANEL", "openPlayer: llamando playerPanelController.expandWhenReady()")
             playerPanelController.expandWhenReady()
         } else {
-            pendingSongList = playlist
-            pendingStartIndex = startIndex
+            musicServiceConnectionController.queuePlayback(playlist, startIndex)
         }
     }
 
     // ---------- Eliminar cancion del dispositivo ----------
 
-    /**
-     * Punto de entrada desde el menu de tres puntos (PlaylistDialogs, ya
-     * mostro su propio dialogo de confirmacion). Segun la version de
-     * Android, borrar un archivo que la app no creo requiere un flujo
-     * distinto: Android 11+ pide confirmacion nativa via
-     * MediaStore.createDeleteRequest, Android 10 puede lanzar
-     * RecoverableSecurityException al intentar borrar directo, y en
-     * versiones anteriores alcanza con el permiso de escritura clasico.
-     */
-    private fun requestDeleteSongFromDevice(song: Song) {
-        pendingDeleteSong = song
-        performDeleteFromDevice(song)
-    }
-
-    private fun performDeleteFromDevice(song: Song) {
-        when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
-                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, listOf(song.uri))
-                deleteSongIntentSenderLauncher.launch(
-                    IntentSenderRequest.Builder(pendingIntent.intentSender).build()
-                )
-            }
-            Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> {
-                try {
-                    contentResolver.delete(song.uri, null, null)
-                    pendingDeleteSong = null
-                    finalizeSongDeletion(song)
-                } catch (e: RecoverableSecurityException) {
-                    deleteSongIntentSenderLauncher.launch(
-                        IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build()
-                    )
-                }
-            }
-            else -> {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                    == PackageManager.PERMISSION_GRANTED
-                ) {
-                    try {
-                        contentResolver.delete(song.uri, null, null)
-                        pendingDeleteSong = null
-                        finalizeSongDeletion(song)
-                    } catch (e: SecurityException) {
-                        pendingDeleteSong = null
-                        Toast.makeText(this, "No se pudo eliminar el archivo", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    writeStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                }
-            }
-        }
-    }
-
-    /**
-     * El archivo ya se borro del dispositivo (MediaStore/almacenamiento):
-     * ahora limpiamos lo que la app guarda sobre esa cancion (playlists,
-     * nombre editado, letra guardada), la sacamos de la reproduccion
-     * actual si era la que estaba sonando, y recargamos la lista.
-     */
     private fun finalizeSongDeletion(song: Song) {
         PlaylistRepository.removeSongFromAllPlaylists(this, song.id)
         SongMetadataRepository.removeOverride(this, song.id)
@@ -1059,7 +977,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         queueSheet.dismiss()
         lyricsPanelController.cancelAnimations()
         if (isBound) {
-            unbindService(connection)
+            unbindService(musicServiceConnectionController.connection)
             isBound = false
         }
     }
