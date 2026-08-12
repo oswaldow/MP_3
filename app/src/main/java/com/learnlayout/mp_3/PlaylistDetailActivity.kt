@@ -7,22 +7,16 @@ import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.IBinder
 import android.view.View
-import android.widget.ImageButton
-import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import com.learnlayout.mp_3.databinding.ActivityPlaylistDetailBinding
 
 class PlaylistDetailActivity : AppCompatActivity() {
 
-    private lateinit var btnBack: ImageButton
-    private lateinit var btnPlayAll: ImageButton
-    private lateinit var tvPlaylistTitle: TextView
-    private lateinit var tvEmptyPlaylist: TextView
-    private lateinit var rvPlaylistSongs: RecyclerView
+    private lateinit var binding: ActivityPlaylistDetailBinding
 
     private lateinit var playlistId: String
     private var playlistSongs: MutableList<Song> = mutableListOf()
@@ -60,9 +54,8 @@ class PlaylistDetailActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_playlist_detail)
-
-        bindViews()
+        binding = ActivityPlaylistDetailBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
         val id = intent.getStringExtra("playlist_id")
         if (id == null) {
@@ -71,35 +64,27 @@ class PlaylistDetailActivity : AppCompatActivity() {
         }
         playlistId = id
 
-        btnBack.setOnClickListener { finish() }
+        binding.btnBack.setOnClickListener { finish() }
 
-        btnPlayAll.setOnClickListener {
+        binding.btnPlayAll.setOnClickListener {
             if (playlistSongs.isNotEmpty()) {
                 openPlayer(0)
             }
         }
 
-        rvPlaylistSongs.layoutManager = LinearLayoutManager(this)
+        binding.rvPlaylistSongs.layoutManager = LinearLayoutManager(this)
         songAdapter = SongAdapter(
             emptyList(),
             onItemClick = { position -> openPlayer(position) },
             onMenuClick = { position -> confirmRemoveSong(position) }
         )
-        rvPlaylistSongs.adapter = songAdapter
+        binding.rvPlaylistSongs.adapter = songAdapter
 
         loadPlaylistSongs()
 
         val serviceIntent = Intent(this, MusicService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
-    }
-
-    private fun bindViews() {
-        btnBack = findViewById(R.id.btnBack)
-        btnPlayAll = findViewById(R.id.btnPlayAll)
-        tvPlaylistTitle = findViewById(R.id.tvPlaylistTitle)
-        tvEmptyPlaylist = findViewById(R.id.tvEmptyPlaylist)
-        rvPlaylistSongs = findViewById(R.id.rvPlaylistSongs)
     }
 
     private fun isAutoPlaylist(): Boolean {
@@ -121,7 +106,7 @@ class PlaylistDetailActivity : AppCompatActivity() {
                     PlayCountRepository.getMostPlayedSongIds(this)
             }
 
-            tvPlaylistTitle.text = when (playlistId) {
+            binding.tvPlaylistTitle.text = when (playlistId) {
                 SongListActivity.RECENT_PLAYLIST_ID -> SongListActivity.RECENT_PLAYLIST_NAME
                 else -> SongListActivity.MOST_PLAYED_PLAYLIST_NAME
             }
@@ -134,15 +119,15 @@ class PlaylistDetailActivity : AppCompatActivity() {
                 return
             }
 
-            tvPlaylistTitle.text = playlist.name
+            binding.tvPlaylistTitle.text = playlist.name
             playlistSongs = playlist.songIds.mapNotNull { songsById[it] }.toMutableList()
         }
 
         songAdapter.updateData(playlistSongs)
 
         val hasSongs = playlistSongs.isNotEmpty()
-        tvEmptyPlaylist.visibility = if (hasSongs) View.GONE else View.VISIBLE
-        rvPlaylistSongs.visibility = if (hasSongs) View.VISIBLE else View.GONE
+        binding.tvEmptyPlaylist.visibility = if (hasSongs) View.GONE else View.VISIBLE
+        binding.rvPlaylistSongs.visibility = if (hasSongs) View.VISIBLE else View.GONE
     }
 
     private fun confirmRemoveSong(position: Int) {

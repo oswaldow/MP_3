@@ -446,6 +446,99 @@ class MusicService : Service() {
         return true
     }
 
+    /**
+     * Elimina todas las canciones que vienen después
+     * de la canción que está sonando.
+     *
+     * La canción actual permanece intacta.
+     * La reproducción no se detiene.
+     *
+     * @return cantidad de canciones eliminadas.
+     */
+    fun clearUpcomingQueue(): Int {
+
+        if (songList.isEmpty()) {
+            return 0
+        }
+
+        if (currentIndex !in songList.indices) {
+            return 0
+        }
+
+        /*
+         * Si no hay ninguna canción después
+         * de la actual, no hay nada que limpiar.
+         */
+        if (
+            currentIndex >=
+            songList.lastIndex
+        ) {
+            return 0
+        }
+
+        cancelCrossfadeIfAny()
+
+        /*
+         * Guardamos solamente:
+         *
+         * 0 ... currentIndex
+         *
+         * La canción actual queda incluida.
+         */
+        val songsToKeep =
+            songList
+                .subList(
+                    0,
+                    currentIndex + 1
+                )
+                .toList()
+
+        val removedCount =
+            songList.size -
+                    songsToKeep.size
+
+        /*
+         * Canciones que realmente desaparecen.
+         */
+        val removedSongs =
+            songList
+                .drop(currentIndex + 1)
+
+        songList =
+            songsToKeep
+
+        /*
+         * También eliminamos esas canciones
+         * de la lista original.
+         *
+         * Esto hace que limpiar la cola funcione
+         * correctamente incluso si estamos en SHUFFLE.
+         */
+        val removedIds =
+            removedSongs
+                .map { it.id }
+                .toSet()
+
+        originalList =
+            originalList.filter {
+                it.id !in removedIds
+            }
+
+        /*
+         * Seguridad para mantener siempre una lista
+         * base válida mientras haya reproducción.
+         */
+        if (
+            originalList.isEmpty() &&
+            songList.isNotEmpty()
+        ) {
+            originalList =
+                songList
+        }
+
+        return removedCount
+    }
+
     // Inserta una cancion justo despues de la actual, para que suene a
     // continuacion (como "Agregar a la cola" en Spotify). Si aun no hay
     // nada reproduciendose, simplemente arranca la reproduccion con ella.
@@ -783,7 +876,7 @@ class MusicService : Service() {
         progressRunnable?.let { handler.removeCallbacks(it) }
 
         lastProgressTickNanos = 0L
-        progressRunnable = object : Runnable {
+        val runnable = object : Runnable {
             override fun run() {
                 // DEBUG: si este tick tarda mucho mas de 500ms en llegar,
                 // significa que el hilo principal estuvo bloqueado por algo
@@ -822,7 +915,8 @@ class MusicService : Service() {
                 }
             }
         }
-        handler.post(progressRunnable!!)
+        progressRunnable = runnable
+        handler.post(runnable)
     }
 
     // --- Logica de crossfade ---
@@ -1008,7 +1102,7 @@ class MusicService : Service() {
 
         lastFadeTickNanos = 0L
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
-        crossfadeRunnable = object : Runnable {
+        val crossfadeRunnableLocal = object : Runnable {
             override fun run() {
                 if (!isCrossfading) return
 
@@ -1085,7 +1179,8 @@ class MusicService : Service() {
                 }
             }
         }
-        handler.post(crossfadeRunnable!!)
+        crossfadeRunnable = crossfadeRunnableLocal
+        handler.post(crossfadeRunnableLocal)
 
         val fnMs = (System.nanoTime() - fnStart) / 1_000_000
         Log.d(TAG_XFADE, "beginCrossfade() function completa en ${fnMs}ms")

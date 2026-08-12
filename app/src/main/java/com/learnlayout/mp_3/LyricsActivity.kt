@@ -144,11 +144,12 @@ class LyricsActivity : AppCompatActivity() {
         btnBack.setOnClickListener { finish() }
 
         btnLyricsEdit.setOnClickListener {
-            val prefill = when {
-                currentLines.isNotEmpty() -> currentLines.joinToString("\n")
-                lastLoadedSyncedLines != null -> lastLoadedSyncedLines!!.joinToString("\n") { it.text }
-                lastLoadedPlainText != null -> lastLoadedPlainText!!
-                else -> ""
+            val prefill = if (currentLines.isNotEmpty()) {
+                currentLines.joinToString("\n")
+            } else {
+                lastLoadedSyncedLines?.joinToString("\n") { it.text }
+                    ?: lastLoadedPlainText
+                    ?: ""
             }
             etLyricsRaw.setText(prefill)
             lyricsEditOverlay.visibility = View.VISIBLE
@@ -275,11 +276,9 @@ class LyricsActivity : AppCompatActivity() {
     // ==================== MODO DE SINCRONIZACION MANUAL ====================
 
     private fun startManualSyncMode() {
-        val baseLines: List<String> = when {
-            lastLoadedSyncedLines != null -> lastLoadedSyncedLines!!.map { it.text }
-            lastLoadedPlainText != null -> lastLoadedPlainText!!.lines().filter { it.isNotBlank() }
-            else -> emptyList()
-        }
+        val baseLines: List<String> = lastLoadedSyncedLines?.map { it.text }
+            ?: lastLoadedPlainText?.lines()?.filter { it.isNotBlank() }
+            ?: emptyList()
         if (baseLines.isEmpty()) {
             etLyricsRaw.setText("")
             lyricsEditOverlay.visibility = View.VISIBLE
@@ -424,7 +423,12 @@ class LyricsActivity : AppCompatActivity() {
             return
         }
 
-        val lines = currentLines.indices.map { i -> LyricsLine(timeMs = manualTimes[i]!!, text = currentLines[i]) }
+        val lines = currentLines.indices.map { i ->
+            val timeMs = requireNotNull(manualTimes[i]) {
+                "manualTimes[$i] es null pese a la validacion previa"
+            }
+            LyricsLine(timeMs = timeMs, text = currentLines[i])
+        }
         val result = LyricsResult(
             plainLyrics = currentLines.joinToString("\n"),
             syncedLines = lines,
