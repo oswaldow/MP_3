@@ -235,13 +235,6 @@ class QueueSheetController(
             saveQueueAsPlaylist()
         }
 
-        view.findViewById<TextView>(
-            R.id.btnQueueClear
-        ).setOnClickListener {
-
-            clearUpcoming()
-        }
-
         btnModeNormal?.setOnClickListener {
 
             getMusicService()
@@ -783,34 +776,6 @@ class QueueSheetController(
             refreshHeader()
             refreshList()
         }
-    }
-
-    private fun clearUpcoming() {
-
-        val removed =
-            getMusicService()
-                ?.clearUpcomingQueue()
-                ?: 0
-
-        if (removed <= 0) {
-
-            Toast.makeText(
-                activity,
-                "No hay canciones pendientes para limpiar",
-                Toast.LENGTH_SHORT
-            ).show()
-
-            return
-        }
-
-        Toast.makeText(
-            activity,
-            "$removed canciones quitadas de la cola",
-            Toast.LENGTH_SHORT
-        ).show()
-
-        refreshList()
-        refreshHeader()
     }
 
     private fun saveQueueAsPlaylist() {
