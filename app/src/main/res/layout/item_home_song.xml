@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="156dp"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="12dp"
+    android:orientation="vertical"
+    android:clickable="true"
+    android:focusable="true"
+    android:background="?attr/selectableItemBackgroundBorderless"
+    android:paddingBottom="4dp">
+
+    <ImageView
+        android:id="@+id/ivHomeSongArt"
+        android:layout_width="156dp"
+        android:layout_height="156dp"
+        android:background="@drawable/bg_album_art_list"
+        android:clipToOutline="true"
+        android:contentDescription="Carátula"
+        android:padding="28dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/ic_music_note"
+        android:tint="@color/spotify_gray" />
+
+    <TextView
+        android:id="@+id/tvHomeSongTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="9dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="@color/text_primary_light"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvHomeSongArtist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="@color/text_secondary_light"
+        android:textSize="12sp" />
+</LinearLayout>

@@ -368,6 +368,177 @@ class MusicService : Service() {
         }
     }
 
+    /**
+     * Elimina una canción de la cola sin detener la reproducción actual.
+     *
+     * La canción que está sonando no se puede eliminar.
+     *
+     * La eliminación se mantiene también cuando estamos
+     * en modo SHUFFLE, para que la canción no vuelva a aparecer
+     * al cambiar posteriormente a reproducción normal.
+     */
+    fun removeQueueItem(index: Int): Boolean {
+
+        if (index !in songList.indices) {
+            return false
+        }
+
+        // No permitimos eliminar la canción que está sonando.
+        if (index == currentIndex) {
+            return false
+        }
+
+        if (songList.size <= 1) {
+            return false
+        }
+
+        cancelCrossfadeIfAny()
+
+        val songToRemove =
+            songList[index]
+
+        /*
+         * Eliminar de la cola visible.
+         */
+        val newQueue =
+            songList.toMutableList()
+
+        newQueue.removeAt(index)
+
+        songList =
+            newQueue
+
+        /*
+         * Si eliminamos una canción que estaba
+         * antes de la canción actual, el índice
+         * actual debe retroceder una posición.
+         */
+        if (index < currentIndex) {
+            currentIndex--
+        }
+
+        /*
+         * También la eliminamos de originalList.
+         *
+         * Esto es especialmente importante en SHUFFLE:
+         * si solamente elimináramos de songList,
+         * la canción volvería cuando se desactive
+         * el modo aleatorio.
+         */
+        originalList =
+            originalList.filter {
+                it.id != songToRemove.id
+            }
+
+        /*
+         * Seguridad: si por alguna razón originalList
+         * quedara vacía pero todavía existe una cola,
+         * mantenemos la cola actual como base.
+         */
+        if (
+            originalList.isEmpty() &&
+            songList.isNotEmpty()
+        ) {
+            originalList =
+                songList
+        }
+
+        return true
+    }
+
+    /**
+     * Elimina todas las canciones que vienen después
+     * de la canción que está sonando.
+     *
+     * La canción actual permanece intacta.
+     * La reproducción no se detiene.
+     *
+     * @return cantidad de canciones eliminadas.
+     */
+    fun clearUpcomingQueue(): Int {
+
+        if (songList.isEmpty()) {
+            return 0
+        }
+
+        if (currentIndex !in songList.indices) {
+            return 0
+        }
+
+        /*
+         * Si no hay ninguna canción después
+         * de la actual, no hay nada que limpiar.
+         */
+        if (
+            currentIndex >=
+            songList.lastIndex
+        ) {
+            return 0
+        }
+
+        cancelCrossfadeIfAny()
+
+        /*
+         * Guardamos solamente:
+         *
+         * 0 ... currentIndex
+         *
+         * La canción actual queda incluida.
+         */
+        val songsToKeep =
+            songList
+                .subList(
+                    0,
+                    currentIndex + 1
+                )
+                .toList()
+
+        val removedCount =
+            songList.size -
+                    songsToKeep.size
+
+        /*
+         * Canciones que realmente desaparecen.
+         */
+        val removedSongs =
+            songList
+                .drop(currentIndex + 1)
+
+        songList =
+            songsToKeep
+
+        /*
+         * También eliminamos esas canciones
+         * de la lista original.
+         *
+         * Esto hace que limpiar la cola funcione
+         * correctamente incluso si estamos en SHUFFLE.
+         */
+        val removedIds =
+            removedSongs
+                .map { it.id }
+                .toSet()
+
+        originalList =
+            originalList.filter {
+                it.id !in removedIds
+            }
+
+        /*
+         * Seguridad para mantener siempre una lista
+         * base válida mientras haya reproducción.
+         */
+        if (
+            originalList.isEmpty() &&
+            songList.isNotEmpty()
+        ) {
+            originalList =
+                songList
+        }
+
+        return removedCount
+    }
+
     // Inserta una cancion justo despues de la actual, para que suene a
     // continuacion (como "Agregar a la cola" en Spotify). Si aun no hay
     // nada reproduciendose, simplemente arranca la reproduccion con ella.

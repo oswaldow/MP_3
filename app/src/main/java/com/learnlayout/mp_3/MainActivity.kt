@@ -378,31 +378,110 @@ class MainActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private fun refreshQueueList() {
         val service = musicService ?: return
+
         val adapter = QueueAdapter(
             service.getSongList().toMutableList(),
             service.getCurrentIndex(),
+
+            // Tocar una canción de la cola.
             onItemClick = { position ->
                 musicService?.playAt(position)
                 activeQueueDialog?.dismiss()
             },
+
+            // Arrastrar una canción arriba/abajo.
             onMoveFinished = { from, to ->
                 musicService?.moveQueueItem(from, to)
+                refreshQueueList()
+            },
+
+            // Eliminar una canción de la cola.
+            onRemove = { position ->
+                val removed =
+                    musicService?.removeQueueItem(position) == true
+
+                if (removed) {
+                    Toast.makeText(
+                        this,
+                        "Canción quitada de la cola",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    refreshQueueList()
+                } else {
+                    // Si se intentó eliminar la canción actual,
+                    // simplemente reconstruimos la lista para
+                    // devolver visualmente el elemento a su sitio.
+                    refreshQueueList()
+                }
             }
         )
+
         queueRecyclerView?.adapter = adapter
 
         val touchHelper = ItemTouchHelper(
-            QueueTouchHelperCallback(adapter) { position ->
-                val current = service.getCurrentIndex()
-                val target = if (position > current) current + 1 else current
-                musicService?.moveQueueItem(position, target)
-                Toast.makeText(this, "Sonará a continuación", Toast.LENGTH_SHORT).show()
-                refreshQueueList()
-            }
+            QueueTouchHelperCallback(
+                adapter = adapter,
+
+                // Swipe hacia la derecha:
+                // colocar la canción inmediatamente después
+                // de la canción que está sonando.
+                onSwipeToPlayNext = { position ->
+
+                    val current =
+                        service.getCurrentIndex()
+
+                    val target =
+                        if (position > current) {
+                            current + 1
+                        } else {
+                            current
+                        }
+
+                    musicService?.moveQueueItem(
+                        position,
+                        target
+                    )
+
+                    Toast.makeText(
+                        this,
+                        "Sonará a continuación",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    refreshQueueList()
+                },
+
+                // Swipe hacia la izquierda:
+                // quitar la canción de la cola.
+                onSwipeToRemove = { position ->
+
+                    val removed =
+                        musicService?.removeQueueItem(position) == true
+
+                    if (removed) {
+                        Toast.makeText(
+                            this,
+                            "Canción quitada de la cola",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+
+                    // Tanto si se eliminó como si se intentó
+                    // eliminar la canción actual, refrescamos
+                    // para que RecyclerView quede sincronizado.
+                    refreshQueueList()
+                }
+            )
         )
+
         touchHelper.attachToRecyclerView(queueRecyclerView)
+
         queueTouchHelper = touchHelper
-        adapter.dragStartListener = { viewHolder -> touchHelper.startDrag(viewHolder) }
+
+        adapter.dragStartListener = { viewHolder ->
+            touchHelper.startDrag(viewHolder)
+        }
     }
 
     private fun refreshQueueHeader() {

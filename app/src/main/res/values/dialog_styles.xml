@@ -1,18 +1,162 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <resources>
 
-    <style name="RoundedBottomSheetDialog" parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
-        <item name="bottomSheetStyle">@style/RoundedBottomSheet</item>
+    <!-- ========================================================= -->
+    <!-- BottomSheet existente de la aplicación                     -->
+    <!-- ========================================================= -->
+
+    <style
+        name="RoundedBottomSheetDialog"
+        parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
+
+        <item name="bottomSheetStyle">
+            @style/RoundedBottomSheet
+        </item>
+
     </style>
 
-    <style name="RoundedBottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
-        <item name="android:background">@drawable/bg_bottom_sheet_top_rounded</item>
+    <style
+        name="RoundedBottomSheet"
+        parent="Widget.MaterialComponents.BottomSheet.Modal">
+
+        <item name="android:background">
+            @drawable/bg_bottom_sheet_top_rounded
+        </item>
+
     </style>
 
-    <style name="RoundedAlertDialog" parent="Theme.AppCompat.Dialog.Alert">
-        <item name="android:windowBackground">@drawable/bg_dialog_rounded</item>
-        <item name="android:windowMinWidthMajor">85%</item>
-        <item name="android:windowMinWidthMinor">85%</item>
+
+    <!-- ========================================================= -->
+    <!-- NUEVO: BottomSheet fullscreen de la cola                   -->
+    <!-- ========================================================= -->
+
+    <style
+        name="QueueFullscreenBottomSheetDialog"
+        parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
+
+        <item name="bottomSheetStyle">
+            @style/QueueFullscreenBottomSheet
+        </item>
+
+        <item name="android:windowBackground">
+            @android:color/transparent
+        </item>
+
+        <item name="android:backgroundDimEnabled">
+            false
+        </item>
+
+        <item name="android:statusBarColor">
+            #000000
+        </item>
+
+        <item name="android:navigationBarColor">
+            #000000
+        </item>
+
+    </style>
+
+    <style
+        name="QueueFullscreenBottomSheet"
+        parent="Widget.MaterialComponents.BottomSheet.Modal">
+
+        <item name="android:background">
+            @android:color/transparent
+        </item>
+
+        <item name="android:elevation">
+            0dp
+        </item>
+
+    </style>
+
+
+    <!-- ========================================================= -->
+    <!-- NUEVO: Dialog fullscreen de la cola (sin BottomSheet)      -->
+    <!-- ========================================================= -->
+    <!--
+         Reemplaza a QueueFullscreenBottomSheetDialog.
+
+         Un Dialog normal, NO un BottomSheetDialog: asi no
+         hereda la logica de peek height / gesture inset de
+         BottomSheetBehavior, que dejaba un hueco en el borde
+         inferior por el que se veia MainActivity detras.
+    -->
+
+    <style
+        name="QueueFullscreenDialog"
+        parent="Theme.MaterialComponents.DayNight.Dialog">
+
+        <item name="android:windowNoTitle">
+            true
+        </item>
+
+        <item name="android:windowIsFloating">
+            false
+        </item>
+
+        <item name="android:windowBackground">
+            @android:color/transparent
+        </item>
+
+        <item name="android:windowContentOverlay">
+            @null
+        </item>
+
+        <item name="android:backgroundDimEnabled">
+            false
+        </item>
+
+        <item name="android:statusBarColor">
+            #000000
+        </item>
+
+        <item name="android:navigationBarColor">
+            #000000
+        </item>
+
+        <item name="android:windowAnimationStyle">
+            @style/QueueFullscreenDialogAnimation
+        </item>
+
+    </style>
+
+    <style
+        name="QueueFullscreenDialogAnimation"
+        parent="android:Animation">
+
+        <item name="android:windowEnterAnimation">
+            @anim/activity_slide_up_in
+        </item>
+
+        <item name="android:windowExitAnimation">
+            @anim/activity_slide_down_out
+        </item>
+
+    </style>
+
+
+    <!-- ========================================================= -->
+    <!-- AlertDialog existente                                      -->
+    <!-- ========================================================= -->
+
+    <style
+        name="RoundedAlertDialog"
+        parent="Theme.AppCompat.Dialog.Alert">
+
+        <item name="android:windowBackground">
+            @drawable/bg_dialog_rounded
+        </item>
+
+        <item name="android:windowMinWidthMajor">
+            85%
+        </item>
+
+        <item name="android:windowMinWidthMinor">
+            85%
+        </item>
+
     </style>
 
 </resources>

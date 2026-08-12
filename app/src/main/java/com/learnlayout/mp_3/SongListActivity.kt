@@ -54,6 +54,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnSettings: ImageButton
     private lateinit var tabSongs: TextView
     private lateinit var tabPlaylists: TextView
+    private lateinit var homeView: View
+    private lateinit var homeController: HomeController
 
     private lateinit var playerPanel: FrameLayout
     private lateinit var groupExpanded: View
@@ -184,6 +186,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             },
             onShowQueue = { queueSheet.show() },
             onFavoriteToggled = {
+                if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
                 if (topBarController.isPlaylistsTabActive) {
                     loadPlaylists()
                 }
@@ -237,7 +240,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 applyFilterAndSort()
             },
             onSongsTabSelected = { applyFilterAndSort() },
-            onPlaylistsTabSelected = { loadPlaylists() }
+            onPlaylistsTabSelected = { loadPlaylists() },
+            onHomeRequested = { showHome() }
         )
     }
 
@@ -372,6 +376,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         bindViews()
         topBarController.setup()
+        setupHome()
         setupPlayerPanel()
         setupLyricsPanel()
         setupEdgeToEdge()
@@ -466,6 +471,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnSettings = findViewById(R.id.btnSettings)
         tabSongs = findViewById(R.id.tabSongs)
         tabPlaylists = findViewById(R.id.tabPlaylists)
+        homeView = findViewById(R.id.homeView)
 
         playerPanel = findViewById(R.id.playerPanel)
         groupExpanded = findViewById(R.id.groupExpanded)
@@ -527,6 +533,74 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         rvPlaylists.adapter = playlistAdapter
     }
 
+    private fun setupHome() {
+        homeController = HomeController(
+            context = this,
+            root = homeView,
+            getAllSongs = { allSongs },
+            getCurrentSong = { musicService?.getCurrentSong() },
+            isPlaying = { musicService?.isPlaying() == true },
+            onPlaySong = { song ->
+                val index = allSongs.indexOfFirst { it.id == song.id }
+                if (index >= 0) openPlayer(allSongs, index)
+            },
+            onOpenSongs = { showSongsHomeTarget() }
+        )
+
+        findViewById<View>(R.id.btnHomeSongs).setOnClickListener { showSongsHomeTarget() }
+        findViewById<View>(R.id.btnHomePlaylists).setOnClickListener { showPlaylistsHomeTarget() }
+        findViewById<View>(R.id.btnHomeFavorites).setOnClickListener {
+            openPlaylistDetail(PlaylistRepository.getPlaylistById(this, PlaylistRepository.FAVORITES_PLAYLIST_ID)
+                ?: return@setOnClickListener)
+        }
+        findViewById<View>(R.id.btnHomeRecent).setOnClickListener {
+            openPlaylistDetail(Playlist(RECENT_PLAYLIST_ID, RECENT_PLAYLIST_NAME,
+                PlayCountRepository.getRecentlyPlayedSongIds(this, AUTO_PLAYLIST_LIMIT).toMutableList()))
+        }
+        findViewById<View>(R.id.btnHomeMostPlayed).setOnClickListener {
+            openPlaylistDetail(Playlist(MOST_PLAYED_PLAYLIST_ID, MOST_PLAYED_PLAYLIST_NAME,
+                PlayCountRepository.getMostPlayedSongIds(this, AUTO_PLAYLIST_LIMIT).toMutableList()))
+        }
+
+        // La Activity abre directamente en Home. Las listas siguen disponibles
+        // desde los accesos de Home y conservan las dos pestañas existentes.
+        showHome()
+    }
+
+    private fun showHome() {
+        // Primero bloqueamos/ocultamos las listas y cancelamos cualquier
+        // animacion de cambio de pestaña. Esto evita que una animacion
+        // pendiente vuelva a hacer visible rvSongs despues de entrar a Home.
+        rvSongs.animate().cancel()
+        rvPlaylists.animate().cancel()
+        rvSongs.translationX = 0f
+        rvPlaylists.translationX = 0f
+        rvSongs.visibility = View.GONE
+        rvPlaylists.visibility = View.GONE
+        tvEmptyState.visibility = View.GONE
+
+        topBarController.setHomeActive(true)
+        homeView.visibility = View.VISIBLE
+        homeView.bringToFront()
+        findViewById<View>(R.id.llTabSelector).visibility = View.GONE
+        btnSearch.visibility = View.GONE
+        btnSort.visibility = View.GONE
+        btnSettings.visibility = View.VISIBLE
+        homeController.refresh()
+    }
+
+    private fun showSongsHomeTarget() {
+        homeView.visibility = View.GONE
+        findViewById<View>(R.id.llTabSelector).visibility = View.VISIBLE
+        topBarController.openSongsFromHome()
+    }
+
+    private fun showPlaylistsHomeTarget() {
+        homeView.visibility = View.GONE
+        findViewById<View>(R.id.llTabSelector).visibility = View.VISIBLE
+        topBarController.openPlaylistsFromHome()
+    }
+
     private fun setupEdgeToEdge() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
@@ -549,6 +623,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 lyricsPanelController.collapse()
             } else if (playerPanelController.isReady && playerPanelController.isExpanded) {
                 playerPanelController.collapse()
+            } else if (homeView.visibility != View.VISIBLE) {
+                // Desde Canciones/Playlists, el primer Back regresa al Home
+                // en lugar de cerrar la Activity.
+                showHome()
             } else {
                 isEnabled = false
                 onBackPressedDispatcher.onBackPressed()
@@ -659,6 +737,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
 
         applyFilterAndSort()
+        if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
         val t3 = System.currentTimeMillis()
         android.util.Log.d("PERF_DEBUG", "loadSongs() TOTAL: ${t3 - t0} ms")
     }
@@ -706,7 +785,14 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         val hasResults = list.isNotEmpty()
         tvEmptyState.visibility = if (hasResults) View.GONE else View.VISIBLE
-        if (!topBarController.isPlaylistsTabActive) {
+
+        // HOME y la lista de canciones comparten el mismo espacio.
+        // Al cargar/filtrar las canciones, no debemos volver a hacer visible
+        // rvSongs si Home está activo; de lo contrario la lista aparece
+        // detrás del contenido de Home.
+        if (homeView.visibility == View.VISIBLE) {
+            rvSongs.visibility = View.GONE
+        } else if (!topBarController.isPlaylistsTabActive) {
             rvSongs.visibility = if (hasResults) View.VISIBLE else View.GONE
         }
 
@@ -870,6 +956,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             Log.d("MP3_PANEL", "onSongChanged: dentro de runOnUiThread thread=${Thread.currentThread().name}")
             showMiniPlayer(song, musicService?.isPlaying() == true)
             songAdapter.setCurrentPlayingId(song.id)
+            if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
             queueSheet.onSongChanged(song)
         }
     }
@@ -891,6 +978,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             showMiniPlayer(it, musicService?.isPlaying() == true)
             songAdapter.setCurrentPlayingId(it.id)
         }
+        if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
         musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
         startMiniProgressPolling()
 

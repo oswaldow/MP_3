@@ -5,7 +5,6 @@ import android.content.res.ColorStateList
 import android.graphics.drawable.AnimationDrawable
 import android.text.Editable
 import android.text.TextWatcher
-import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -20,16 +19,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import kotlin.math.abs
 
-/**
- * Encapsula la barra superior de SongListActivity: nombre de la app y
- * mascota, busqueda inline, popup de orden, boton de ajustes, y el cambio
- * de pestana Canciones/Playlists (por tap en las pestanas o por swipe
- * horizontal), incluyendo la animacion tipo ViewPager entre ambas listas.
- *
- * No sabe nada de como se cargan canciones o playlists: cuando el usuario
- * cambia de contexto (busca, ordena, cambia de pestana) solo avisa via
- * callbacks y deja que la Activity decida que hacer con los datos.
- */
+
 class TopBarController(
     private val activity: AppCompatActivity,
     private val rootLayout: View,
@@ -48,28 +38,46 @@ class TopBarController(
     private val onSearchQueryChanged: (String) -> Unit,
     private val onSortSelected: (SongListActivity.SortType) -> Unit,
     private val onSongsTabSelected: () -> Unit,
-    private val onPlaylistsTabSelected: () -> Unit
+    private val onPlaylistsTabSelected: () -> Unit,
+    private val onHomeRequested: () -> Unit
 ) {
 
     var isPlaylistsTabActive: Boolean = false
         private set
 
+    private var isHomeActive: Boolean = false
+
     private var isSearchVisible: Boolean = false
 
-    private lateinit var swipeGestureDetector: GestureDetector
+    private var playlistNavigationSession: Boolean = false
 
-    // ---------- Tema dinamico (Material You / PlayerPaletteTheme) ----------
-    // Mismo acento que ya sigue el panel del reproductor (extraido de la
-    // caratula de la cancion actual). Se aplica al titulo "MP_3", los
-    // iconos de buscar/ordenar/config y el fondo de la pestana activa.
-    // El color del borde de la cancion sonando en la lista (bg_item_song_playing)
-    // NO se toca aqui ni en ningun otro lado: eso queda fijo a proposito.
-    // Arranca en spotify_green, el mismo morado que bg_tab_selected ya
-    // traia fijo, para que no haya salto visual antes de que llegue el
-    // primer acento real.
-    private var currentAccentColor: Int = ContextCompat.getColor(activity, R.color.spotify_green)
+    private var swipeDownX = 0f
+    private var swipeDownY = 0f
+    private var swipeTracking = false
+
+    // ---------- Tema dinamico ----------
+
+    private var currentAccentColor: Int =
+        ContextCompat.getColor(
+            activity,
+            R.color.spotify_green
+        )
+
+    // ============================================================
+    // SETUP
+    // ============================================================
 
     fun setup() {
+
+        // El encabezado funciona tambien como acceso rapido al Home.
+        tvAppName.setOnClickListener {
+            onHomeRequested()
+        }
+
+        ivMascot.setOnClickListener {
+            onHomeRequested()
+        }
+
         btnSearch.setOnClickListener {
             toggleInlineSearch()
         }
@@ -79,271 +87,954 @@ class TopBarController(
         }
 
         btnSettings.setOnClickListener {
-            activity.startActivity(Intent(activity, SettingsActivity::class.java))
+            activity.startActivity(
+                Intent(
+                    activity,
+                    SettingsActivity::class.java
+                )
+            )
         }
 
-        etSearch.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                onSearchQueryChanged(s?.toString() ?: "")
+        etSearch.addTextChangedListener(
+            object : TextWatcher {
+
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    count: Int,
+                    after: Int
+                ) {
+                }
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    before: Int,
+                    count: Int
+                ) {
+                    onSearchQueryChanged(
+                        s?.toString() ?: ""
+                    )
+                }
+
+                override fun afterTextChanged(
+                    s: Editable?
+                ) {
+                }
             }
-            override fun afterTextChanged(s: Editable?) {}
-        })
+        )
+
+        // --------------------------------------------------------
+        // CANCIONES
+        // --------------------------------------------------------
 
         tabSongs.setOnClickListener {
             selectSongsTab()
         }
 
+        // --------------------------------------------------------
+        // PLAYLISTS
+        // --------------------------------------------------------
+        //
+        // No se utiliza este boton para entrar desde Canciones.
+        //
+        // La entrada inicial a Playlists se hace desde Home mediante:
+        //
+        //     openPlaylistsFromHome()
+        //
+        // Cuando estamos en Canciones, la pestaña Playlists permanece
+        // oculta.
+        //
+        // Si por alguna razon quedara visible y se toca, solamente
+        // permitimos el cambio si existe una sesion de navegacion
+        // iniciada desde Playlists.
+        //
         tabPlaylists.setOnClickListener {
+
+            if (isPlaylistsTabActive) {
+                return@setOnClickListener
+            }
+
+            if (!playlistNavigationSession) {
+                return@setOnClickListener
+            }
+
             selectPlaylistsTab()
         }
 
-        setupSwipeGesture()
 
         applyAccentColorToViews()
     }
 
+    // ============================================================
+    // ANIMACION DE LA MASCOTA
+    // ============================================================
+
     fun startMascotAnimation() {
-        // .post() asegura que la vista ya este "attachada" a la ventana;
-        // si se llama .start() demasiado pronto, la animacion no arranca.
+
         ivMascot.post {
-            (ivMascot.drawable as? AnimationDrawable)?.start()
+            (
+                    ivMascot.drawable
+                            as? AnimationDrawable
+                    )?.start()
         }
     }
 
-    fun dispatchTouchEvent(ev: MotionEvent) {
-        if (::swipeGestureDetector.isInitialized) {
-            swipeGestureDetector.onTouchEvent(ev)
-        }
-    }
+    // ============================================================
+    // TOUCH
+    // ============================================================
 
-    // ---------- Tema dinamico: aplicacion ----------
 
-    /** Llamado desde SongListActivity cada vez que cambia el acento del panel. */
+    // ============================================================
+    // TEMA DINAMICO
+    // ============================================================
+
+    /**
+     * Llamado desde SongListActivity cada vez que cambia el acento.
+     */
     fun applyAccentColor(color: Int) {
+
         currentAccentColor = color
+
         applyAccentColorToViews()
     }
 
     private fun applyAccentColorToViews() {
-        tvAppName.setTextColor(currentAccentColor)
 
-        val iconTint = ColorStateList.valueOf(currentAccentColor)
-        btnSearch.imageTintList = iconTint
-        btnSort.imageTintList = iconTint
-        btnSettings.imageTintList = iconTint
-
-        styleTabBackgrounds()
-    }
-
-    // Reaplica el fondo de la pestana activa con el acento actual. Se llama
-    // tanto al cambiar de pestana como al cambiar de acento, para que
-    // ambos casos queden siempre sincronizados.
-    private fun styleTabBackgrounds() {
-        val activeTab = if (isPlaylistsTabActive) tabPlaylists else tabSongs
-        val inactiveTab = if (isPlaylistsTabActive) tabSongs else tabPlaylists
-
-        activeTab.setBackgroundResource(R.drawable.bg_tab_selected)
-        activeTab.backgroundTintList = ColorStateList.valueOf(currentAccentColor)
-        activeTab.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-
-        inactiveTab.background = null
-        inactiveTab.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-    }
-
-    private fun toggleInlineSearch() {
-        isSearchVisible = !isSearchVisible
-
-        if (isSearchVisible) {
-            tvAppName.visibility = View.GONE
-            ivMascot.visibility = View.GONE
-            llInlineSearch.visibility = View.VISIBLE
-            btnSort.visibility = View.GONE
-            btnSettings.visibility = View.GONE
-            btnSearch.setImageResource(R.drawable.ic_close)
-            etSearch.requestFocus()
-            val imm = activity.getSystemService(AppCompatActivity.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(etSearch, InputMethodManager.SHOW_IMPLICIT)
-        } else {
-            llInlineSearch.visibility = View.GONE
-            tvAppName.visibility = View.VISIBLE
-            ivMascot.visibility = View.VISIBLE
-            btnSort.visibility = View.VISIBLE
-            btnSettings.visibility = View.VISIBLE
-            btnSearch.setImageResource(R.drawable.ic_search)
-            etSearch.setText("")
-            val imm = activity.getSystemService(AppCompatActivity.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(etSearch.windowToken, 0)
-        }
-    }
-
-    private fun showSortPopup() {
-        val popupView = activity.layoutInflater.inflate(R.layout.popup_sort_menu, null)
-        val popupWindow = PopupWindow(
-            popupView,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            true
+        tvAppName.setTextColor(
+            currentAccentColor
         )
-        popupWindow.isOutsideTouchable = true
-        popupWindow.elevation = 16f
 
-        val tvTitle: TextView = popupView.findViewById(R.id.tvSortTitle)
-        val tvArtist: TextView = popupView.findViewById(R.id.tvSortArtist)
-        val tvDuration: TextView = popupView.findViewById(R.id.tvSortDuration)
-        val tvDateAdded: TextView = popupView.findViewById(R.id.tvSortDateAdded)
-        val tvMostPlayed: TextView = popupView.findViewById(R.id.tvSortMostPlayed)
+        val iconTint =
+            ColorStateList.valueOf(
+                currentAccentColor
+            )
 
-        tvTitle.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.TITLE)
-            popupWindow.dismiss()
-        }
-        tvArtist.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.ARTIST)
-            popupWindow.dismiss()
-        }
-        tvDuration.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.DURATION)
-            popupWindow.dismiss()
-        }
-        tvDateAdded.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.DATE_ADDED)
-            popupWindow.dismiss()
-        }
-        tvMostPlayed.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.MOST_PLAYED)
-            popupWindow.dismiss()
-        }
+        btnSearch.imageTintList =
+            iconTint
 
-        popupWindow.showAsDropDown(btnSort, -180, 12)
-    }
+        btnSort.imageTintList =
+            iconTint
 
-    private fun setupSwipeGesture() {
-        swipeGestureDetector = GestureDetector(activity, object : GestureDetector.SimpleOnGestureListener() {
+        btnSettings.imageTintList =
+            iconTint
 
-            override fun onDown(e: MotionEvent): Boolean {
-                return true
-            }
-
-            override fun onFling(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                velocityX: Float,
-                velocityY: Float
-            ): Boolean {
-                if (e1 == null || isSearchVisible) return false
-
-                val diffX = e2.x - e1.x
-                val diffY = e2.y - e1.y
-
-                val isMostlyHorizontal = abs(diffX) > abs(diffY) * 1.5f
-                val isFastEnough = abs(velocityX) > SWIPE_MIN_VELOCITY
-
-                if (!isMostlyHorizontal || !isFastEnough) return false
-
-                // El dedo se mueve hacia la izquierda para traer la siguiente
-                // pestana (Playlists) desde la derecha; hacia la derecha para
-                // regresar (Canciones), como un ViewPager.
-                val isSwipeLeft = diffX < -SWIPE_MIN_DISTANCE
-                val isSwipeRight = diffX > SWIPE_MIN_DISTANCE
-
-                if (isSwipeLeft && !isPlaylistsTabActive) {
-                    selectPlaylistsTab()
-                    return true
-                }
-
-                if (isSwipeRight && isPlaylistsTabActive) {
-                    selectSongsTab()
-                    return true
-                }
-
-                return false
-            }
-        })
-    }
-
-    private fun selectSongsTab() {
-        if (!isPlaylistsTabActive) return
-
-        isPlaylistsTabActive = false
         styleTabBackgrounds()
-
-        btnSearch.visibility = View.VISIBLE
-
-        onSongsTabSelected()
-
-        // toPlaylists = false: Canciones entra desde la izquierda, Playlists
-        // sale por la derecha.
-        slideTabs(outgoing = rvPlaylists, incoming = rvSongs, toPlaylists = false)
-    }
-
-    private fun selectPlaylistsTab() {
-        if (isPlaylistsTabActive) return
-
-        isPlaylistsTabActive = true
-        styleTabBackgrounds()
-
-        tvEmptyState.visibility = View.GONE
-
-        if (isSearchVisible) {
-            isSearchVisible = false
-            llInlineSearch.visibility = View.GONE
-            tvAppName.visibility = View.VISIBLE
-            ivMascot.visibility = View.VISIBLE
-            btnSort.visibility = View.VISIBLE
-            btnSettings.visibility = View.VISIBLE
-            btnSearch.setImageResource(R.drawable.ic_search)
-            etSearch.setText("")
-        }
-        btnSearch.visibility = View.GONE
-
-        onPlaylistsTabSelected()
-
-        // toPlaylists = true: Playlists entra desde la derecha, Canciones
-        // sale por la izquierda.
-        slideTabs(outgoing = rvSongs, incoming = rvPlaylists, toPlaylists = true)
     }
 
     /**
-     * Desliza dos vistas como si fueran paginas de un ViewPager: la vista
-     * "incoming" arranca completamente fuera de pantalla (a la derecha si
-     * toPlaylists es true, a la izquierda si es false) y se desliza hasta su
-     * posicion normal, mientras "outgoing" se desliza hacia el lado opuesto
-     * hasta salir de pantalla, donde se oculta con GONE.
+     * Reaplica el fondo de la pestaña activa.
      */
-    private fun slideTabs(outgoing: View, incoming: View, toPlaylists: Boolean) {
-        val width = rootLayout.width.takeIf { it > 0 } ?: activity.resources.displayMetrics.widthPixels
-        val widthF = width.toFloat()
+    private fun styleTabBackgrounds() {
+
+        val activeTab =
+            if (isPlaylistsTabActive) {
+                tabPlaylists
+            } else {
+                tabSongs
+            }
+
+        val inactiveTab =
+            if (isPlaylistsTabActive) {
+                tabSongs
+            } else {
+                tabPlaylists
+            }
+
+        activeTab.setBackgroundResource(
+            R.drawable.bg_tab_selected
+        )
+
+        activeTab.backgroundTintList =
+            ColorStateList.valueOf(
+                currentAccentColor
+            )
+
+        activeTab.setTextColor(
+            ContextCompat.getColor(
+                activity,
+                R.color.text_primary_light
+            )
+        )
+
+        inactiveTab.background = null
+
+        inactiveTab.setTextColor(
+            ContextCompat.getColor(
+                activity,
+                R.color.text_secondary_light
+            )
+        )
+    }
+
+    // ============================================================
+    // BUSQUEDA
+    // ============================================================
+
+    private fun toggleInlineSearch() {
+
+        isSearchVisible =
+            !isSearchVisible
+
+        if (isSearchVisible) {
+
+            tvAppName.visibility =
+                View.GONE
+
+            ivMascot.visibility =
+                View.GONE
+
+            llInlineSearch.visibility =
+                View.VISIBLE
+
+            btnSort.visibility =
+                View.GONE
+
+            btnSettings.visibility =
+                View.GONE
+
+            btnSearch.setImageResource(
+                R.drawable.ic_close
+            )
+
+            etSearch.requestFocus()
+
+            val imm =
+                activity.getSystemService(
+                    AppCompatActivity.INPUT_METHOD_SERVICE
+                ) as InputMethodManager
+
+            imm.showSoftInput(
+                etSearch,
+                InputMethodManager.SHOW_IMPLICIT
+            )
+
+        } else {
+
+            llInlineSearch.visibility =
+                View.GONE
+
+            tvAppName.visibility =
+                View.VISIBLE
+
+            ivMascot.visibility =
+                View.VISIBLE
+
+            btnSort.visibility =
+                View.VISIBLE
+
+            btnSettings.visibility =
+                View.VISIBLE
+
+            btnSearch.setImageResource(
+                R.drawable.ic_search
+            )
+
+            etSearch.setText("")
+
+            val imm =
+                activity.getSystemService(
+                    AppCompatActivity.INPUT_METHOD_SERVICE
+                ) as InputMethodManager
+
+            imm.hideSoftInputFromWindow(
+                etSearch.windowToken,
+                0
+            )
+        }
+    }
+
+    // ============================================================
+    // MENU DE ORDEN
+    // ============================================================
+
+    private fun showSortPopup() {
+
+        val popupView =
+            activity.layoutInflater.inflate(
+                R.layout.popup_sort_menu,
+                null
+            )
+
+        val popupWindow =
+            PopupWindow(
+                popupView,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                true
+            )
+
+        popupWindow.isOutsideTouchable =
+            true
+
+        popupWindow.elevation =
+            16f
+
+        val tvTitle: TextView =
+            popupView.findViewById(
+                R.id.tvSortTitle
+            )
+
+        val tvArtist: TextView =
+            popupView.findViewById(
+                R.id.tvSortArtist
+            )
+
+        val tvDuration: TextView =
+            popupView.findViewById(
+                R.id.tvSortDuration
+            )
+
+        val tvDateAdded: TextView =
+            popupView.findViewById(
+                R.id.tvSortDateAdded
+            )
+
+        val tvMostPlayed: TextView =
+            popupView.findViewById(
+                R.id.tvSortMostPlayed
+            )
+
+        tvTitle.setOnClickListener {
+
+            onSortSelected(
+                SongListActivity.SortType.TITLE
+            )
+
+            popupWindow.dismiss()
+        }
+
+        tvArtist.setOnClickListener {
+
+            onSortSelected(
+                SongListActivity.SortType.ARTIST
+            )
+
+            popupWindow.dismiss()
+        }
+
+        tvDuration.setOnClickListener {
+
+            onSortSelected(
+                SongListActivity.SortType.DURATION
+            )
+
+            popupWindow.dismiss()
+        }
+
+        tvDateAdded.setOnClickListener {
+
+            onSortSelected(
+                SongListActivity.SortType.DATE_ADDED
+            )
+
+            popupWindow.dismiss()
+        }
+
+        tvMostPlayed.setOnClickListener {
+
+            onSortSelected(
+                SongListActivity.SortType.MOST_PLAYED
+            )
+
+            popupWindow.dismiss()
+        }
+
+        popupWindow.showAsDropDown(
+            btnSort,
+            -180,
+            12
+        )
+    }
+
+    // ============================================================
+    // SWIPE
+    // ============================================================
+
+    fun dispatchTouchEvent(ev: MotionEvent) {
+
+        if (isSearchVisible || isHomeActive) {
+            return
+        }
+
+        when (ev.actionMasked) {
+
+            MotionEvent.ACTION_DOWN -> {
+                swipeDownX = ev.rawX
+                swipeDownY = ev.rawY
+                swipeTracking = true
+            }
+
+            MotionEvent.ACTION_UP -> {
+
+                if (!swipeTracking) {
+                    return
+                }
+
+                swipeTracking = false
+
+                val diffX =
+                    ev.rawX - swipeDownX
+
+                val diffY =
+                    ev.rawY - swipeDownY
+
+                val absX =
+                    abs(diffX)
+
+                val absY =
+                    abs(diffY)
+
+                /*
+                 * El gesto tiene que ser claramente horizontal.
+                 */
+                if (absX < SWIPE_MIN_DISTANCE) {
+                    return
+                }
+
+                if (absX <= absY * 1.35f) {
+                    return
+                }
+
+                /*
+                 * =====================================================
+                 * SWIPE IZQUIERDA
+                 * =====================================================
+                 *
+                 * diffX < 0
+                 *
+                 * PLAYLISTS -> CANCIONES
+                 * CANCIONES -> PLAYLISTS
+                 *
+                 * Pero solo permitimos el segundo caso cuando la
+                 * navegación comenzó entrando a Playlists desde Home.
+                 */
+
+                if (diffX < 0) {
+
+                    if (
+                        !isPlaylistsTabActive &&
+                        playlistNavigationSession
+                    ) {
+
+                        selectPlaylistsTab()
+                    }
+
+                    /*
+                     * Si estamos en Canciones directamente desde Home,
+                     * el swipe queda bloqueado.
+                     */
+                    return
+                }
+
+                /*
+                 * =====================================================
+                 * SWIPE DERECHA
+                 * =====================================================
+                 *
+                 * diffX > 0
+                 *
+                 * PLAYLISTS -> CANCIONES
+                 *
+                 * CANCIONES:
+                 *     - si venimos de Playlists -> Home
+                 *     - si venimos directamente de Home -> Home
+                 *
+                 * En ambos casos salir de Canciones por la derecha
+                 * lleva a Home.
+                 */
+
+                if (diffX > 0) {
+
+                    /*
+                     * Ya no existe el paso intermedio
+                     * Playlists -> Canciones.
+                     *
+                     * Tanto desde Playlists como desde Canciones,
+                     * el swipe a la derecha regresa directo a Home.
+                     */
+                    playlistNavigationSession = false
+
+                    onHomeRequested()
+                }
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                swipeTracking = false
+            }
+        }
+    }
+
+    // ============================================================
+    // HOME
+    // ============================================================
+
+    /**
+     * Marca el contexto actual como Home.
+     *
+     * Al entrar a Home se reinicia la sesion de navegacion.
+     */
+    fun setHomeActive(active: Boolean) {
+
+        isHomeActive =
+            active
+
+        if (active) {
+
+            isPlaylistsTabActive =
+                false
+
+            /*
+             * IMPORTANTE:
+             *
+             * Al regresar a Home termina cualquier sesion
+             * anterior de Playlists.
+             */
+            playlistNavigationSession =
+                false
+
+            rvSongs.animate().cancel()
+
+            rvPlaylists.animate().cancel()
+
+            rvSongs.translationX =
+                0f
+
+            rvPlaylists.translationX =
+                0f
+
+            rvSongs.visibility =
+                View.GONE
+
+            rvPlaylists.visibility =
+                View.GONE
+
+            tvEmptyState.visibility =
+                View.GONE
+
+            /*
+             * En Home no mostramos ninguna pestaña
+             * como activa.
+             */
+            tabSongs.visibility =
+                View.VISIBLE
+
+            tabPlaylists.visibility =
+                View.VISIBLE
+
+            styleTabBackgrounds()
+        }
+    }
+
+    // ============================================================
+    // HOME -> CANCIONES
+    // ============================================================
+
+    /**
+     * Abre Canciones directamente desde Home.
+     *
+     * Esta entrada NO permite:
+     *
+     *     Canciones -> Playlists
+     */
+    fun openSongsFromHome() {
+
+        isHomeActive =
+            false
+
+        isPlaylistsTabActive =
+            false
+
+        /*
+         * NUEVA sesion desde Home.
+         *
+         * Como entramos directamente a Canciones,
+         * no existe una Playlists anterior a la que regresar.
+         */
+        playlistNavigationSession =
+            false
+
+        /*
+         * Ocultamos completamente Playlists.
+         */
+        tabSongs.visibility =
+            View.VISIBLE
+
+        tabPlaylists.visibility =
+            View.GONE
+
+        styleTabBackgrounds()
+
+        btnSearch.visibility =
+            View.VISIBLE
+
+        rvPlaylists.visibility =
+            View.GONE
+
+        rvSongs.visibility =
+            View.VISIBLE
+
+        tvEmptyState.visibility =
+            if (
+                rvSongs.visibility ==
+                View.VISIBLE
+            ) {
+                View.GONE
+            } else {
+                View.VISIBLE
+            }
+
+        onSongsTabSelected()
+    }
+
+    // ============================================================
+    // HOME -> PLAYLISTS
+    // ============================================================
+
+    /**
+     * Abre Playlists desde Home.
+     *
+     * Desde aqui NO se puede ir a Canciones: la pestaña
+     * Canciones queda oculta y el swipe a la derecha
+     * regresa directo a Home.
+     */
+    fun openPlaylistsFromHome() {
+
+        isHomeActive =
+            false
+
+        isPlaylistsTabActive =
+            true
+
+        /*
+         * IMPORTANTE:
+         *
+         * Ya no se permite volver a Canciones desde Playlists.
+         * La unica forma de llegar a Canciones es regresando
+         * a Home y entrando de nuevo por openSongsFromHome().
+         */
+        playlistNavigationSession =
+            false
+
+        /*
+         * En Playlists solo mostramos la pestaña Playlists.
+         * La pestaña Canciones queda oculta.
+         */
+        tabSongs.visibility =
+            View.GONE
+
+        tabPlaylists.visibility =
+            View.VISIBLE
+
+        styleTabBackgrounds()
+
+        tvEmptyState.visibility =
+            View.GONE
+
+        if (isSearchVisible) {
+
+            isSearchVisible =
+                false
+
+            llInlineSearch.visibility =
+                View.GONE
+
+            tvAppName.visibility =
+                View.VISIBLE
+
+            ivMascot.visibility =
+                View.VISIBLE
+
+            btnSort.visibility =
+                View.VISIBLE
+
+            btnSettings.visibility =
+                View.VISIBLE
+
+            btnSearch.setImageResource(
+                R.drawable.ic_search
+            )
+
+            etSearch.setText("")
+        }
+
+        btnSearch.visibility =
+            View.GONE
+
+        rvSongs.visibility =
+            View.GONE
+
+        rvPlaylists.visibility =
+            View.VISIBLE
+
+        onPlaylistsTabSelected()
+    }
+
+    // ============================================================
+    // PLAYLISTS -> CANCIONES
+    // ============================================================
+
+    private fun selectSongsTab() {
+
+        /*
+         * Solo podemos hacer este cambio cuando estamos
+         * actualmente en Playlists.
+         */
+        if (!isPlaylistsTabActive) {
+            return
+        }
+
+        isHomeActive =
+            false
+
+        isPlaylistsTabActive =
+            false
+
+        /*
+         * NO hacemos:
+         *
+         *     playlistNavigationSession = false
+         *
+         * porque necesitamos conservar la sesion.
+         *
+         * Asi:
+         *
+         *     PLAYLISTS -> CANCIONES
+         *
+         * permite despues:
+         *
+         *     CANCIONES -> PLAYLISTS
+         */
+
+        /*
+         * Ocultamos la pestaña Playlists mientras estamos
+         * en Canciones.
+         */
+        tabSongs.visibility =
+            View.VISIBLE
+
+        tabPlaylists.visibility =
+            View.GONE
+
+        styleTabBackgrounds()
+
+        btnSearch.visibility =
+            View.VISIBLE
+
+        onSongsTabSelected()
+
+        /*
+         * Playlists sale hacia la derecha.
+         * Canciones entra desde la izquierda.
+         */
+        slideTabs(
+            outgoing = rvPlaylists,
+            incoming = rvSongs,
+            toPlaylists = false
+        )
+    }
+
+    // ============================================================
+    // CANCIONES -> PLAYLISTS
+    // ============================================================
+
+    private fun selectPlaylistsTab() {
+
+        /*
+         * Ya estamos en Playlists.
+         */
+        if (isPlaylistsTabActive) {
+            return
+        }
+
+        /*
+         * SEGURIDAD:
+         *
+         * Si llegamos a Canciones directamente desde Home,
+         * no permitimos entrar a Playlists.
+         */
+        if (!playlistNavigationSession) {
+            return
+        }
+
+        isHomeActive =
+            false
+
+        isPlaylistsTabActive =
+            true
+
+        /*
+         * Ahora estamos nuevamente en Playlists,
+         * por lo que mostramos ambas pestañas.
+         */
+        tabSongs.visibility =
+            View.VISIBLE
+
+        tabPlaylists.visibility =
+            View.VISIBLE
+
+        styleTabBackgrounds()
+
+        tvEmptyState.visibility =
+            View.GONE
+
+        if (isSearchVisible) {
+
+            isSearchVisible =
+                false
+
+            llInlineSearch.visibility =
+                View.GONE
+
+            tvAppName.visibility =
+                View.VISIBLE
+
+            ivMascot.visibility =
+                View.VISIBLE
+
+            btnSort.visibility =
+                View.VISIBLE
+
+            btnSettings.visibility =
+                View.VISIBLE
+
+            btnSearch.setImageResource(
+                R.drawable.ic_search
+            )
+
+            etSearch.setText("")
+        }
+
+        btnSearch.visibility =
+            View.GONE
+
+        onPlaylistsTabSelected()
+
+        /*
+         * Canciones sale hacia la izquierda.
+         * Playlists entra desde la derecha.
+         */
+        slideTabs(
+            outgoing = rvSongs,
+            incoming = rvPlaylists,
+            toPlaylists = true
+        )
+    }
+
+    // ============================================================
+    // ANIMACION ENTRE PESTAÑAS
+    // ============================================================
+
+    /**
+     * Desliza dos vistas como si fueran paginas de un ViewPager.
+     *
+     * toPlaylists = true:
+     *
+     *     Playlists entra desde la derecha.
+     *     Canciones sale hacia la izquierda.
+     *
+     * toPlaylists = false:
+     *
+     *     Canciones entra desde la izquierda.
+     *     Playlists sale hacia la derecha.
+     */
+    private fun slideTabs(
+        outgoing: View,
+        incoming: View,
+        toPlaylists: Boolean
+    ) {
+
+        val width =
+            rootLayout.width.takeIf {
+                it > 0
+            }
+                ?: activity.resources
+                    .displayMetrics
+                    .widthPixels
+
+        val widthF =
+            width.toFloat()
 
         outgoing.animate().cancel()
+
         incoming.animate().cancel()
 
-        val incomingStartX = if (toPlaylists) widthF else -widthF
-        val outgoingEndX = if (toPlaylists) -widthF else widthF
+        val incomingStartX =
+            if (toPlaylists) {
+                widthF
+            } else {
+                -widthF
+            }
 
-        incoming.translationX = incomingStartX
-        incoming.visibility = View.VISIBLE
+        val outgoingEndX =
+            if (toPlaylists) {
+                -widthF
+            } else {
+                widthF
+            }
 
+        /*
+         * Colocamos la pantalla entrante
+         * fuera de la pantalla.
+         */
+        incoming.translationX =
+            incomingStartX
+
+        incoming.visibility =
+            View.VISIBLE
+
+        /*
+         * Animacion de la pantalla que sale.
+         */
         outgoing.animate()
-            .translationX(outgoingEndX)
-            .setDuration(TAB_SLIDE_DURATION)
-            .setInterpolator(DecelerateInterpolator())
+            .translationX(
+                outgoingEndX
+            )
+            .setDuration(
+                TAB_SLIDE_DURATION
+            )
+            .setInterpolator(
+                DecelerateInterpolator()
+            )
             .withEndAction {
-                outgoing.visibility = View.GONE
-                outgoing.translationX = 0f
+
+                outgoing.visibility =
+                    View.GONE
+
+                outgoing.translationX =
+                    0f
             }
             .start()
 
+        /*
+         * Animacion de la pantalla que entra.
+         */
         incoming.animate()
-            .translationX(0f)
-            .setDuration(TAB_SLIDE_DURATION)
-            .setInterpolator(DecelerateInterpolator())
+            .translationX(
+                0f
+            )
+            .setDuration(
+                TAB_SLIDE_DURATION
+            )
+            .setInterpolator(
+                DecelerateInterpolator()
+            )
             .start()
     }
 
+    // ============================================================
+    // CONSTANTES
+    // ============================================================
+
     companion object {
-        private const val SWIPE_MIN_DISTANCE = 120
-        private const val SWIPE_MIN_VELOCITY = 200
-        private const val TAB_SLIDE_DURATION = 300L
+
+        private const val SWIPE_MIN_DISTANCE =
+            120
+
+        private const val SWIPE_MIN_VELOCITY =
+            200
+
+        private const val TAB_SLIDE_DURATION =
+            300L
     }
 }
