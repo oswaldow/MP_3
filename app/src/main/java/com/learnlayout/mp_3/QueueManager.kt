@@ -31,6 +31,11 @@ class QueueManager {
         songList
 
 
+    /** Lista base que se conserva para reconstruir correctamente el modo shuffle. */
+    fun getOriginalSongList(): List<Song> =
+        originalList
+
+
     fun getCurrentIndex(): Int =
         currentIndex
 
@@ -108,9 +113,34 @@ class QueueManager {
 
 
     /**
-     * Igual que setPlaylist pero utilizado para
-     * restaurar la reproducción anterior.
+     * Restaura una cola persistida conservando EXACTAMENTE el orden que
+     * tenia el usuario, la lista original usada por shuffle, el indice
+     * actual y el modo de reproduccion.
      */
+    fun restorePersistedQueue(
+        songs: List<Song>,
+        persistedOriginalList: List<Song>,
+        startIndex: Int,
+        mode: MusicService.PlaybackMode
+    ) {
+        if (songs.isEmpty()) {
+            originalList = emptyList()
+            songList = emptyList()
+            currentIndex = 0
+            playbackMode = MusicService.PlaybackMode.NORMAL
+            return
+        }
+
+        songList = songs.toList()
+        originalList = if (persistedOriginalList.isNotEmpty()) {
+            persistedOriginalList.toList()
+        } else {
+            songs.toList()
+        }
+        currentIndex = startIndex.coerceIn(0, songs.lastIndex)
+        playbackMode = mode
+    }
+
     fun restorePlaylist(
         songs: List<Song>,
         startIndex: Int

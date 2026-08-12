@@ -118,6 +118,7 @@ class MusicService : Service() {
 
     fun setPlaylist(songs: List<Song>, startIndex: Int) {
         queueManager.setPlaylist(songs, startIndex)
+        persistQueueState()
         if (songs.isNotEmpty()) {
             playbackEngine.playSongAt(startIndex)
         }
@@ -139,6 +140,7 @@ class MusicService : Service() {
         if (currentIndex >= 0) {
             playbackEngine.cancelCrossfadeIfAny()
             queueManager.setPlaylist(songs, currentIndex)
+            persistQueueState()
         } else {
             // Caso de seguridad: si por alguna razon la cancion actual ya no
             // existe en la biblioteca, no modificamos la reproduccion.
@@ -146,10 +148,58 @@ class MusicService : Service() {
         }
     }
 
+    /**
+     * Restaura la cola personalizada guardada en disco.
+     *
+     * Se llama desde SongListActivity una vez que la biblioteca local ya fue
+     * cargada, para poder convertir los IDs persistidos en objetos Song.
+     * Devuelve true si encontro una cola valida y pudo restaurarla.
+     */
+    fun restorePersistedQueue(songs: List<Song>): Boolean {
+        if (queueManager.isEmpty() == false) return false
+        if (songs.isEmpty()) return false
+
+        val state = QueueStateRepository.get(applicationContext) ?: return false
+        val songsById = songs.associateBy { it.id }
+
+        val restoredQueue = state.queueIds.mapNotNull { songsById[it] }
+        if (restoredQueue.isEmpty()) {
+            QueueStateRepository.clear(applicationContext)
+            return false
+        }
+
+        val restoredOriginal = state.originalQueueIds
+            .mapNotNull { songsById[it] }
+            .ifEmpty { restoredQueue }
+
+        val currentIndex = when {
+            state.currentSongId != -1L -> {
+                val byId = restoredQueue.indexOfFirst { it.id == state.currentSongId }
+                if (byId >= 0) byId else state.currentIndex.coerceIn(0, restoredQueue.lastIndex)
+            }
+            else -> state.currentIndex.coerceIn(0, restoredQueue.lastIndex)
+        }
+
+        queueManager.restorePersistedQueue(
+            songs = restoredQueue,
+            persistedOriginalList = restoredOriginal,
+            startIndex = currentIndex,
+            mode = state.playbackMode
+        )
+
+        persistQueueState()
+        playbackEngine.restoreSongAt(
+            queueManager.getCurrentIndex(),
+            PlaybackStateRepository.getLastPositionMs(applicationContext)
+        )
+        return true
+    }
+
     /** Reconstruye la ultima cancion reproducida sin contarla como reproduccion nueva ni arrancarla en automatico. */
     fun restorePlaylist(songs: List<Song>, startIndex: Int, positionMs: Long) {
         if (songs.isEmpty()) return
         queueManager.restorePlaylist(songs, startIndex)
+        persistQueueState()
         playbackEngine.restoreSongAt(queueManager.getCurrentIndex(), positionMs)
     }
 
@@ -165,35 +215,46 @@ class MusicService : Service() {
 
     fun cyclePlaybackMode(): PlaybackMode {
         playbackEngine.cancelCrossfadeIfAny()
-        return queueManager.cyclePlaybackMode()
+        val mode = queueManager.cyclePlaybackMode()
+        persistQueueState()
+        return mode
     }
 
     fun setPlaybackMode(mode: PlaybackMode) {
         playbackEngine.cancelCrossfadeIfAny()
         queueManager.setPlaybackMode(mode)
+        persistQueueState()
     }
 
     fun playAt(index: Int) {
         if (index in queueManager.getSongList().indices) {
             playbackEngine.cancelCrossfadeIfAny()
+            queueManager.setCurrentIndex(index)
+            persistQueueState()
             playbackEngine.playSongAt(index)
         }
     }
 
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {
         playbackEngine.cancelCrossfadeIfAny()
-        queueManager.moveQueueItem(fromIndex, toIndex)
+        if (queueManager.moveQueueItem(fromIndex, toIndex)) {
+            persistQueueState()
+        }
     }
 
     fun removeQueueItem(index: Int): Boolean {
         if (index == queueManager.getCurrentIndex()) return false
         playbackEngine.cancelCrossfadeIfAny()
-        return queueManager.removeQueueItem(index)
+        val removed = queueManager.removeQueueItem(index)
+        if (removed) persistQueueState()
+        return removed
     }
 
     fun clearUpcomingQueue(): Int {
         playbackEngine.cancelCrossfadeIfAny()
-        return queueManager.clearUpcomingQueue()
+        val removed = queueManager.clearUpcomingQueue()
+        if (removed > 0) persistQueueState()
+        return removed
     }
 
     /** Inserta una cancion justo despues de la actual (como "Agregar a la cola" en Spotify). */
@@ -203,7 +264,9 @@ class MusicService : Service() {
             return
         }
         playbackEngine.cancelCrossfadeIfAny()
-        queueManager.addToPlayNext(song)
+        if (queueManager.addToPlayNext(song)) {
+            persistQueueState()
+        }
     }
 
     // ---------- Reproduccion (delega en PlaybackEngine) ----------
@@ -264,6 +327,7 @@ class MusicService : Service() {
 
     private fun handleSongStarted(song: Song, index: Int, reason: PlaybackEngine.SongStartReason) {
         queueManager.setCurrentIndex(index)
+        persistQueueState()
 
         notifier.updateMediaMetadata(
             song = song,
@@ -323,6 +387,28 @@ class MusicService : Service() {
         }
     }
 
+    private fun persistQueueState() {
+        QueueStateRepository.save(
+            context = applicationContext,
+            queueIds = queueManager.getSongList().map { it.id },
+            originalQueueIds = queueManager.getOriginalSongList().map { it.id },
+            currentIndex = queueManager.getCurrentIndex(),
+            currentSongId = queueManager.getCurrentSong()?.id,
+            playbackMode = queueManager.getPlaybackMode()
+        )
+    }
+
+    private fun persistQueueStateBlocking() {
+        QueueStateRepository.saveBlocking(
+            context = applicationContext,
+            queueIds = queueManager.getSongList().map { it.id },
+            originalQueueIds = queueManager.getOriginalSongList().map { it.id },
+            currentIndex = queueManager.getCurrentIndex(),
+            currentSongId = queueManager.getCurrentSong()?.id,
+            playbackMode = queueManager.getPlaybackMode()
+        )
+    }
+
     private fun refreshNotification() {
         val song = getCurrentSong() ?: return
         val manager = getSystemService(NotificationManager::class.java)
@@ -337,6 +423,7 @@ class MusicService : Service() {
 
     private fun stopPlaybackAndService() {
         PlaybackStateRepository.clearLastSong(applicationContext)
+        QueueStateRepository.clear(applicationContext)
         playbackEngine.releasePlayer()
         listener?.onPlaybackStateChanged(false)
         notifier.updatePlaybackState(false, 0L)
@@ -355,6 +442,7 @@ class MusicService : Service() {
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
         }
+        persistQueueStateBlocking()
     }
 
     override fun onDestroy() {
@@ -363,6 +451,7 @@ class MusicService : Service() {
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
         }
+        persistQueueStateBlocking()
         playbackEngine.releasePlayer()
         notifier.release()
     }

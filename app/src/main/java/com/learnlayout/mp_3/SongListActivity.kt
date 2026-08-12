@@ -308,13 +308,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 musicService?.setPlaylist(pending, pendingStartIndex)
                 playerPanelController.expandWhenReady()
             } else {
-                val current = musicService?.getCurrentSong()
-                if (current != null) {
-                    showMiniPlayer(current, musicService?.isPlaying() == true)
-                    songAdapter.setCurrentPlayingId(current.id)
-                } else {
-                    tryRestoreLastSong()
-                }
+                restorePersistedPlaybackIfPossible()
             }
 
             musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
@@ -779,49 +773,69 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         applyFilterAndSort()
         if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
+
+        // La conexion con MusicService puede ocurrir antes de que termine de
+        // cargar la biblioteca. En ese caso intentamos restaurar la cola aqui,
+        // cuando ya tenemos todos los Song disponibles para resolver los IDs
+        // persistidos.
+        restorePersistedPlaybackIfPossible()
+
         val t3 = System.currentTimeMillis()
         android.util.Log.d("PERF_DEBUG", "loadSongs() TOTAL: ${t3 - t0} ms")
     }
 
+    /**
+     * Primero intenta restaurar la cola personalizada exacta guardada por
+     * MusicService. Solo si no existe una cola persistida valida, usa como
+     * compatibilidad el estado antiguo de ultima cancion y reconstruye la cola
+     * cronologica de Home.
+     */
+    private fun restorePersistedPlaybackIfPossible() {
+        val service = musicService ?: return
+        if (service.getCurrentSong() != null) {
+            val current = service.getCurrentSong() ?: return
+            showMiniPlayer(current, service.isPlaying())
+            songAdapter.setCurrentPlayingId(current.id)
+            return
+        }
+
+        if (allSongs.isEmpty()) return
+
+        val restored = service.restorePersistedQueue(allSongs)
+        if (restored) {
+            val current = service.getCurrentSong()
+            if (current != null) {
+                showMiniPlayer(current, service.isPlaying())
+                songAdapter.setCurrentPlayingId(current.id)
+            }
+            return
+        }
+
+        tryRestoreLastSong()
+    }
+
+    /** Compatibilidad con estados creados antes de existir la persistencia real de cola. */
     private fun tryRestoreLastSong() {
         val lastSongId = PlaybackStateRepository.getLastSongId(this)
         if (lastSongId == -1L) return
 
-        val lastSong = allSongs.firstOrNull { it.id == lastSongId } ?: return
+        val song = allSongs.firstOrNull { it.id == lastSongId } ?: return
         val positionMs = PlaybackStateRepository.getLastPositionMs(this)
 
-        /*
-         * IMPORTANTE:
-         *
-         * Si Android mato el proceso, MusicService pierde la cola que tenia
-         * en memoria. Antes de esta correccion aqui se restauraba solamente
-         * la ultima cancion, por lo que al volver a abrir la app la cola
-         * quedaba con una sola cancion.
-         *
-         * Home utiliza una cola cronologica formada por TODA la biblioteca:
-         * de la mas antigua a la mas nueva. Restauramos exactamente esa misma
-         * cola y colocamos como actual la cancion que estaba reproduciendose.
-         * Asi la cola vuelve a estar completa aunque el proceso haya sido
-         * eliminado y tambien se haya quitado el reproductor de la
-         * notificacion.
-         */
-        val restoredQueue = allSongs
+        // La cola de respaldo es la misma cola cronologica que Home utiliza
+        // para reproducir una cancion desde sus secciones.
+        val fallbackQueue = allSongs
             .sortedWith(
                 compareBy<Song> { it.dateAdded }
                     .thenBy { it.id }
             )
+        val startIndex = fallbackQueue.indexOfFirst { it.id == song.id }
 
-        val restoredIndex = restoredQueue.indexOfFirst { it.id == lastSong.id }
-        if (restoredIndex < 0) return
-
-        musicService?.restorePlaylist(
-            restoredQueue,
-            restoredIndex,
-            positionMs
-        )
-
-        showMiniPlayer(lastSong, false)
-        songAdapter.setCurrentPlayingId(lastSong.id)
+        if (startIndex >= 0) {
+            musicService?.restorePlaylist(fallbackQueue, startIndex, positionMs)
+            showMiniPlayer(song, false)
+            songAdapter.setCurrentPlayingId(song.id)
+        }
     }
 
     private fun applyFilterAndSort() {
