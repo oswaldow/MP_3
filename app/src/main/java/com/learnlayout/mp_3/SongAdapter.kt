@@ -77,6 +77,17 @@ class SongAdapter(
         // coincide y se descarta el bitmap para no pisar el item equivocado.
         holder.ivAlbumArt.tag = song.id
         holder.ivAlbumArt.animate().cancel()
+
+        // Si la caratula ya esta en memoria (cancion ya vista antes en esta
+        // sesion), se pinta directo sin pasar por el placeholder ni el
+        // fade: eso es lo que evita el parpadeo icono->caratula al
+        // reabrir la app o volver a scrollear por la lista.
+        val cached = AlbumArtRepository.getCachedCover(song)
+        if (cached != null) {
+            applyAlbumArtImmediate(holder, cached)
+            return
+        }
+
         showPlaceholder(holder)
 
         AlbumArtRepository.loadCover(
@@ -94,6 +105,17 @@ class SongAdapter(
             // no se va a mostrar.
             isStillNeeded = { holder.ivAlbumArt.tag == song.id }
         )
+    }
+
+    // Pinta la caratula sin animacion: se usa cuando el bitmap ya esta en
+    // cache de memoria y por lo tanto esta disponible en el mismo frame,
+    // asi que un fade solo agregaria un parpadeo innecesario.
+    private fun applyAlbumArtImmediate(holder: SongViewHolder, bitmap: Bitmap) {
+        holder.ivAlbumArt.alpha = 1f
+        holder.ivAlbumArt.setPadding(0, 0, 0, 0)
+        holder.ivAlbumArt.imageTintList = null
+        holder.ivAlbumArt.scaleType = ImageView.ScaleType.CENTER_CROP
+        holder.ivAlbumArt.setImageBitmap(bitmap)
     }
 
     // Reemplaza el placeholder por la caratula real con un fundido corto en

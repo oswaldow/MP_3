@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.AudioManager
 import android.os.Binder
 import android.os.Build
@@ -14,6 +15,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
@@ -38,6 +40,13 @@ class MusicService : Service() {
 
     private var mediaPlayer: ExoPlayer? = null
     private lateinit var mediaSession: MediaSessionCompat
+
+    // Caratula de la cancion que esta sonando ahora mismo, usada tanto en
+    // la MediaMetadata (pantalla de bloqueo / control multimedia del
+    // sistema) como en el largeIcon de la notificacion. Se llena de forma
+    // asincrona por AlbumArtRepository, asi que empieza en null y se
+    // actualiza cuando la carga termina.
+    private var currentAlbumArt: Bitmap? = null
 
     private var originalList: List<Song> = emptyList()
     private var songList: List<Song> = emptyList()
@@ -199,6 +208,9 @@ class MusicService : Service() {
                 seekTo(pos.toInt())
             }
         })
+        // Hace que el control multimedia del sistema (pantalla de bloqueo,
+        // banner de reproduccion, quick settings) abra la app al tocarlo.
+        mediaSession.setSessionActivity(openAppPendingIntent())
         mediaSession.isActive = true
         updateMediaSessionState(false)
 
@@ -1122,14 +1134,42 @@ class MusicService : Service() {
         } else {
             song.duration
         }
-        val metadata = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, song.title)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, song.artist)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, song.title)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, song.artist)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
-            .build()
-        mediaSession.setMetadata(metadata)
+
+        fun buildMetadata(art: Bitmap?): MediaMetadataCompat {
+            val builder = MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, song.title)
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, song.artist)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, song.title)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, song.artist)
+                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
+            if (art != null) {
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
+            }
+            return builder.build()
+        }
+
+        // Publica de inmediato titulo/artista/duracion sin caratula (para
+        // que el banner y la pantalla de bloqueo no se queden en blanco
+        // mientras se busca la imagen), y la agrega en cuanto este lista.
+        currentAlbumArt = null
+        mediaSession.setMetadata(buildMetadata(null))
+
+        AlbumArtRepository.loadCover(
+            applicationContext,
+            song,
+            object : AlbumArtRepository.Callback {
+                override fun onCoverReady(bitmap: Bitmap) {
+                    // Evita pisar la metadata si el usuario ya cambio de
+                    // cancion mientras esta portada terminaba de cargar.
+                    if (getCurrentSong()?.id != song.id) return
+                    currentAlbumArt = bitmap
+                    mediaSession.setMetadata(buildMetadata(bitmap))
+                    updateNotification()
+                }
+            },
+            isStillNeeded = { getCurrentSong()?.id == song.id }
+        )
     }
 
     private fun updateMediaSessionState(isPlaying: Boolean) {
@@ -1154,10 +1194,13 @@ class MusicService : Service() {
 
     private fun buildIdleNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_music_note)
             .setContentTitle("MP_3")
             .setContentText("Listo para reproducir")
+            .setColor(ContextCompat.getColor(this, R.color.purple_primary))
+            .setColorized(true)
             .setOngoing(false)
+            .setContentIntent(openAppPendingIntent())
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
@@ -1179,9 +1222,9 @@ class MusicService : Service() {
 
     private fun buildNotification(song: Song, playing: Boolean): Notification {
         val playPauseIcon = if (playing) {
-            android.R.drawable.ic_media_pause
+            R.drawable.ic_pause
         } else {
-            android.R.drawable.ic_media_play
+            R.drawable.ic_play_arrow
         }
 
         val previousPendingIntent = servicePendingIntent(ACTION_PREVIOUS)
@@ -1190,14 +1233,22 @@ class MusicService : Service() {
         val deletePendingIntent = servicePendingIntent(ACTION_STOP)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_music_note)
             .setContentTitle(song.title)
             .setContentText(song.artist)
+            .setLargeIcon(currentAlbumArt)
+            // Notificacion "colorizada": el sistema tine el fondo con este
+            // color (mismo morado de marca de la app) en vez del gris
+            // generico, tanto en la barra de notificaciones como en el
+            // banner de la pantalla de bloqueo.
+            .setColor(ContextCompat.getColor(this, R.color.purple_primary))
+            .setColorized(true)
             .setOngoing(false)
+            .setContentIntent(openAppPendingIntent())
             .setDeleteIntent(deletePendingIntent)
-            .addAction(android.R.drawable.ic_media_previous, "Anterior", previousPendingIntent)
+            .addAction(R.drawable.ic_skip_previous, "Anterior", previousPendingIntent)
             .addAction(playPauseIcon, "Reproducir/Pausar", playPausePendingIntent)
-            .addAction(android.R.drawable.ic_media_next, "Siguiente", nextPendingIntent)
+            .addAction(R.drawable.ic_skip_next, "Siguiente", nextPendingIntent)
             .setStyle(
                 MediaStyle()
                     .setMediaSession(mediaSession.sessionToken)
@@ -1213,6 +1264,20 @@ class MusicService : Service() {
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getService(this, action.hashCode(), intent, flags)
+    }
+
+    /**
+     * Intent para abrir la app al tocar el banner/notificacion de
+     * reproduccion (pantalla de bloqueo, control multimedia del sistema,
+     * quick settings). Usa FLAG_ACTIVITY_CLEAR_TOP para volver a la
+     * instancia existente de SongListActivity en vez de crear una nueva.
+     */
+    private fun openAppPendingIntent(): PendingIntent {
+        val intent = Intent(this, SongListActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getActivity(this, 0, intent, flags)
     }
 
     private fun stopPlaybackAndService() {

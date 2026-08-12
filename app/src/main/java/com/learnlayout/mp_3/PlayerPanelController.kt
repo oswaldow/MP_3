@@ -1,5 +1,8 @@
 package com.learnlayout.mp_3
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
@@ -7,12 +10,14 @@ import android.graphics.Outline
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
+import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
@@ -38,6 +43,7 @@ class PlayerPanelController(
     private val btnPanelFavorite: ImageButton,
     private val btnPanelLyricsSync: ImageButton,
     private val ivPanelAlbumArt: ImageView,
+    private val audioSpectrumView: AudioSpectrumView,
     private val viewPanelArtBanner: View,
     private val tvPanelSongTitle: TextView,
     private val tvPanelArtist: TextView,
@@ -60,13 +66,35 @@ class PlayerPanelController(
 ) {
 
     private companion object {
+        // DEBUG: filtrar en Logcat con  adb logcat -s MP3_PANEL
+        // (temporal, para diagnosticar el "asomo" del mini player al
+        // abrir el reproductor -ver coldExpand()-. Se puede borrar una
+        // vez resuelto.)
+        private const val TAG_PANEL = "MP3_PANEL"
+
         // Opacidad (0-255) del icono del sleep timer cuando esta inactivo.
         // Es una version atenuada del acento actual en vez de un gris fijo,
         // para que igual se sienta parte de la paleta Material You.
         const val SLEEP_TIMER_INACTIVE_ALPHA = 140
+
+        // Duracion e interpolador de la apertura animada a mano del panel
+        // (ver smoothExpand). BottomSheetBehavior no expone ninguna API
+        // publica para controlar la duracion de su propia animacion de
+        // "settle", y esta resulta bastante rapida/abrupta cuando se
+        // dispara programaticamente (no arrastrando con el dedo). Por eso
+        // se anima el desplazamiento a mano con estos valores, mas suaves.
+        const val EXPAND_ANIM_DURATION_MS = 320L
     }
 
     private lateinit var behavior: BottomSheetBehavior<FrameLayout>
+
+    // True mientras se realiza la apertura "en frio". Durante esta fase el
+    // BottomSheetBehavior ya esta en STATE_EXPANDED, pero la posicion visual
+    // se anima manualmente mediante translationY. Asi no dejamos que el
+    // callback de STATE_EXPANDED arranque efectos secundarios antes de que
+    // termine la animacion visual.
+    private var coldExpandInProgress = false
+    private var expandAnimator: ValueAnimator? = null
 
     private var isUserSeekingPanel: Boolean = false
 
@@ -148,12 +176,25 @@ class PlayerPanelController(
 
         behavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
             override fun onStateChanged(bottomSheet: View, newState: Int) {
+                Log.d(TAG_PANEL, "onStateChanged: newState=${stateName(newState)} " +
+                        "panelHeight=${playerPanel.height} peekHeight=${behavior.peekHeight} " +
+                        "translationY=${playerPanel.translationY} thread=${Thread.currentThread().name}")
                 when (newState) {
                     BottomSheetBehavior.STATE_EXPANDED -> {
                         groupMini.alpha = 0f
                         groupExpanded.alpha = 1f
                         groupMini.visibility = View.INVISIBLE
                         groupExpanded.visibility = View.VISIBLE
+
+                        // En una apertura en frio el behavior se pone en
+                        // EXPANDED antes de que el panel vuelva a ser visible.
+                        // No arranquemos aun el resto de la UI: la animacion
+                        // visual de translationY sigue en curso.
+                        if (coldExpandInProgress) {
+                            return
+                        }
+
+                        audioSpectrumView.start()
                         onExpanded()
                     }
                     BottomSheetBehavior.STATE_COLLAPSED -> {
@@ -162,6 +203,7 @@ class PlayerPanelController(
                         groupMini.visibility = View.VISIBLE
                         groupExpanded.visibility = View.INVISIBLE
                         updatePeekHeight()
+                        audioSpectrumView.stop()
                         onCollapsed()
                     }
                     else -> {
@@ -183,10 +225,11 @@ class PlayerPanelController(
         groupExpanded.alpha = 0f
         groupMini.visibility = View.VISIBLE
         groupExpanded.visibility = View.INVISIBLE
+        audioSpectrumView.stop()
 
         groupMini.setOnClickListener {
             if (behavior.state != BottomSheetBehavior.STATE_EXPANDED) {
-                behavior.state = BottomSheetBehavior.STATE_EXPANDED
+                smoothExpand()
             }
         }
 
@@ -277,14 +320,266 @@ class PlayerPanelController(
     // ---------- Estado del panel ----------
 
     fun collapse() {
+        expandAnimator?.cancel()
+        coldExpandInProgress = false
+        playerPanel.translationY = 0f
         if (isReady) {
+            behavior.isDraggable = true
             behavior.state = BottomSheetBehavior.STATE_COLLAPSED
         }
     }
 
+    // Se usa para abrir el panel "en frio": recien se toco una cancion en
+    // la lista, se reconecto al servicio, o se volvio de otra pantalla con
+    // expandPlayerOnResume. En estos casos el panel NUNCA estuvo visible
+    // en su estado mini de forma legitima, asi que usa coldExpand() en vez
+    // de smoothExpand() para no pintar ese estado ni un solo frame.
     fun expandWhenReady() {
+        Log.d(TAG_PANEL, "expandWhenReady: llamado. panelVisibility=${visibilityName(playerPanel.visibility)} " +
+                "panelHeight=${playerPanel.height} isLaidOut=${playerPanel.isLaidOut} " +
+                "isLayoutRequested=${playerPanel.isLayoutRequested} thread=${Thread.currentThread().name}")
+
+        if (!isReady || behavior.state == BottomSheetBehavior.STATE_EXPANDED) {
+            Log.d(TAG_PANEL, "expandWhenReady: return temprano (no ready o ya expandido)")
+            return
+        }
+
+        // IMPORTANTE: no esperamos al doOnLayout para cambiar el estado del
+        // BottomSheetBehavior. Mientras el panel sigue GONE lo llevamos a
+        // EXPANDED. De esa forma, la primera pasada de layout ya calcula la
+        // posicion real expandida (top=0) y nunca existe un layout intermedio
+        // en COLLAPSED que pueda disparar STATE_SETTLING.
+        expandAnimator?.cancel()
+        coldExpandInProgress = true
+        behavior.isDraggable = false
+
+        // Dejamos preparado el contenido expandido antes de que el panel
+        // vuelva a entrar en el arbol visible.
+        groupMini.alpha = 0f
+        groupMini.visibility = View.INVISIBLE
+        groupExpanded.alpha = 1f
+        groupExpanded.visibility = View.VISIBLE
+
+        // El panel puede llegar aqui ya visible (por ejemplo al volver de otra
+        // Activity). Lo ocultamos durante este cambio de estado para que el
+        // setter de STATE_EXPANDED no tenga que hacer un settle desde el layout
+        // colapsado que ya estaba en pantalla. La traslacion inicial queda
+        // fuera de la pantalla antes de volver a ponerlo VISIBLE.
+        val offscreenOffset = maxOf(
+            playerPanel.height,
+            playerPanel.rootView.height,
+            activity.resources.displayMetrics.heightPixels
+        ).toFloat()
+        playerPanel.translationY = offscreenOffset
+        playerPanel.visibility = View.GONE
+
+        // ESTE es el punto clave del arreglo: el behavior cambia a EXPANDED
+        // mientras el panel sigue GONE. No debe producir ningun movimiento
+        // visual ni un settle nativo.
+        behavior.state = BottomSheetBehavior.STATE_EXPANDED
+
+        // Volvemos a mostrarlo. La primera pasada de layout ya ocurrira con
+        // STATE_EXPANDED y con translationY fuera de pantalla. Al terminar el
+        // layout podemos conocer el alto real y arrancar la unica animacion
+        // visual, de alto -> 0.
+        playerPanel.visibility = View.VISIBLE
         playerPanel.doOnLayout {
+            Log.d(TAG_PANEL, "expandWhenReady: doOnLayout disparado. panelHeight=${playerPanel.height} " +
+                    "behaviorState=${stateName(behavior.state)} " +
+                    "groupMini.visibility=${visibilityName(groupMini.visibility)} " +
+                    "groupExpanded.visibility=${visibilityName(groupExpanded.visibility)} " +
+                    "thread=${Thread.currentThread().name}")
+            coldExpand()
+        }
+    }
+
+    // Expande el panel animando el desplazamiento a mano en vez de dejar
+    // que BottomSheetBehavior use su propia animacion de "settle" (rapida
+    // y sin API publica para ajustar duracion/interpolador). Se desactiva
+    // el drag mientras dura la animacion para que no se pise con un gesto
+    // del usuario, y al terminar se deja el behavior en STATE_EXPANDED
+    // (que ya no anima nada, porque el panel ya esta en su posicion final).
+    //
+    // Se usa SOLO cuando el usuario toca el mini player ya visible en
+    // pantalla (ver groupMini.setOnClickListener en setup()): ahi si tiene
+    // sentido animar desde la posicion "peek" (mini) hasta la expandida,
+    // porque el mini player que se ve durante el arranque de la animacion
+    // es el mismo que el usuario acaba de tocar.
+    private fun smoothExpand() {
+        Log.d(TAG_PANEL, "smoothExpand: llamado. isReady=$isReady state=${if (isReady) stateName(behavior.state) else "N/A"} " +
+                "panelHeight=${playerPanel.height} peekHeight=${if (isReady) behavior.peekHeight else -1}")
+
+        if (!isReady || behavior.state == BottomSheetBehavior.STATE_EXPANDED) {
+            Log.d(TAG_PANEL, "smoothExpand: return temprano (no ready o ya expandido)")
+            return
+        }
+
+        val panelHeight = playerPanel.height
+        val startOffset = (panelHeight - behavior.peekHeight).toFloat()
+
+        Log.d(TAG_PANEL, "smoothExpand: startOffset=$startOffset")
+
+        if (startOffset <= 0f) {
             behavior.state = BottomSheetBehavior.STATE_EXPANDED
+            return
+        }
+
+        expandAnimator?.cancel()
+        coldExpandInProgress = false
+        behavior.isDraggable = false
+
+        // El mini-player ya esta visible porque el usuario acaba de tocar el
+        // banner. Para evitar que BottomSheetBehavior haga su propio SETTLING,
+        // ocultamos temporalmente el panel, cambiamos su estado a EXPANDED y
+        // despues lo mostramos ya anclado en la posicion expandida.
+        //
+        // La animacion que ve el usuario sera exclusivamente translationY:
+        // startOffset -> 0.
+        groupMini.visibility = View.VISIBLE
+        groupMini.alpha = 1f
+        groupExpanded.visibility = View.VISIBLE
+        groupExpanded.alpha = 0f
+
+        playerPanel.translationY = startOffset
+        playerPanel.visibility = View.GONE
+
+        // CLAVE: el behavior cambia a EXPANDED mientras el panel sigue GONE.
+        // Asi BottomSheetBehavior no puede iniciar el settle desde COLLAPSED.
+        behavior.state = BottomSheetBehavior.STATE_EXPANDED
+
+        playerPanel.visibility = View.VISIBLE
+
+        expandAnimator = ValueAnimator.ofFloat(startOffset, 0f).apply {
+            duration = EXPAND_ANIM_DURATION_MS
+            interpolator = DecelerateInterpolator(1.4f)
+
+            addUpdateListener { anim ->
+                val value = anim.animatedValue as Float
+                playerPanel.translationY = value
+
+                val progress = 1f - (value / startOffset).coerceIn(0f, 1f)
+
+                // El mini-player desaparece gradualmente mientras entra el
+                // contenido expandido.
+                groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
+
+                // El contenido expandido entra despues de que el panel haya
+                // recorrido una parte del trayecto.
+                groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+
+                if (progress > 0.4f) {
+                    groupExpanded.visibility = View.VISIBLE
+                }
+            }
+
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (expandAnimator !== animation) return
+
+                    playerPanel.translationY = 0f
+                    groupMini.alpha = 0f
+                    groupMini.visibility = View.INVISIBLE
+                    groupExpanded.alpha = 1f
+                    groupExpanded.visibility = View.VISIBLE
+
+                    behavior.isDraggable = true
+                    expandAnimator = null
+
+                    // NO volver a asignar STATE_EXPANDED aqui.
+                    // Ya se establecio antes de hacer visible el panel.
+                    Log.d(TAG_PANEL, "smoothExpand: animacion terminada sin settle nativo")
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    if (expandAnimator !== animation) return
+
+                    playerPanel.translationY = 0f
+                    behavior.isDraggable = true
+                    expandAnimator = null
+                }
+            })
+
+            start()
+        }
+    }
+
+    // Version "en frio" de smoothExpand(): en vez de arrancar desde la
+    // posicion "peek" (que se alcanza a pintar como el mini player un
+    // frame antes de animar, el "asomo" que se ve al tocar una cancion
+    // desde la lista), arranca con el panel entero corrido fuera de la
+    // pantalla (translationY = alto total) y con el contenido expandido
+    // ya puesto (groupExpanded visible, groupMini invisible) DESDE ANTES
+    // de la primera pasada de layout/dibujo. Asi el mini player nunca
+    // llega a pintarse ni un solo frame: se ve un unico slide-up continuo
+    // que ya trae la pantalla completa del reproductor.
+    private fun coldExpand() {
+        Log.d(TAG_PANEL, "coldExpand: llamado. isReady=$isReady state=${if (isReady) stateName(behavior.state) else "N/A"} " +
+                "panelHeight=${playerPanel.height} panelVisibility=${visibilityName(playerPanel.visibility)} " +
+                "groupMini.visibility=${visibilityName(groupMini.visibility)} " +
+                "groupExpanded.visibility=${visibilityName(groupExpanded.visibility)} " +
+                "thread=${Thread.currentThread().name}")
+
+        if (!isReady || !coldExpandInProgress) {
+            Log.d(TAG_PANEL, "coldExpand: return temprano (no ready o no hay apertura en frio pendiente)")
+            return
+        }
+
+        if (behavior.state != BottomSheetBehavior.STATE_EXPANDED) {
+            Log.d(TAG_PANEL, "coldExpand: el behavior no quedo EXPANDED; se cancela para no disparar un settle")
+            coldExpandInProgress = false
+            behavior.isDraggable = true
+            playerPanel.translationY = 0f
+            return
+        }
+
+        val startOffset = playerPanel.height.toFloat()
+        Log.d(TAG_PANEL, "coldExpand: layout expandido listo. startOffset=$startOffset -> arrancando ValueAnimator")
+
+        if (startOffset <= 0f) {
+            playerPanel.translationY = 0f
+            coldExpandInProgress = false
+            behavior.isDraggable = true
+            audioSpectrumView.start()
+            onExpanded()
+            return
+        }
+
+        // Ajustamos al alto real justo despues del layout y antes del primer
+        // frame visible. Por eso nunca se ve el panel ya expandido antes de
+        // comenzar la animacion.
+        playerPanel.translationY = startOffset
+
+        expandAnimator?.cancel()
+        expandAnimator = ValueAnimator.ofFloat(startOffset, 0f).apply {
+            duration = EXPAND_ANIM_DURATION_MS
+            interpolator = DecelerateInterpolator(1.4f)
+            addUpdateListener { anim ->
+                playerPanel.translationY = anim.animatedValue as Float
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (expandAnimator !== this@apply) return
+                    playerPanel.translationY = 0f
+                    expandAnimator = null
+                    coldExpandInProgress = false
+                    behavior.isDraggable = true
+
+                    // STATE_EXPANDED ya estaba puesto desde antes del layout,
+                    // por lo que aqui NO se vuelve a tocar behavior.state y no
+                    // hay ninguna segunda animacion nativa de BottomSheet.
+                    audioSpectrumView.start()
+                    onExpanded()
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    if (expandAnimator !== this@apply) return
+                    expandAnimator = null
+                    coldExpandInProgress = false
+                    playerPanel.translationY = 0f
+                    behavior.isDraggable = true
+                }
+            })
+            start()
         }
     }
 
@@ -336,6 +631,9 @@ class PlayerPanelController(
     // ---------- Now playing ----------
 
     fun updateNowPlaying(song: Song, playing: Boolean) {
+        Log.d(TAG_PANEL, "updateNowPlaying: song='${song.title}' playing=$playing " +
+                "panelVisibility(antes)=${visibilityName(playerPanel.visibility)} " +
+                "panelHeight(antes)=${playerPanel.height} thread=${Thread.currentThread().name}")
         playerPanel.visibility = View.VISIBLE
 
         tvMiniTitle.text = song.title
@@ -487,9 +785,7 @@ class PlayerPanelController(
     private fun loadAlbumArt(song: Song) {
         currentArtSongId = song.id
 
-        showAlbumArtPlaceholder()
-
-        AlbumArtRepository.loadCover(activity, song, object : AlbumArtRepository.Callback {
+        val callback = object : AlbumArtRepository.Callback {
             override fun onCoverReady(bitmap: Bitmap) {
                 // Si mientras se descargaba ya cambio la cancion, se descarta.
                 if (currentArtSongId != song.id) return
@@ -508,7 +804,19 @@ class PlayerPanelController(
                     applyControlsAccent(color)
                 }
             }
-        })
+        }
+
+        // Si la caratula ya esta en memoria (misma cancion ya vista antes
+        // en esta sesion), se aplica directo sin pasar por el placeholder:
+        // evita el parpadeo icono->caratula en el mini player y el panel.
+        val cached = AlbumArtRepository.getCachedCover(song)
+        if (cached != null) {
+            callback.onCoverReady(cached)
+            return
+        }
+
+        showAlbumArtPlaceholder()
+        AlbumArtRepository.loadCover(activity, song, callback)
     }
 
     /**
@@ -613,5 +921,25 @@ class PlayerPanelController(
         val minutes = totalSeconds / 60
         val seconds = totalSeconds % 60
         return String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    }
+
+    // DEBUG: helpers solo para que los logs de arriba sean legibles
+    // (adb logcat -s MP3_PANEL). Se pueden borrar junto con los Log.d
+    // una vez resuelto el problema del "asomo" del mini player.
+    private fun stateName(state: Int): String = when (state) {
+        BottomSheetBehavior.STATE_EXPANDED -> "EXPANDED"
+        BottomSheetBehavior.STATE_COLLAPSED -> "COLLAPSED"
+        BottomSheetBehavior.STATE_DRAGGING -> "DRAGGING"
+        BottomSheetBehavior.STATE_SETTLING -> "SETTLING"
+        BottomSheetBehavior.STATE_HIDDEN -> "HIDDEN"
+        BottomSheetBehavior.STATE_HALF_EXPANDED -> "HALF_EXPANDED"
+        else -> "UNKNOWN($state)"
+    }
+
+    private fun visibilityName(visibility: Int): String = when (visibility) {
+        View.VISIBLE -> "VISIBLE"
+        View.INVISIBLE -> "INVISIBLE"
+        View.GONE -> "GONE"
+        else -> "UNKNOWN($visibility)"
     }
 }

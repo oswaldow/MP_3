@@ -257,6 +257,7 @@
                 android:layout_marginTop="12dp"
                 android:background="@android:color/transparent"
                 android:contentDescription="Cerrar reproductor"
+                android:foreground="@drawable/border_icon_button_circle"
                 android:padding="12dp"
                 android:src="@drawable/ic_chevron_down"
                 app:layout_constraintTop_toTopOf="parent"
@@ -273,6 +274,7 @@
                 android:layout_marginTop="12dp"
                 android:background="@android:color/transparent"
                 android:contentDescription="Temporizador de apagado"
+                android:foreground="@drawable/border_icon_button_circle"
                 android:padding="12dp"
                 android:src="@drawable/ic_bedtime"
                 app:layout_constraintTop_toTopOf="parent"
@@ -314,6 +316,21 @@
                 app:layout_constraintVertical_chainStyle="packed"
                 app:layout_constraintVertical_bias="0.05"
                 app:layout_constraintWidth_max="264dp" />
+
+            <!-- Visualizador de espectro de audio: se superpone sobre el
+                 tercio inferior de la caratula (mismos limites start/end/bottom
+                 que ivPanelAlbumArt, no participa de la cadena vertical). Lo
+                 arranca y lo para PlayerPanelController al expandir/colapsar
+                 el panel (ver AudioSpectrumView.start()/stop()). -->
+            <com.learnlayout.mp_3.AudioSpectrumView
+                android:id="@+id/audioSpectrumView"
+                android:layout_width="0dp"
+                android:layout_height="72dp"
+                android:layout_marginBottom="20dp"
+                android:elevation="13dp"
+                app:layout_constraintStart_toStartOf="@id/ivPanelAlbumArt"
+                app:layout_constraintEnd_toEndOf="@id/ivPanelAlbumArt"
+                app:layout_constraintBottom_toBottomOf="@id/ivPanelAlbumArt" />
 
             <LinearLayout
                 android:id="@+id/llPanelTitleRow"
@@ -432,25 +449,41 @@
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintEnd_toEndOf="parent">
 
-                <ImageButton
-                    android:id="@+id/btnMiniPlayMode"
+                <FrameLayout
                     android:layout_width="0dp"
                     android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:background="@android:color/transparent"
-                    android:contentDescription="Modo de reproduccion"
-                    android:padding="10dp"
-                    android:src="@drawable/ic_repeat" />
+                    android:layout_weight="1">
 
-                <ImageButton
-                    android:id="@+id/btnPanelPrevious"
+                    <ImageButton
+                        android:id="@+id/btnMiniPlayMode"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:layout_gravity="center"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="Modo de reproduccion"
+                        android:foreground="@drawable/border_icon_button_circle"
+                        android:padding="10dp"
+                        android:src="@drawable/ic_repeat" />
+
+                </FrameLayout>
+
+                <FrameLayout
                     android:layout_width="0dp"
                     android:layout_height="56dp"
-                    android:layout_weight="1"
-                    android:background="@android:color/transparent"
-                    android:contentDescription="Anterior"
-                    android:padding="12dp"
-                    android:src="@drawable/ic_skip_previous" />
+                    android:layout_weight="1">
+
+                    <ImageButton
+                        android:id="@+id/btnPanelPrevious"
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:layout_gravity="center"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="Anterior"
+                        android:foreground="@drawable/border_icon_button_circle"
+                        android:padding="12dp"
+                        android:src="@drawable/ic_skip_previous" />
+
+                </FrameLayout>
 
                 <ImageButton
                     android:id="@+id/btnPanelPlayPause"
@@ -460,29 +493,46 @@
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/btn_play_expanded"
                     android:contentDescription="Reproducir o pausar"
+                    android:foreground="@drawable/border_icon_button_circle"
                     android:padding="20dp"
                     android:src="@drawable/ic_play_arrow"
                     android:tint="@color/spotify_black" />
 
-                <ImageButton
-                    android:id="@+id/btnPanelNext"
+                <FrameLayout
                     android:layout_width="0dp"
                     android:layout_height="56dp"
-                    android:layout_weight="1"
-                    android:background="@android:color/transparent"
-                    android:contentDescription="Siguiente"
-                    android:padding="12dp"
-                    android:src="@drawable/ic_skip_next" />
+                    android:layout_weight="1">
 
-                <ImageButton
-                    android:id="@+id/btnPanelQueue"
+                    <ImageButton
+                        android:id="@+id/btnPanelNext"
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:layout_gravity="center"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="Siguiente"
+                        android:foreground="@drawable/border_icon_button_circle"
+                        android:padding="12dp"
+                        android:src="@drawable/ic_skip_next" />
+
+                </FrameLayout>
+
+                <FrameLayout
                     android:layout_width="0dp"
                     android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:background="@android:color/transparent"
-                    android:contentDescription="Ver cola"
-                    android:padding="10dp"
-                    android:src="@drawable/ic_queue_music" />
+                    android:layout_weight="1">
+
+                    <ImageButton
+                        android:id="@+id/btnPanelQueue"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:layout_gravity="center"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="Ver cola"
+                        android:foreground="@drawable/border_icon_button_circle"
+                        android:padding="10dp"
+                        android:src="@drawable/ic_queue_music" />
+
+                </FrameLayout>
 
             </LinearLayout>
 

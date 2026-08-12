@@ -8,14 +8,34 @@
     android:gravity="center_vertical"
     android:padding="12dp">
 
-    <ImageView
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:background="@drawable/bg_icon_button_circle"
-        android:padding="8dp"
-        android:src="@drawable/ic_music_note"
-        android:tint="@color/spotify_green"
-        android:contentDescription="@string/app_name" />
+    <FrameLayout
+        android:id="@+id/widgetArtContainer"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:background="@drawable/bg_album_art_small">
+
+        <ImageView
+            android:id="@+id/widgetArtPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="12dp"
+            android:src="@drawable/ic_music_note"
+            android:tint="@color/spotify_gray"
+            android:contentDescription="@string/app_name" />
+
+        <!-- Se muestra en lugar del placeholder en cuanto MusicWidgetProvider
+             consigue la caratula real (via AlbumArtRepository); ya llega
+             recortada con esquinas redondeadas desde el codigo, porque
+             RemoteViews no soporta clipToOutline como el resto de la app. -->
+        <ImageView
+            android:id="@+id/widgetAlbumArt"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:visibility="gone"
+            android:contentDescription="Caratula del album" />
+
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="0dp"

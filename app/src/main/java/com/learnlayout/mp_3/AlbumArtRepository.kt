@@ -53,6 +53,15 @@ object AlbumArtRepository {
     }
 
     /**
+     * Devuelve la caratula si ya esta en cache de memoria, sin disparar
+     * ninguna carga de disco/red. Sirve para pintarla directo (sin pasar
+     * por el placeholder ni el fade) cuando ya se sabe que esta disponible
+     * al instante: evita el parpadeo de placeholder->caratula al reabrir
+     * la app, scrollear la lista, o volver a una cancion ya vista.
+     */
+    fun getCachedCover(song: Song): Bitmap? = memoryCache.get(song.id)
+
+    /**
      * Pide la caratula de [song]. Llama a [callback] en el hilo principal
      * SOLO si la encuentra (memoria, disco o red) y sigue siendo necesaria.
      * Si no hay caratula disponible, no llama a [callback]: quien la pidio

@@ -6,13 +6,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 
-/**
- * RenderersFactory que arma el AudioSink de ExoPlayer con
- * SoftwareEqualizerProcessor metido en la cadena de AudioProcessor. Se
- * usa en MusicService.buildPlayer() para que TODOS los ExoPlayer del
- * servicio (cancion normal, restore, los dos players del crossfade)
- * pasen el audio por el ecualizador antes de llegar al hardware.
- */
 @UnstableApi
 class EqAudioSinkRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
 
@@ -23,7 +16,10 @@ class EqAudioSinkRenderersFactory(context: Context) : DefaultRenderersFactory(co
     ): AudioSink {
         return DefaultAudioSink.Builder(context)
             .setAudioProcessorChain(
-                DefaultAudioSink.DefaultAudioProcessorChain(SoftwareEqualizerProcessor())
+                DefaultAudioSink.DefaultAudioProcessorChain(
+                    SoftwareEqualizerProcessor(),
+                    SpectrumAudioProcessor()
+                )
             )
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)

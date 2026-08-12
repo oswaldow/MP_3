@@ -4,8 +4,12 @@ import android.content.Context
 
 /**
  * Guarda el ultimo estado conocido de reproduccion (titulo, artista, si
- * esta sonando) para que el widget pueda pintarse de inmediato al agregarse
- * o al reiniciar el telefono, sin depender de que MusicService este vivo.
+ * esta sonando, y el id de la cancion) para que el widget pueda pintarse
+ * de inmediato al agregarse o al reiniciar el telefono, sin depender de
+ * que MusicService este vivo. El songId es lo que le permite a
+ * MusicWidgetProvider volver a pedirle la caratula a AlbumArtRepository
+ * (que ya la tiene en su cache de disco) sin necesidad del objeto Song
+ * completo.
  */
 object WidgetStateRepository {
 
@@ -14,12 +18,14 @@ object WidgetStateRepository {
     private const val KEY_ARTIST = "artist"
     private const val KEY_IS_PLAYING = "is_playing"
     private const val KEY_HAS_SONG = "has_song"
+    private const val KEY_SONG_ID = "song_id"
 
     data class WidgetState(
         val title: String,
         val artist: String,
         val isPlaying: Boolean,
-        val hasSong: Boolean
+        val hasSong: Boolean,
+        val songId: Long = -1L
     )
 
     fun saveState(context: Context, state: WidgetState) {
@@ -29,6 +35,7 @@ object WidgetStateRepository {
             .putString(KEY_ARTIST, state.artist)
             .putBoolean(KEY_IS_PLAYING, state.isPlaying)
             .putBoolean(KEY_HAS_SONG, state.hasSong)
+            .putLong(KEY_SONG_ID, state.songId)
             .apply()
     }
 
@@ -38,7 +45,8 @@ object WidgetStateRepository {
             title = prefs.getString(KEY_TITLE, null) ?: "MP_3",
             artist = prefs.getString(KEY_ARTIST, null) ?: "Abre la app para reproducir musica",
             isPlaying = prefs.getBoolean(KEY_IS_PLAYING, false),
-            hasSong = prefs.getBoolean(KEY_HAS_SONG, false)
+            hasSong = prefs.getBoolean(KEY_HAS_SONG, false),
+            songId = prefs.getLong(KEY_SONG_ID, -1L)
         )
     }
 }

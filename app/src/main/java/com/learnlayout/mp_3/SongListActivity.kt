@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import androidx.activity.addCallback
@@ -68,6 +69,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private lateinit var btnPanelLyricsSync: ImageButton
     private lateinit var btnPanelQueue: ImageButton
     private lateinit var ivPanelAlbumArt: ImageView
+    private lateinit var audioSpectrumView: AudioSpectrumView
     private lateinit var viewPanelArtBanner: View
     private lateinit var tvPanelSongTitle: TextView
     private lateinit var tvPanelArtist: TextView
@@ -162,6 +164,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnPanelFavorite = btnPanelFavorite,
             btnPanelLyricsSync = btnPanelLyricsSync,
             ivPanelAlbumArt = ivPanelAlbumArt,
+            audioSpectrumView = audioSpectrumView,
             viewPanelArtBanner = viewPanelArtBanner,
             tvPanelSongTitle = tvPanelSongTitle,
             tvPanelArtist = tvPanelArtist,
@@ -479,6 +482,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         btnPanelFavorite = findViewById(R.id.btnPanelFavorite)
         btnPanelLyricsSync = findViewById(R.id.btnPanelLyricsSync)
         ivPanelAlbumArt = findViewById(R.id.ivPanelAlbumArt)
+        audioSpectrumView = findViewById(R.id.audioSpectrumView)
         viewPanelArtBanner = findViewById(R.id.viewPanelArtBanner)
         tvPanelSongTitle = findViewById(R.id.tvPanelSongTitle)
         tvPanelArtist = findViewById(R.id.tvPanelArtist)
@@ -759,9 +763,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             // reiniciamos con setPlaylist (que siempre arranca desde el
             // principio): solo abrimos el panel donde va quedo.
             val isSameSongPlaying = tappedSong != null && service.getCurrentSong()?.id == tappedSong.id
+            Log.d("MP3_PANEL", "openPlayer: tappedSong='${tappedSong?.title}' isSameSongPlaying=$isSameSongPlaying thread=${Thread.currentThread().name}")
             if (!isSameSongPlaying) {
+                Log.d("MP3_PANEL", "openPlayer: llamando service.setPlaylist(...)")
                 service.setPlaylist(playlist, startIndex)
+                Log.d("MP3_PANEL", "openPlayer: service.setPlaylist(...) retorno")
             }
+            Log.d("MP3_PANEL", "openPlayer: llamando playerPanelController.expandWhenReady()")
             playerPanelController.expandWhenReady()
         } else {
             pendingSongList = playlist
@@ -850,13 +858,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun showMiniPlayer(song: Song, playing: Boolean) {
+        Log.d("MP3_PANEL", "showMiniPlayer: song='${song.title}' playing=$playing thread=${Thread.currentThread().name}")
         playerPanelController.updateNowPlaying(song, playing)
         lyricsPanelController.updatePeekHeight()
         lyricsPanelController.loadForSong(song)
     }
 
     override fun onSongChanged(song: Song, index: Int) {
+        Log.d("MP3_PANEL", "onSongChanged: song='${song.title}' index=$index thread(antes de runOnUiThread)=${Thread.currentThread().name}")
         runOnUiThread {
+            Log.d("MP3_PANEL", "onSongChanged: dentro de runOnUiThread thread=${Thread.currentThread().name}")
             showMiniPlayer(song, musicService?.isPlaying() == true)
             songAdapter.setCurrentPlayingId(song.id)
             queueSheet.onSongChanged(song)
