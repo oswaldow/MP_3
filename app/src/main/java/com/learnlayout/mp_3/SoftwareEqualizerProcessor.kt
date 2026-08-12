@@ -16,38 +16,20 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tanh
 
-/**
- * Ecualizador de 5 bandas implementado en software (filtros biquad
- * "peaking" en cascada para las 3 bandas medias, y "shelf" para las 2
- * bandas extremas, formulas del Audio EQ Cookbook de RBJ), que se
- * inyecta directo en la cadena de AudioProcessor de ExoPlayer (ver
- * EqAudioSinkRenderersFactory / MusicService.buildPlayer()).
- *
- * Por que existe esto en vez de usar android.media.audiofx.Equalizer:
- * en varios dispositivos (HyperOS/MIUI del POCO F6 entre ellos) el
- * motor de efectos de audio del sistema RECHAZA la creacion de
- * Equalizer/BassBoost para apps de terceros con Error -3, sin importar
- * el timing. Procesando el PCM nosotros mismos, el ecualizador
- * funciona siempre, en cualquier dispositivo, porque no depende de
- * ningun servicio del sistema.
- *
- * El estado "real" (ganancias por banda, enabled/disabled) vive en el
- * companion object -compartido por TODAS las instancias de este
- * processor que cree MusicService a lo largo de la vida de la app, una
- * por cada ExoPlayer nuevo-. Cada instancia mantiene su propio estado
- * de filtro (x1,x2,y1,y2 por canal) porque eso si es propio de cada
- * stream de audio.
- */
+
 @UnstableApi
 class SoftwareEqualizerProcessor : AudioProcessor {
 
     companion object {
-        // 5 bandas tipicas de un ecualizador de telefono.
-        val CENTER_FREQS_HZ = intArrayOf(60, 230, 910, 3600, 14000)
-        const val NUM_BANDS = 5
+        // 10 bandas graficas estandar.
+        val CENTER_FREQS_HZ = intArrayOf(31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
+        const val NUM_BANDS = 10
 
         const val MIN_GAIN_MILLIBEL = -1500
         const val MAX_GAIN_MILLIBEL = 1500
+
+        const val MIN_PREAMP_MILLIBEL = -1200
+        const val MAX_PREAMP_MILLIBEL = 1200
 
         private const val Q = 1.0
 
@@ -63,6 +45,8 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         // y se escriben desde el hilo principal (UI).
         @Volatile private var bandGainsMillibel = IntArray(NUM_BANDS)
         @Volatile private var masterEnabled = false
+        @Volatile private var preampMillibel = 0
+        @Volatile private var autoCompensationEnabled = true
 
         // Se incrementa cada vez que cambia una ganancia o el enabled,
         // para que las instancias existentes sepan que tienen que
@@ -92,6 +76,20 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         }
 
         fun isMasterEnabled(): Boolean = masterEnabled
+
+        fun setPreampMillibel(value: Int) {
+            preampMillibel = value.coerceIn(MIN_PREAMP_MILLIBEL, MAX_PREAMP_MILLIBEL)
+            configVersion++
+        }
+
+        fun getPreampMillibel(): Int = preampMillibel
+
+        fun setAutoCompensationEnabled(enabled: Boolean) {
+            autoCompensationEnabled = enabled
+            configVersion++
+        }
+
+        fun isAutoCompensationEnabled(): Boolean = autoCompensationEnabled
 
         fun resetAllBands() {
             bandGainsMillibel = IntArray(NUM_BANDS)
@@ -151,22 +149,28 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         val sampleRate = inputAudioFormat.sampleRate
         val gains = bandGainsMillibel
 
-        // Bandas extremas (Graves y Brillo) usan filtro shelf: mueven TODO
-        // el rango por debajo/encima de la frecuencia, no solo una campana
-        // angosta ahi. Se siente mucho mas parecido a lo que la gente
-        // espera de "graves"/"agudos" en un ecualizador de telefono. Las
-        // 3 bandas del medio siguen siendo peaking (campana), que es lo
-        // correcto para frecuencias intermedias.
+        // La primera y ultima banda son shelves; las ocho intermedias son
+        // peaking. La frecuencia se limita por debajo de Nyquist para evitar
+        // coeficientes invalidos en streams con sample rates poco comunes.
         coeffs = Array(NUM_BANDS) { band ->
             val gainDb = gains[band] / 100.0
+            val safeFreq = CENTER_FREQS_HZ[band].toDouble()
+                .coerceAtMost(sampleRate * 0.45)
+                .coerceAtLeast(20.0)
             when (band) {
-                0 -> computeLowShelf(CENTER_FREQS_HZ[band].toDouble(), sampleRate, gainDb)
-                NUM_BANDS - 1 -> computeHighShelf(CENTER_FREQS_HZ[band].toDouble(), sampleRate, gainDb)
-                else -> computeBiquadPeaking(CENTER_FREQS_HZ[band].toDouble(), sampleRate, gainDb, Q)
+                0 -> computeLowShelf(safeFreq, sampleRate, gainDb)
+                NUM_BANDS - 1 -> computeHighShelf(safeFreq, sampleRate, gainDb)
+                else -> computeBiquadPeaking(safeFreq, sampleRate, gainDb, Q)
             }
         }
 
-        preGainLinear = computeHeadroomGain(gains)
+        val manualPreampDb = preampMillibel / 100.0
+        val automaticDb = if (autoCompensationEnabled) {
+            -computeAutomaticCompensationDb(gains)
+        } else {
+            0.0
+        }
+        preGainLinear = 10.0.pow((manualPreampDb + automaticDb) / 20.0)
         appliedVersion = configVersion
         val preGainDb = 20.0 * log10(preGainLinear)
         Log.d(TAG_EQ, "recomputeCoeffsIfNeeded: recalculado, appliedVersion=$appliedVersion gains=${gains.toList()} preGainDb=$preGainDb instance=${System.identityHashCode(this)}")
@@ -181,10 +185,14 @@ class SoftwareEqualizerProcessor : AudioProcessor {
      * boost total se esta pidiendo, para que el pico ya casi no llegue a
      * necesitar el limiter de la funcion softLimit().
      */
-    private fun computeHeadroomGain(gainsMillibel: IntArray): Double {
-        val totalBoostDb = gainsMillibel.filter { it > 0 }.sumOf { it / 100.0 }
-        val headroomDb = (totalBoostDb * 0.5).coerceAtMost(12.0)
-        return 10.0.pow(-headroomDb / 20.0)
+    private fun computeAutomaticCompensationDb(gainsMillibel: IntArray): Double {
+        val positiveBoostDb = gainsMillibel
+            .filter { it > 0 }
+            .sumOf { it / 100.0 }
+
+        // Compensacion moderada: suficiente para dejar headroom sin hacer
+        // que un preset suene innecesariamente bajo. Se limita a 12 dB.
+        return (positiveBoostDb * 0.5).coerceAtMost(12.0)
     }
 
     private fun computeBiquadPeaking(freqHz: Double, sampleRate: Int, gainDb: Double, q: Double): Coeffs {

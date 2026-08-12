@@ -923,9 +923,6 @@ class PlayerPanelController(
         return String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
 
-    // DEBUG: helpers solo para que los logs de arriba sean legibles
-    // (adb logcat -s MP3_PANEL). Se pueden borrar junto con los Log.d
-    // una vez resuelto el problema del "asomo" del mini player.
     private fun stateName(state: Int): String = when (state) {
         BottomSheetBehavior.STATE_EXPANDED -> "EXPANDED"
         BottomSheetBehavior.STATE_COLLAPSED -> "COLLAPSED"

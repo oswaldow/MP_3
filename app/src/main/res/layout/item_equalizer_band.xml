@@ -1,33 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="wrap_content"
+    android:layout_width="58dp"
     android:layout_height="match_parent"
-    android:layout_marginHorizontal="4dp"
-    android:background="@drawable/bg_eq_band_card"
-    android:orientation="vertical"
+    android:layout_marginHorizontal="3dp"
     android:gravity="center_horizontal"
-    android:paddingVertical="10dp"
-    android:paddingHorizontal="6dp">
+    android:orientation="vertical"
+    android:paddingVertical="8dp">
 
     <TextView
         android:id="@+id/tvBandLevel"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="10dp"
+        android:layout_height="22dp"
+        android:gravity="center"
         android:text="0dB"
         android:textColor="@color/spotify_green"
-        android:textSize="14sp"
+        android:textSize="12sp"
         android:textStyle="bold" />
 
     <FrameLayout
         android:id="@+id/frameBandSeek"
-        android:layout_width="44dp"
+        android:layout_width="58dp"
         android:layout_height="0dp"
         android:layout_weight="1">
 
         <SeekBar
             android:id="@+id/seekBand"
-            android:layout_width="240dp"
+            android:layout_width="220dp"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:rotation="270"
@@ -39,25 +37,22 @@
 
     <TextView
         android:id="@+id/tvBandFreq"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:text="0Hz"
+        android:layout_width="match_parent"
+        android:layout_height="20dp"
+        android:gravity="center"
+        android:text="1k"
         android:textColor="@color/text_primary_light"
-        android:textSize="11sp"
+        android:textSize="10sp"
         android:textStyle="bold" />
 
     <TextView
         android:id="@+id/tvBandLabel"
-        android:layout_width="72dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text=""
+        android:layout_width="match_parent"
+        android:layout_height="30dp"
+        android:gravity="top|center_horizontal"
+        android:maxLines="2"
         android:textColor="@color/text_secondary_light"
-        android:textSize="8.5sp"
-        android:lineSpacingExtra="1dp"
-        android:alpha="0.85"
-        android:gravity="center"
-        android:maxLines="3" />
+        android:textSize="7.5sp"
+        android:alpha="0.8" />
 
 </LinearLayout>

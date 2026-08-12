@@ -1,12 +1,7 @@
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
 import android.content.res.ColorStateList
-import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.IBinder
@@ -25,7 +20,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import com.google.android.material.switchmaterial.SwitchMaterial
-import java.util.Locale
 
 class EqualizerActivity : AppCompatActivity() {
 
@@ -36,7 +30,6 @@ class EqualizerActivity : AppCompatActivity() {
     // revienta con ClassCastException apenas se abre la pantalla (por
     // eso se cerraba solo el Ecualizador). Debe coincidir con el tag
     // real del XML.
-    private lateinit var rootLayout: View
     private lateinit var switchEnabled: SwitchMaterial
     private lateinit var llBandsContainer: LinearLayout
     private lateinit var llPresetsContainer: LinearLayout
@@ -44,6 +37,10 @@ class EqualizerActivity : AppCompatActivity() {
     private lateinit var btnReset: TextView
     private lateinit var btnBack: ImageButton
     private lateinit var tvUnavailable: TextView
+    private lateinit var eqCurveView: EqCurveView
+    private lateinit var seekPreamp: SeekBar
+    private lateinit var tvPreampValue: TextView
+    private lateinit var switchAutoCompensation: SwitchMaterial
 
     private val bandSeekBars = mutableListOf<SeekBar>()
     private val bandValueLabels = mutableListOf<TextView>()
@@ -57,50 +54,59 @@ class EqualizerActivity : AppCompatActivity() {
 
     // Descripcion en lenguaje sencillo de que hace cada banda, para gente
     // que no sabe de audio. Mismo orden que
-    // SoftwareEqualizerProcessor.CENTER_FREQS_HZ (60, 230, 910, 3600, 14000 Hz).
+    // SoftwareEqualizerProcessor.CENTER_FREQS_HZ (31 Hz a 16 kHz).
     private val bandNames = listOf(
-        "Graves\n(bajo, bombo)",
-        "Cuerpo\n(calidez, voz grave)",
-        "Medios\n(voces, guitarra)",
-        "Claridad\n(nitidez, detalle)",
-        "Brillo\n(aire, platillos)"
+        "Subgrave",
+        "Grave",
+        "Grave medio",
+        "Cuerpo",
+        "Medios bajos",
+        "Medios",
+        "Presencia",
+        "Claridad",
+        "Brillo",
+        "Aire"
     )
 
-    // ---------- Tema dinamico (Material You / PlayerPaletteTheme) ----------
-    // Mismo espiritu que el panel del reproductor: el fondo de toda la
-    // pantalla se oscurece segun la caratula de la cancion que esta sonando
-    // (PlayerPaletteTheme.applyFromBitmap ya limita la luminosidad para no
-    // romper el contraste con el texto claro fijo), y el acento que antes
-    // era spotify_green fijo (switch, chip de preset seleccionado, texto
-    // de preset, boton Restablecer) pasa a seguir el color de la caratula.
-    // Si no hay cancion sonando o no tiene caratula, se mantiene el look
-    // original (fondo background_dark, acento spotify_green).
-    private lateinit var musicService: MusicService
-    private var isBound = false
+    private fun setupPreampControls() {
+        val range = EqualizerRepository.getPreampRange()
+        val minLevel = range[0].toInt()
+        val maxLevel = range[1].toInt()
 
-    private val defaultBannerColor: Int by lazy { ContextCompat.getColor(this, R.color.background_dark) }
-    private val defaultAccentColor: Int by lazy { ContextCompat.getColor(this, R.color.spotify_green) }
-    private var currentAccentColor: Int = 0
+        seekPreamp.max = maxLevel - minLevel
+        seekPreamp.progress = EqualizerRepository.getPreampProgress()
+        tvPreampValue.text = formatDb(EqualizerRepository.getPreampLevel())
 
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            musicService = (binder as MusicService.MusicBinder).getService()
-            isBound = true
-            loadThemeFromCurrentSong()
-        }
+        switchAutoCompensation.isChecked = EqualizerRepository.isAutoCompensationEnabled()
+        seekPreamp.isEnabled = EqualizerRepository.isEnabled() && !switchAutoCompensation.isChecked
 
-        override fun onServiceDisconnected(name: ComponentName?) {
-            isBound = false
+        seekPreamp.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val level = (progress + minLevel).toShort()
+                tvPreampValue.text = formatDb(level)
+                if (fromUser) EqualizerRepository.setPreampLevel(level)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        switchAutoCompensation.setOnCheckedChangeListener { _, checked ->
+            EqualizerRepository.setAutoCompensationEnabled(checked)
+            seekPreamp.isEnabled = EqualizerRepository.isEnabled() && !checked
         }
     }
+
+    private fun currentBandGainsDb(): FloatArray =
+        (0 until EqualizerRepository.getNumberOfBands())
+            .map { EqualizerRepository.getBandLevel(it) / 100f }
+            .toFloatArray()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_equalizer)
 
-        currentAccentColor = defaultAccentColor
-
         bindViews()
+        eqCurveView.setAccentColor(ContextCompat.getColor(this, R.color.spotify_green))
 
         if (!EqualizerRepository.isAvailable) {
             showUnavailableState()
@@ -109,17 +115,14 @@ class EqualizerActivity : AppCompatActivity() {
             buildBandSliders()
             buildPresetChips()
             setupResetButton()
+            setupPreampControls()
             applyEnabledStateToControls(EqualizerRepository.isEnabled())
             highlightChip(findMatchingPresetLabel())
         }
 
-        // Se enlaza al servicio siempre (haya o no ecualizador disponible)
-        // para poder tematizar el fondo con la caratula de la cancion actual.
-        bindService(Intent(this, MusicService::class.java), connection, Context.BIND_AUTO_CREATE)
     }
 
     private fun bindViews() {
-        rootLayout = findViewById(R.id.rootEqLayout)
         switchEnabled = findViewById(R.id.switchEqEnabled)
         llBandsContainer = findViewById(R.id.llEqBandsContainer)
         llPresetsContainer = findViewById(R.id.llEqPresetsContainer)
@@ -127,6 +130,10 @@ class EqualizerActivity : AppCompatActivity() {
         btnReset = findViewById(R.id.btnEqReset)
         btnBack = findViewById(R.id.btnEqBack)
         tvUnavailable = findViewById(R.id.tvEqUnavailable)
+        eqCurveView = findViewById(R.id.eqCurveView)
+        seekPreamp = findViewById(R.id.seekPreamp)
+        tvPreampValue = findViewById(R.id.tvPreampValue)
+        switchAutoCompensation = findViewById(R.id.switchAutoCompensation)
 
         btnBack.setOnClickListener { finish() }
 
@@ -152,6 +159,10 @@ class EqualizerActivity : AppCompatActivity() {
         llPresetsContainer.visibility = View.GONE
         tvSelectedPreset.visibility = View.GONE
         btnReset.visibility = View.GONE
+        eqCurveView.visibility = View.GONE
+        seekPreamp.visibility = View.GONE
+        tvPreampValue.visibility = View.GONE
+        switchAutoCompensation.visibility = View.GONE
     }
 
     private fun setupEnabledSwitch() {
@@ -168,6 +179,8 @@ class EqualizerActivity : AppCompatActivity() {
         bandSeekBars.forEach { it.isEnabled = enabled }
         presetChipViews.forEach { it.isEnabled = enabled }
         btnReset.isEnabled = enabled
+        seekPreamp.isEnabled = enabled && !switchAutoCompensation.isChecked
+        switchAutoCompensation.isEnabled = enabled
     }
 
     private fun buildBandSliders() {
@@ -183,6 +196,8 @@ class EqualizerActivity : AppCompatActivity() {
         for (band in 0 until bandCount) {
             llBandsContainer.addView(buildBandColumn(band, minLevel, maxLevel))
         }
+        eqCurveView.setFrequencies(EqualizerRepository.getCenterFrequenciesHz())
+        eqCurveView.setGainsDb(currentBandGainsDb())
     }
 
     // Infla item_equalizer_band.xml (tarjeta redondeada con dB, slider
@@ -213,6 +228,7 @@ class EqualizerActivity : AppCompatActivity() {
                 val level = (progress + minLevel).toShort()
                 EqualizerRepository.setBandLevel(band, level)
                 valueLabel.text = formatDb(level)
+                eqCurveView.setGainsDb(currentBandGainsDb())
                 // El usuario esta ajustando a mano: si el resultado ya no
                 // coincide con ningun preset, se marca como personalizado;
                 // si por coincidencia cae exacto en uno, se resalta ese chip.
@@ -280,6 +296,7 @@ class EqualizerActivity : AppCompatActivity() {
             animateSeekBarTo(bandSeekBars[band], bandValueLabels[band], targetProgress, minLevel)
         }
 
+        eqCurveView.setGainsDb(currentBandGainsDb())
         highlightChip(preset.label)
     }
 
@@ -291,22 +308,22 @@ class EqualizerActivity : AppCompatActivity() {
                 val progress = anim.animatedValue as Int
                 seekBar.progress = progress
                 label.text = formatDb((progress + minLevel).toShort())
+                eqCurveView.setGainsDb(currentBandGainsDb())
             }
             runningAnimators.add(this)
             start()
         }
     }
 
-    // El color base (seleccionado o no) sigue al acento dinamico en vez de
-    // spotify_green fijo. Cuando el chip esta seleccionado, el color del
-    // texto se decide con PlayerPaletteTheme.onColorFor() (igual que los
-    // controles del panel) para que siga siendo legible sin importar que
-    // tan claro u oscuro sea el acento extraido de la caratula.
+    // Estilo fijo del ecualizador: esta pantalla no usa Material You ni
+    // colores extraidos de la caratula. El acento siempre es verde Spotify.
     private fun styleChip(chip: TextView, selected: Boolean) {
         if (selected) {
             chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_selected)
-            chip.backgroundTintList = ColorStateList.valueOf(currentAccentColor)
-            chip.setTextColor(PlayerPaletteTheme.onColorFor(currentAccentColor))
+            chip.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.spotify_green)
+            )
+            chip.setTextColor(ContextCompat.getColor(this, R.color.spotify_black))
         } else {
             chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_unselected)
             chip.backgroundTintList = null
@@ -350,63 +367,20 @@ class EqualizerActivity : AppCompatActivity() {
             val range = EqualizerRepository.getBandLevelRange()
             bandSeekBars.forEach { it.progress = (0 - range[0]).toInt() }
             bandValueLabels.forEach { it.text = formatDb(0) }
+            eqCurveView.setGainsDb(currentBandGainsDb())
+            tvPreampValue.text = formatDb(EqualizerRepository.getPreampLevel())
+            seekPreamp.progress = EqualizerRepository.getPreampProgress()
+            switchAutoCompensation.isChecked = true
+            seekPreamp.isEnabled = EqualizerRepository.isEnabled() && !switchAutoCompensation.isChecked
             highlightChip("Plano")
             Toast.makeText(this, "Ecualizador reiniciado", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    // ---------- Tema dinamico: carga y aplicacion ----------
-
-    private fun loadThemeFromCurrentSong() {
-        val song = musicService.getCurrentSong()
-        if (song == null) {
-            applyThemeFallback()
-            return
-        }
-        AlbumArtRepository.loadCover(this, song, object : AlbumArtRepository.Callback {
-            override fun onCoverReady(bitmap: Bitmap) {
-                applyThemeFromBitmap(bitmap)
-            }
-        })
-        // Si no hay caratula en cache ni en red, loadCover simplemente no
-        // llama al callback: la pantalla se queda con el fallback ya
-        // aplicado arriba (fondo background_dark, acento spotify_green).
-    }
-
-    private fun applyThemeFromBitmap(bitmap: Bitmap) {
-        PlayerPaletteTheme.applyFromBitmap(bitmap, rootLayout, defaultBannerColor)
-        PlayerPaletteTheme.applyAccentFromBitmap(
-            bitmap, defaultAccentColor, currentAccentColor
-        ) { color ->
-            currentAccentColor = color
-            applyAccentToControls(color)
-        }
-    }
-
-    private fun applyThemeFallback() {
-        PlayerPaletteTheme.applyFallback(rootLayout, defaultBannerColor)
-        PlayerPaletteTheme.applyAccentFallback(defaultAccentColor, currentAccentColor) { color ->
-            currentAccentColor = color
-            applyAccentToControls(color)
-        }
-    }
-
-    private fun applyAccentToControls(color: Int) {
-        val accentTint = ColorStateList.valueOf(color)
-        switchEnabled.thumbTintList = accentTint
-        btnReset.backgroundTintList = accentTint
-        tvSelectedPreset.setTextColor(color)
-        presetChipViews.forEach { chip -> styleChip(chip, chip.tag == currentPresetLabel) }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         runningAnimators.forEach { it.cancel() }
         runningAnimators.clear()
-        if (isBound) {
-            unbindService(connection)
-            isBound = false
-        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -417,10 +391,12 @@ class EqualizerActivity : AppCompatActivity() {
     }
 
     private fun formatFreq(hz: Int): String {
-        return if (hz >= 1000) {
-            String.format(Locale.getDefault(), "%.1fkHz", hz / 1000.0)
-        } else {
-            "${hz}Hz"
+        return when {
+            hz >= 1000 -> {
+                val k = hz / 1000
+                "${k}k"
+            }
+            else -> "${hz}Hz"
         }
     }
 }

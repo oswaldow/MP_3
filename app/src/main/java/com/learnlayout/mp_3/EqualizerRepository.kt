@@ -4,43 +4,24 @@ import android.content.Context
 import android.content.SharedPreferences
 
 /**
- * Fachada del ecualizador de 5 bandas. Antes envolvia un
- * android.media.audiofx.Equalizer del sistema (que en dispositivos
- * como el POCO F6 con HyperOS/MIUI rechaza la creacion del efecto con
- * Error -3, dejando el ecualizador "no disponible"). Ahora es un
- * ecualizador implementado en software (ver SoftwareEqualizerProcessor,
- * inyectado en el pipeline de ExoPlayer desde
- * EqAudioSinkRenderersFactory / MusicService.buildPlayer()), asi que
- * SIEMPRE esta disponible, sin depender de ningun servicio del sistema.
- *
- * La API publica (isAvailable, isEnabled, getBandLevel, etc.) se
- * mantiene igual que antes para no tener que tocar EqualizerActivity.
- *
- * Los niveles de banda se guardan en SharedPreferences apenas el
- * usuario mueve un slider, y se restauran solos la proxima vez que se
- * llama a init() (por ejemplo si el proceso murio y MusicService
- * arranca de nuevo).
+ * Estado persistente del ecualizador de 10 bandas.
+ * El procesamiento real se hace en SoftwareEqualizerProcessor dentro de
+ * la cadena AudioProcessor de Media3/ExoPlayer.
  */
 object EqualizerRepository {
 
     private const val PREFS_NAME = "equalizer_prefs"
     private const val KEY_ENABLED = "eq_enabled"
     private const val KEY_BAND_PREFIX = "eq_band_"
+    private const val KEY_PREAMP = "eq_preamp"
+    private const val KEY_AUTO_COMP = "eq_auto_compensation"
 
     private var prefs: SharedPreferences? = null
     private var initialized = false
 
-    /** Siempre true: el ecualizador por software no depende del hardware. */
     val isAvailable: Boolean
         get() = true
 
-    /**
-     * Carga el estado guardado (enabled + niveles de banda) en el
-     * procesador de audio. Se llama una sola vez, en
-     * MusicService.onCreate(). A diferencia de la version anterior, ya
-     * NO hace falta un audioSessionId: el procesador se inyecta directo
-     * en el pipeline de cada ExoPlayer (ver EqAudioSinkRenderersFactory).
-     */
     fun init(context: Context) {
         if (initialized) return
         initialized = true
@@ -49,11 +30,21 @@ object EqualizerRepository {
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs = savedPrefs
 
-        SoftwareEqualizerProcessor.setMasterEnabled(savedPrefs.getBoolean(KEY_ENABLED, false))
+        SoftwareEqualizerProcessor.setMasterEnabled(
+            savedPrefs.getBoolean(KEY_ENABLED, false)
+        )
+
         for (band in 0 until SoftwareEqualizerProcessor.NUM_BANDS) {
             val savedLevel = savedPrefs.getInt(KEY_BAND_PREFIX + band, 0)
             SoftwareEqualizerProcessor.setBandGainMillibel(band, savedLevel)
         }
+
+        SoftwareEqualizerProcessor.setPreampMillibel(
+            savedPrefs.getInt(KEY_PREAMP, 0)
+        )
+        SoftwareEqualizerProcessor.setAutoCompensationEnabled(
+            savedPrefs.getBoolean(KEY_AUTO_COMP, true)
+        )
     }
 
     fun isEnabled(): Boolean = SoftwareEqualizerProcessor.isMasterEnabled()
@@ -65,17 +56,18 @@ object EqualizerRepository {
 
     fun getNumberOfBands(): Int = SoftwareEqualizerProcessor.NUM_BANDS
 
-    /** [min, max] en milibeles (mB). 100 mB = 1 dB. */
     fun getBandLevelRange(): ShortArray = shortArrayOf(
         SoftwareEqualizerProcessor.MIN_GAIN_MILLIBEL.toShort(),
         SoftwareEqualizerProcessor.MAX_GAIN_MILLIBEL.toShort()
     )
 
-    /** Frecuencia central de la banda, en Hz. */
     fun getCenterFreqHz(band: Int): Int {
         if (band !in SoftwareEqualizerProcessor.CENTER_FREQS_HZ.indices) return 0
         return SoftwareEqualizerProcessor.CENTER_FREQS_HZ[band]
     }
+
+    fun getCenterFrequenciesHz(): IntArray =
+        SoftwareEqualizerProcessor.CENTER_FREQS_HZ.copyOf()
 
     fun getBandLevel(band: Int): Short =
         SoftwareEqualizerProcessor.getBandGainMillibel(band).toShort()
@@ -85,14 +77,45 @@ object EqualizerRepository {
         prefs?.edit()?.putInt(KEY_BAND_PREFIX + band, level.toInt())?.apply()
     }
 
-    /** Deja todas las bandas en 0 dB (plano), sin tocar el estado enabled/disabled. */
+    fun getPreampRange(): ShortArray = shortArrayOf(
+        SoftwareEqualizerProcessor.MIN_PREAMP_MILLIBEL.toShort(),
+        SoftwareEqualizerProcessor.MAX_PREAMP_MILLIBEL.toShort()
+    )
+
+    fun getPreampLevel(): Short =
+        SoftwareEqualizerProcessor.getPreampMillibel().toShort()
+
+    fun getPreampProgress(): Int {
+        val range = getPreampRange()
+        return getPreampLevel().toInt() - range[0].toInt()
+    }
+
+    fun setPreampLevel(level: Short) {
+        SoftwareEqualizerProcessor.setPreampMillibel(level.toInt())
+        prefs?.edit()?.putInt(KEY_PREAMP, level.toInt())?.apply()
+    }
+
+    fun isAutoCompensationEnabled(): Boolean =
+        SoftwareEqualizerProcessor.isAutoCompensationEnabled()
+
+    fun setAutoCompensationEnabled(enabled: Boolean) {
+        SoftwareEqualizerProcessor.setAutoCompensationEnabled(enabled)
+        prefs?.edit()?.putBoolean(KEY_AUTO_COMP, enabled)?.apply()
+    }
+
+    /** Deja bandas y preamp en 0 dB; activa la compensación automática. */
     fun resetAllBands() {
         SoftwareEqualizerProcessor.resetAllBands()
+        SoftwareEqualizerProcessor.setPreampMillibel(0)
+        SoftwareEqualizerProcessor.setAutoCompensationEnabled(true)
+
         val savedPrefs = prefs ?: return
         val editor = savedPrefs.edit()
         for (band in 0 until SoftwareEqualizerProcessor.NUM_BANDS) {
             editor.putInt(KEY_BAND_PREFIX + band, 0)
         }
+        editor.putInt(KEY_PREAMP, 0)
+        editor.putBoolean(KEY_AUTO_COMP, true)
         editor.apply()
     }
 }
