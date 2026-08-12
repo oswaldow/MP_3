@@ -4,6 +4,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import java.util.Locale
 import androidx.recyclerview.widget.RecyclerView
 
 /**
@@ -12,12 +13,14 @@ import androidx.recyclerview.widget.RecyclerView
  */
 class LyricsCandidateAdapter(
     private val candidates: List<LyricsCandidate>,
+    private val referenceDurationSeconds: Long,
     private val onCandidateSelected: (LyricsCandidate) -> Unit
 ) : RecyclerView.Adapter<LyricsCandidateAdapter.ViewHolder>() {
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val tvLabel: TextView = view.findViewById(R.id.tvLyricsCandidateLabel)
         val tvPreview: TextView = view.findViewById(R.id.tvLyricsCandidatePreview)
+        val tvDuration: TextView = view.findViewById(R.id.tvLyricsCandidateDuration)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -35,9 +38,36 @@ class LyricsCandidateAdapter(
             ?: ""
         holder.tvPreview.text = preview.lineSequence().firstOrNull { it.isNotBlank() } ?: ""
 
+        holder.tvDuration.text = buildDurationText(candidate.durationSeconds)
+
         holder.itemView.setOnClickListener {
             onCandidateSelected(candidate)
         }
+    }
+
+    private fun buildDurationText(candidateSeconds: Long?): String {
+        val songLabel = formatDuration(referenceDurationSeconds)
+        if (candidateSeconds == null || candidateSeconds <= 0L) {
+            return "Duración de la letra: —  •  Tu canción: $songLabel"
+        }
+
+        val difference = kotlin.math.abs(candidateSeconds - referenceDurationSeconds)
+        val candidateLabel = formatDuration(candidateSeconds)
+        val differenceLabel = formatDuration(difference)
+
+        val matchLabel = when {
+            difference <= 2L -> "✓ Coincide"
+            difference <= 5L -> "≈ Muy cercana"
+            else -> "Δ $differenceLabel"
+        }
+
+        return "Letra: $candidateLabel  •  Tu canción: $songLabel  •  $matchLabel"
+    }
+
+    private fun formatDuration(totalSeconds: Long): String {
+        val minutes = totalSeconds.coerceAtLeast(0L) / 60L
+        val seconds = totalSeconds.coerceAtLeast(0L) % 60L
+        return String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
     }
 
     override fun getItemCount(): Int = candidates.size

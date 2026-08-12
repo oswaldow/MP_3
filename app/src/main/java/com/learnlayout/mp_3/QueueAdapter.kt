@@ -297,6 +297,22 @@ class QueueAdapter(
     fun getCurrentIndex(): Int =
         currentIndex
 
+    /**
+     * Actualiza únicamente el elemento marcado como canción actual.
+     * No reemplaza el adapter ni modifica la posición del RecyclerView.
+     */
+    fun setCurrentIndex(newIndex: Int) {
+        if (newIndex !in songs.indices || newIndex == currentIndex) return
+
+        val previousIndex = currentIndex
+        currentIndex = newIndex
+
+        if (previousIndex in songs.indices) {
+            notifyItemChanged(previousIndex)
+        }
+        notifyItemChanged(newIndex)
+    }
+
     fun onItemMove(
         fromPosition: Int,
         toPosition: Int

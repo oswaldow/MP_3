@@ -243,6 +243,15 @@ class LyricsPanelController(
      * SavedLyricsRepository sin pasar por loadForSong (que no vuelve a
      * cargar nada si ya es la misma cancion).
      */
+    /**
+     * Fuerza la actualizacion visual de las letras de la cancion actual
+     * aunque el ID no haya cambiado. Se usa cuando cambia titulo/artista.
+     */
+    fun refreshForMetadataChange(song: Song) {
+        lyricsSongId = null
+        loadForSong(song)
+    }
+
     fun reloadSavedLyrics(song: Song) {
         if (lyricsSongId != song.id) return
         val saved = SavedLyricsRepository.getSavedLyrics(activity, song.id)

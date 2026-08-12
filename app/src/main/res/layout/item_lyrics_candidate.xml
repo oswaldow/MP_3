@@ -45,6 +45,18 @@
             android:textColor="@color/text_secondary_light"
             android:textSize="12sp" />
 
+        <TextView
+            android:id="@+id/tvLyricsCandidateDuration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Letra: 3:45  •  Tu canción: 3:47  •  ✓ Coincide"
+            android:textColor="@color/text_secondary_light"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
     </LinearLayout>
 
 </LinearLayout>

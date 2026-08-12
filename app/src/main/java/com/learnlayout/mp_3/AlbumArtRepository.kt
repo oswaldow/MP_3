@@ -12,7 +12,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
-import java.util.Collections
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -36,7 +35,19 @@ object AlbumArtRepository {
 
     // Evita relanzar la misma busqueda de red si ya hay una en curso
     // para la misma cancion (pasa seguido con RecyclerView haciendo scroll).
-    private val inFlight = Collections.synchronizedSet(mutableSetOf<Long>())
+    /**
+     * Canciones que estan cargando su caratula. Una misma caratula puede ser
+     * solicitada al mismo tiempo por varias vistas (cola + reproductor + lista).
+     * En vez de ignorar las solicitudes posteriores, las dejamos esperando y
+     * entregamos el bitmap a todas cuando termina la carga.
+     */
+    private val inFlight = mutableSetOf<Long>()
+    private val pendingCallbacks = mutableMapOf<Long, MutableList<PendingRequest>>()
+
+    private data class PendingRequest(
+        val callback: Callback,
+        val isStillNeeded: () -> Boolean
+    )
 
     interface Callback {
         fun onCoverReady(bitmap: Bitmap)
@@ -85,16 +96,24 @@ object AlbumArtRepository {
             return
         }
 
-        if (!inFlight.add(song.id)) return
+        val shouldStartLoad = synchronized(inFlight) {
+            pendingCallbacks
+                .getOrPut(song.id) { mutableListOf() }
+                .add(PendingRequest(callback, isStillNeeded))
+
+            inFlight.add(song.id)
+        }
+
+        if (!shouldStartLoad) return
 
         val appContext = context.applicationContext
         executor.execute {
+            var bitmap: Bitmap? = null
             try {
-                // Chequeo temprano: si ya no se necesita, ni se abre el
-                // archivo de cache. Esto es lo que libera el pool rapido
-                // cuando el usuario scrollea mas rapido de lo que tardan
-                // las cargas anteriores en resolverse.
-                if (!isStillNeeded()) return@execute
+                val stillNeeded = synchronized(inFlight) {
+                    pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
+                }
+                if (!stillNeeded) return@execute
 
                 val cacheKey = cacheKeyFor(song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
@@ -103,18 +122,20 @@ object AlbumArtRepository {
                     decodeSampledBitmapFromFile(diskFile)
                 } else null
 
-                val bitmap = fromDisk ?: if (isStillNeeded()) {
-                    fetchFromNetwork(song)?.also { bmp -> saveToDisk(diskFile, bmp) }
-                } else null
+                bitmap = fromDisk ?: run {
+                    val needsNetwork = synchronized(inFlight) {
+                        pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
+                    }
+                    if (needsNetwork) {
+                        fetchFromNetwork(song)?.also { bmp -> saveToDisk(diskFile, bmp) }
+                    } else null
+                }
 
                 if (bitmap != null) {
                     memoryCache.put(song.id, bitmap)
-                    if (isStillNeeded()) {
-                        mainHandler.post { callback.onCoverReady(bitmap) }
-                    }
                 }
             } finally {
-                inFlight.remove(song.id)
+                finishInFlight(song.id, bitmap)
             }
         }
     }
@@ -140,25 +161,62 @@ object AlbumArtRepository {
             return
         }
 
-        if (!inFlight.add(song.id)) return
+        val shouldStartLoad = synchronized(inFlight) {
+            pendingCallbacks
+                .getOrPut(song.id) { mutableListOf() }
+                .add(PendingRequest(callback, isStillNeeded))
+
+            inFlight.add(song.id)
+        }
+
+        // Otra parte de la app ya esta cargando esta misma caratula.
+        // Nos quedamos registrados como listener para recibir el bitmap cuando
+        // termine. Esto evita que el reproductor se quede con placeholder
+        // mientras la cola ya esta cargando la misma portada.
+        if (!shouldStartLoad) return
 
         val appContext = context.applicationContext
         executor.execute {
+            var bitmap: Bitmap? = null
             try {
-                if (!isStillNeeded()) return@execute
+                val stillNeeded = synchronized(inFlight) {
+                    pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
+                }
+                if (!stillNeeded) return@execute
 
                 val cacheKey = cacheKeyFor(song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
                 if (!diskFile.exists()) return@execute
 
-                val bitmap = decodeSampledBitmapFromFile(diskFile) ?: return@execute
-
-                memoryCache.put(song.id, bitmap)
-                if (isStillNeeded()) {
-                    mainHandler.post { callback.onCoverReady(bitmap) }
+                bitmap = decodeSampledBitmapFromFile(diskFile)
+                if (bitmap != null) {
+                    memoryCache.put(song.id, bitmap)
                 }
             } finally {
-                inFlight.remove(song.id)
+                finishInFlight(song.id, bitmap)
+            }
+        }
+    }
+
+    /**
+     * Entrega el resultado a todas las vistas que estaban esperando la misma
+     * caratula. Se ejecuta una sola vez por carga y siempre publica callbacks
+     * en el hilo principal.
+     */
+    private fun finishInFlight(songId: Long, bitmap: Bitmap?) {
+        val callbacks = synchronized(inFlight) {
+            inFlight.remove(songId)
+            pendingCallbacks.remove(songId)?.toList().orEmpty()
+        }
+
+        if (bitmap == null || callbacks.isEmpty()) return
+
+        callbacks.forEach { request ->
+            if (!request.isStillNeeded()) return@forEach
+            mainHandler.post {
+                if (request.isStillNeeded()) {
+                    request.callback.onCoverReady(bitmap)
+                }
             }
         }
     }

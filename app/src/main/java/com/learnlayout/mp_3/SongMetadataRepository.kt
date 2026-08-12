@@ -62,4 +62,3 @@ object SongMetadataRepository {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 }
-

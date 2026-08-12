@@ -40,6 +40,34 @@ class QueueManager {
         currentIndex
 
 
+    /**
+     * Actualiza titulo y artista de una cancion en TODAS las representaciones
+     * de la cola, incluyendo la lista original usada por shuffle.
+     * El indice actual no cambia.
+     */
+    fun updateSongMetadata(songId: Long, title: String, artist: String): Song? {
+        var updatedSong: Song? = null
+
+        originalList = originalList.map { song ->
+            if (song.id == songId) {
+                val updated = song.copy(title = title, artist = artist)
+                updatedSong = updated
+                updated
+            } else song
+        }
+
+        songList = songList.map { song ->
+            if (song.id == songId) {
+                val updated = song.copy(title = title, artist = artist)
+                updatedSong = updated
+                updated
+            } else song
+        }
+
+        return updatedSong
+    }
+
+
     fun setCurrentIndex(index: Int) {
 
         if (index in songList.indices) {

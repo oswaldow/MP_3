@@ -32,7 +32,8 @@ data class LyricsResult(
  */
 data class LyricsCandidate(
     val label: String,
-    val result: LyricsResult
+    val result: LyricsResult,
+    val durationSeconds: Long? = null
 )
 
 /**
@@ -155,7 +156,11 @@ object LyricsRepository {
                                     (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
                             if (!hasContent) continue
 
-                            out += LyricsCandidate(label = buildCandidateLabel(obj, result, cleanTitle, cleanArtist), result = result)
+                            out += LyricsCandidate(
+                                label = buildCandidateLabel(obj, result, cleanTitle, cleanArtist),
+                                result = result,
+                                durationSeconds = obj.optLong("duration", -1L).takeIf { it > 0L }
+                            )
                         }
                         mainHandler.post { callback.onCandidatesReady(out) }
                     } catch (e: Exception) {
@@ -175,17 +180,9 @@ object LyricsRepository {
     ): String {
         val trackName = obj.optString("trackName", fallbackTitle).ifBlank { fallbackTitle }
         val artistName = obj.optString("artistName", fallbackArtist).ifBlank { fallbackArtist }
-        val durationSeconds = obj.optInt("duration", -1)
-
-        val durationLabel = if (durationSeconds > 0) {
-            val minutes = durationSeconds / 60
-            val seconds = durationSeconds % 60
-            String.format(java.util.Locale.getDefault(), " (%d:%02d)", minutes, seconds)
-        } else ""
-
         val syncLabel = if (!result.syncedLines.isNullOrEmpty()) "Sincronizada" else "Sin sincronizar"
 
-        return "$trackName - $artistName$durationLabel - $syncLabel"
+        return "$trackName - $artistName - $syncLabel"
     }
 
     private fun fetchViaSearch(title: String, artist: String, callback: LyricsCallback) {

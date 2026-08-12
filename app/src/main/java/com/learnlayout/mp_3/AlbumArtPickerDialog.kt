@@ -37,7 +37,7 @@ class AlbumArtPickerDialog(
         dialog.setContentView(view)
 
         val subtitle = view.findViewById<TextView>(R.id.tvPickerSubtitle)
-        subtitle.text = "Para \"${song.title}\" - ${song.artist}"
+        subtitle.text = "Para \"${song.title}\" - ${song.artist}  •  Duración: ${formatDuration(song.duration)}"
 
         setupArtSection(view)
         setupLyricsSection(view, dialog)
@@ -88,11 +88,20 @@ class AlbumArtPickerDialog(
                 }
 
                 recycler.visibility = View.VISIBLE
-                recycler.adapter = LyricsCandidateAdapter(candidates) { chosen ->
+                recycler.adapter = LyricsCandidateAdapter(
+                    candidates = candidates,
+                    referenceDurationSeconds = song.duration / 1000L
+                ) { chosen ->
                     onLyricsChosen(song, chosen.result)
                     dialog.dismiss()
                 }
             }
         })
+    }
+    private fun formatDuration(durationMs: Long): String {
+        val totalSeconds = durationMs.coerceAtLeast(0L) / 1000L
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        return String.format(java.util.Locale.getDefault(), "%d:%02d", minutes, seconds)
     }
 }

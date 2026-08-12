@@ -104,7 +104,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             isPlaylistsTabActive = { topBarController.isPlaylistsTabActive },
             onPlaylistsChanged = { loadPlaylists() },
             onSongMetadataChanged = {
-                lyricsPanelController.resetSongId()
+                refreshCurrentSongMetadata()
                 loadSongs()
                 if (queueSheet.isShowing) {
                     queueSheet.refreshList()
@@ -308,7 +308,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 musicService?.setPlaylist(pending, pendingStartIndex)
                 playerPanelController.expandWhenReady()
             } else {
-                restorePersistedPlaybackIfPossible()
+                val current = musicService?.getCurrentSong()
+                if (current != null) {
+                    showMiniPlayer(current, musicService?.isPlaying() == true)
+                    songAdapter.setCurrentPlayingId(current.id)
+                } else {
+                    tryRestoreLastSong()
+                }
             }
 
             musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
@@ -773,48 +779,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         applyFilterAndSort()
         if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
-
-        // La conexion con MusicService puede ocurrir antes de que termine de
-        // cargar la biblioteca. En ese caso intentamos restaurar la cola aqui,
-        // cuando ya tenemos todos los Song disponibles para resolver los IDs
-        // persistidos.
-        restorePersistedPlaybackIfPossible()
-
         val t3 = System.currentTimeMillis()
         android.util.Log.d("PERF_DEBUG", "loadSongs() TOTAL: ${t3 - t0} ms")
     }
 
-    /**
-     * Primero intenta restaurar la cola personalizada exacta guardada por
-     * MusicService. Solo si no existe una cola persistida valida, usa como
-     * compatibilidad el estado antiguo de ultima cancion y reconstruye la cola
-     * cronologica de Home.
-     */
-    private fun restorePersistedPlaybackIfPossible() {
-        val service = musicService ?: return
-        if (service.getCurrentSong() != null) {
-            val current = service.getCurrentSong() ?: return
-            showMiniPlayer(current, service.isPlaying())
-            songAdapter.setCurrentPlayingId(current.id)
-            return
-        }
-
-        if (allSongs.isEmpty()) return
-
-        val restored = service.restorePersistedQueue(allSongs)
-        if (restored) {
-            val current = service.getCurrentSong()
-            if (current != null) {
-                showMiniPlayer(current, service.isPlaying())
-                songAdapter.setCurrentPlayingId(current.id)
-            }
-            return
-        }
-
-        tryRestoreLastSong()
-    }
-
-    /** Compatibilidad con estados creados antes de existir la persistencia real de cola. */
     private fun tryRestoreLastSong() {
         val lastSongId = PlaybackStateRepository.getLastSongId(this)
         if (lastSongId == -1L) return
@@ -822,20 +790,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         val song = allSongs.firstOrNull { it.id == lastSongId } ?: return
         val positionMs = PlaybackStateRepository.getLastPositionMs(this)
 
-        // La cola de respaldo es la misma cola cronologica que Home utiliza
-        // para reproducir una cancion desde sus secciones.
-        val fallbackQueue = allSongs
-            .sortedWith(
-                compareBy<Song> { it.dateAdded }
-                    .thenBy { it.id }
-            )
-        val startIndex = fallbackQueue.indexOfFirst { it.id == song.id }
-
-        if (startIndex >= 0) {
-            musicService?.restorePlaylist(fallbackQueue, startIndex, positionMs)
-            showMiniPlayer(song, false)
-            songAdapter.setCurrentPlayingId(song.id)
-        }
+        musicService?.restorePlaylist(listOf(song), 0, positionMs)
+        showMiniPlayer(song, false)
+        songAdapter.setCurrentPlayingId(song.id)
     }
 
     private fun applyFilterAndSort() {
@@ -1025,6 +982,20 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         if (topBarController.isPlaylistsTabActive) {
             loadPlaylists()
         }
+    }
+
+    /**
+     * Si la cancion editada es la que esta sonando, reemplaza sus metadatos
+     * dentro de MusicService sin reiniciar ExoPlayer. El propio servicio
+     * notifica al listener para que titulo, artista, letra, caratula,
+     * notificacion y widget se actualicen en el mismo instante.
+     */
+    private fun refreshCurrentSongMetadata() {
+        val service = musicService ?: return
+        val current = service.getCurrentSong() ?: return
+        val updated = SongMetadataRepository.apply(this, current)
+        if (updated.title == current.title && updated.artist == current.artist) return
+        service.updateSongMetadata(updated.id, updated.title, updated.artist)
     }
 
     private fun showMiniPlayer(song: Song, playing: Boolean) {

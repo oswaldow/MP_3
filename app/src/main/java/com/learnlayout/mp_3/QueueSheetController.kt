@@ -1,20 +1,16 @@
 package com.learnlayout.mp_3
 
 import android.content.res.ColorStateList
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
-import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
+import android.app.Dialog
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import android.app.Dialog
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -80,6 +76,15 @@ class QueueSheetController(
 
     private var layoutManager: LinearLayoutManager? =
         null
+
+    private var queueAdapter: QueueAdapter? =
+        null
+
+    private val artworkController =
+        QueueSheetArtworkController(activity)
+
+    private val queueActions =
+        QueueSheetActions(activity)
 
     val isShowing: Boolean
         get() = dialog != null
@@ -221,17 +226,7 @@ class QueueSheetController(
         view.findViewById<ImageButton>(
             R.id.btnLocateCurrent
         ).setOnClickListener {
-
-            val current =
-                getMusicService()
-                    ?.getCurrentIndex()
-                    ?: return@setOnClickListener
-
-            layoutManager
-                ?.scrollToPositionWithOffset(
-                    current,
-                    dp(10)
-                )
+            scrollCurrentSongIntoView()
         }
 
         view.findViewById<TextView>(
@@ -293,17 +288,23 @@ class QueueSheetController(
 
             touchHelper = null
             layoutManager = null
+            queueAdapter = null
 
             dialog = null
         }
 
         queueDialog.show()
 
-        // Al abrir la cola, siempre llevamos la lista hasta la canción
-        // que se está reproduciendo en este momento. Se hace después de
-        // mostrar el diálogo para asegurarnos de que RecyclerView ya tenga
-        // sus dimensiones y pueda colocar correctamente el elemento.
-        scrollToCurrentSong()
+        // Cada vez que se abre la cola, la canción que se está reproduciendo
+        // debe quedar visible automáticamente. Usamos post() para esperar a
+        // que el Dialog y RecyclerView terminen su primer layout; así el
+        // desplazamiento se aplica sobre una lista ya medida y no produce
+        // saltos visuales.
+        recyclerView?.post {
+            if (dialog === queueDialog && queueDialog.isShowing) {
+                scrollCurrentSongIntoView()
+            }
+        }
     }
 
     private fun bindViews(
@@ -370,6 +371,26 @@ class QueueSheetController(
         val songs =
             service.getSongList()
 
+        // Guardamos la posicion visual actual antes de reemplazar el adapter.
+        // Al crear un QueueAdapter nuevo, RecyclerView tiende a volver a
+        // posicionarse en el primer elemento. Eso era lo que provocaba que,
+        // al tocar una cancion desde la cola, la lista saltara hasta arriba.
+        val lm = layoutManager
+        val firstVisiblePosition =
+            lm?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+        val firstVisibleView =
+            if (firstVisiblePosition != RecyclerView.NO_POSITION) {
+                lm?.findViewByPosition(firstVisiblePosition)
+            } else {
+                null
+            }
+        val firstVisibleOffset =
+            if (firstVisibleView != null) {
+                lm?.getDecoratedTop(firstVisibleView) ?: 0
+            } else {
+                0
+            }
+
         val adapter =
             QueueAdapter(
                 songs =
@@ -380,11 +401,14 @@ class QueueSheetController(
 
                 onItemClick = { position ->
 
+                    // No reconstruimos manualmente la lista aqui.
+                    // playAt() dispara onSongChanged(), que actualiza la cola.
+                    // refreshList() ya conserva la posicion visual actual,
+                    // evitando el salto al primer elemento.
                     getMusicService()
                         ?.playAt(position)
 
                     refreshHeader()
-                    refreshList()
                 },
 
                 onMoveFinished = {
@@ -431,8 +455,24 @@ class QueueSheetController(
                 }
             )
 
+        queueAdapter = adapter
+
         recyclerView?.adapter =
             adapter
+
+        // Restauramos exactamente el punto donde estaba el usuario.
+        // post() garantiza que RecyclerView ya haya asociado el nuevo adapter
+        // antes de aplicar la posicion.
+        if (firstVisiblePosition != RecyclerView.NO_POSITION) {
+            recyclerView?.post {
+                if (recyclerView?.adapter === adapter) {
+                    layoutManager?.scrollToPositionWithOffset(
+                        firstVisiblePosition.coerceIn(0, (songs.size - 1).coerceAtLeast(0)),
+                        firstVisibleOffset
+                    )
+                }
+            }
+        }
 
         val newTouchHelper =
             ItemTouchHelper(
@@ -573,128 +613,9 @@ class QueueSheetController(
     private fun refreshCurrentAlbumArt(
         song: Song?
     ) {
-
-        val imageView =
-            currentArt
-                ?: return
-
-        if (song == null) {
-
-            imageView.setImageResource(
-                R.drawable.ic_music_note
-            )
-
-            imageView.setPadding(
-                dp(12),
-                dp(12),
-                dp(12),
-                dp(12)
-            )
-
-            imageView.imageTintList =
-                ContextCompat.getColorStateList(
-                    activity,
-                    R.color.spotify_gray
-                )
-
-            imageView.scaleType =
-                ImageView.ScaleType.CENTER
-
-            imageView.tag = null
-
-            return
-        }
-
-        imageView.tag =
-            song.id
-
-        val cached =
-            AlbumArtRepository
-                .getCachedCover(song)
-
-        if (cached != null) {
-
-            applyCurrentAlbumArt(
-                imageView,
-                cached
-            )
-
-            return
-        }
-
-        imageView.setImageResource(
-            R.drawable.ic_music_note
-        )
-
-        val padding =
-            dp(12)
-
-        imageView.setPadding(
-            padding,
-            padding,
-            padding,
-            padding
-        )
-
-        imageView.imageTintList =
-            ContextCompat.getColorStateList(
-                activity,
-                R.color.spotify_gray
-            )
-
-        imageView.scaleType =
-            ImageView.ScaleType.CENTER
-
-        AlbumArtRepository.loadCover(
-            context = activity,
-            song = song,
-            callback =
-                object :
-                    AlbumArtRepository.Callback {
-
-                    override fun onCoverReady(
-                        bitmap: Bitmap
-                    ) {
-
-                        if (
-                            imageView.tag !=
-                            song.id
-                        ) {
-                            return
-                        }
-
-                        applyCurrentAlbumArt(
-                            imageView,
-                            bitmap
-                        )
-                    }
-                },
-            isStillNeeded = {
-                imageView.tag == song.id
-            }
-        )
-    }
-
-    private fun applyCurrentAlbumArt(
-        imageView: ImageView,
-        bitmap: Bitmap
-    ) {
-
-        imageView.setPadding(
-            0,
-            0,
-            0,
-            0
-        )
-
-        imageView.imageTintList =
-            null
-
-        imageView.scaleType =
-            ImageView.ScaleType.CENTER_CROP
-
-        imageView.setImageBitmap(
-            bitmap
+        artworkController.refresh(
+            imageView = currentArt,
+            song = song
         )
     }
 
@@ -793,133 +714,54 @@ class QueueSheetController(
         tvArtist?.text =
             song.artist
 
-        if (isShowing) {
+        if (!isShowing) return
 
-            refreshHeader()
-            refreshList()
-            scrollToCurrentSong()
-        }
-    }
-
-    private fun scrollToCurrentSong() {
-        val currentIndex =
+        // Al cambiar de canción no reconstruimos el adapter.
+        // Reconstruirlo provoca que RecyclerView haga un nuevo layout y
+        // produce el pequeño movimiento hacia arriba que se veía al pulsar
+        // una canción. Solo actualizamos el indicador de canción actual.
+        val newIndex =
             getMusicService()?.getCurrentIndex()
                 ?: return
 
-        if (currentIndex < 0) return
+        queueAdapter?.setCurrentIndex(newIndex)
+        refreshHeader()
+    }
 
-        recyclerView?.post {
-            layoutManager?.scrollToPositionWithOffset(
-                currentIndex,
-                dp(10)
-            )
-        }
+
+    /**
+     * Lleva la canción actual a la vista.
+     *
+     * Se usa automáticamente solo al abrir la cola. Después, el usuario puede
+     * desplazarse libremente y el botón de localizar sirve para volver a la
+     * canción actual cuando ya no esté visible.
+     */
+    private fun scrollCurrentSongIntoView() {
+        val currentIndex =
+            getMusicService()
+                ?.getCurrentIndex()
+                ?: return
+
+        val itemCount =
+            queueAdapter?.itemCount
+                ?: recyclerView?.adapter?.itemCount
+                ?: 0
+
+        if (currentIndex !in 0 until itemCount) return
+
+        layoutManager?.scrollToPositionWithOffset(
+            currentIndex,
+            dp(10)
+        )
     }
 
     private fun saveQueueAsPlaylist() {
-
-        val service =
+        val songs =
             getMusicService()
+                ?.getSongList()
                 ?: return
 
-        val songs =
-            service.getSongList()
-
-        if (songs.isEmpty()) {
-            return
-        }
-
-        val input =
-            EditText(activity).apply {
-
-                hint =
-                    "Nombre de la playlist"
-
-                inputType =
-                    InputType.TYPE_CLASS_TEXT or
-                            InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-
-                setSingleLine(true)
-            }
-
-        val container =
-            android.widget.FrameLayout(
-                activity
-            ).apply {
-
-                setPadding(
-                    dp(20),
-                    0,
-                    dp(20),
-                    0
-                )
-
-                addView(
-                    input,
-                    ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    )
-                )
-            }
-
-        AlertDialog.Builder(
-            activity,
-            R.style.RoundedAlertDialog
-        )
-            .setTitle(
-                "Guardar cola"
-            )
-            .setMessage(
-                "Guarda las ${songs.size} canciones actuales como una nueva playlist."
-            )
-            .setView(container)
-            .setNegativeButton(
-                "Cancelar",
-                null
-            )
-            .setPositiveButton(
-                "Guardar"
-            ) { _, _ ->
-
-                val name =
-                    input.text
-                        .toString()
-                        .trim()
-
-                if (name.isBlank()) {
-
-                    Toast.makeText(
-                        activity,
-                        "Escribe un nombre para la playlist",
-                        Toast.LENGTH_SHORT
-                    ).show()
-
-                    return@setPositiveButton
-                }
-
-                val playlist =
-                    PlaylistRepository.createPlaylist(
-                        activity,
-                        name
-                    )
-
-                songs.forEach { song ->
-
-                    PlaylistRepository.addSongToPlaylist(
-                        activity,
-                        playlist.id,
-                        song.id
-                    )
-                }
-
-                Toast.makeText(
-                    activity,
-                    "Playlist \"$name\" guardada",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-            .show()
+        queueActions.saveQueueAsPlaylist(songs)
     }
 
     private fun dp(
