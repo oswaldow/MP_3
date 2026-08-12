@@ -98,7 +98,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var currentSort: SortType = SortType.TITLE
     private var searchQuery: String = ""
 
-    private val playlistDialogs by lazy {
+    private val playlistDialogs: PlaylistDialogs by lazy {
         PlaylistDialogs(
             context = this,
             isPlaylistsTabActive = { topBarController.isPlaylistsTabActive },
@@ -106,6 +106,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             onSongMetadataChanged = {
                 lyricsPanelController.resetSongId()
                 loadSongs()
+                if (queueSheet.isShowing) {
+                    queueSheet.refreshList()
+                }
             },
             onDeleteSongFromDevice = { song -> requestDeleteSongFromDevice(song) }
         )
@@ -123,10 +126,11 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     // permiso de escritura en versiones viejas). Ver requestDeleteSongFromDevice.
     private var pendingDeleteSong: Song? = null
 
-    private val queueSheet by lazy {
+    private val queueSheet: QueueSheetController by lazy {
         QueueSheetController(
             activity = this,
             getMusicService = { musicService },
+            playlistDialogs = playlistDialogs,
             getAccentColor = { playerPanelController.getAccentColor() },
             onModeChanged = {
                 musicService?.let { playerPanelController.updateModeButtonIcon(it.getPlaybackMode()) }
@@ -223,7 +227,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         )
     }
 
-    private val topBarController by lazy {
+    private val topBarController: TopBarController by lazy {
         TopBarController(
             activity = this,
             rootLayout = rootLayout,
@@ -1018,3 +1022,4 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 }
+

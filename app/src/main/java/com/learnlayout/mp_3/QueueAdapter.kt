@@ -15,7 +15,13 @@ class QueueAdapter(
     private var currentIndex: Int,
     private val onItemClick: (Int) -> Unit,
     private val onMoveFinished: (Int, Int) -> Unit,
-    private val onRemove: (Int) -> Unit
+    private val onRemove: (Int) -> Unit,
+    // Mantener presionada una cancion de la cola abre su menu de
+    // opciones (Agregar a playlist / Editar nombre y artista /
+    // Eliminar del dispositivo), igual que en la lista principal.
+    // Con valor por defecto para no romper otros callers que todavia
+    // no lo necesitan.
+    private val onLongPress: (Int) -> Unit = {}
 ) : RecyclerView.Adapter<QueueAdapter.QueueViewHolder>() {
 
     var dragStartListener: ((RecyclerView.ViewHolder) -> Unit)? = null
@@ -134,6 +140,21 @@ class QueueAdapter(
             ) {
                 onItemClick(adapterPosition)
             }
+        }
+
+        holder.itemView.setOnLongClickListener {
+
+            val adapterPosition =
+                holder.bindingAdapterPosition
+
+            if (
+                adapterPosition !=
+                RecyclerView.NO_POSITION
+            ) {
+                onLongPress(adapterPosition)
+            }
+
+            true
         }
 
         holder.ivDragHandle.setOnTouchListener { _, event ->

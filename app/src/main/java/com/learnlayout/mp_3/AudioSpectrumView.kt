@@ -20,8 +20,22 @@ import android.view.View
  * No mantiene hilo ni Handler propio: mientras esta "started" se
  * reengancha a Choreographer despues de cada frame dibujado, asi que
  * solo gasta CPU cuando esta realmente en pantalla. Quien controla el
- * ciclo de vida (start()/stop()) es PlayerPanelController, al expandir
- * o colapsar el panel del reproductor.
+ * ciclo de vida deseado (start()/stop()) es PlayerPanelController, al
+ * expandir o colapsar el panel del reproductor.
+ *
+ * IMPORTANTE (fix bug "barras se congelan al volver de apps
+ * recientes"): la vista tambien se pausa/reanuda sola por su propia
+ * visibilidad (onVisibilityChanged/onWindowVisibilityChanged), sin que
+ * PlayerPanelController se entere ni vuelva a llamar start(). Por eso
+ * se separan dos conceptos:
+ *  - wantsToRun: el estado DESEADO, controlado solo por start()/stop()
+ *    externos (PlayerPanelController). Se mantiene aunque la vista se
+ *    oculte temporalmente.
+ *  - running: si el loop de Choreographer esta activo AHORA MISMO.
+ *    Se apaga cuando la vista/ventana deja de ser visible (para no
+ *    gastar CPU) y se reenciende solo, sin intervencion externa,
+ *    apenas la vista vuelve a ser visible, siempre que wantsToRun
+ *    siga en true.
  */
 class AudioSpectrumView @JvmOverloads constructor(
     context: Context,
@@ -49,6 +63,14 @@ class AudioSpectrumView @JvmOverloads constructor(
     // sincronizar con el hilo de audio en medio del dibujo.
     private var levels = FloatArray(SpectrumAudioProcessor.bandCount())
 
+    // Estado deseado: lo fija start()/stop(), llamados desde
+    // PlayerPanelController al expandir/colapsar el panel. Sobrevive a
+    // que la vista se oculte y reaparezca por otros motivos (apps
+    // recientes, Home, etc).
+    private var wantsToRun = false
+
+    // Estado real del loop en este momento (¿hay un frameCallback
+    // efectivamente encolado?).
     private var running = false
 
     private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback {
@@ -62,24 +84,21 @@ class AudioSpectrumView @JvmOverloads constructor(
         applyGradientIfPossible()
     }
 
-    /** Arranca el loop de refresco (idempotente). */
+    /** Arranca el loop de refresco (idempotente). Fija el estado deseado. */
     fun start() {
-        if (running) return
-        running = true
-        Choreographer.getInstance().postFrameCallback(frameCallback)
+        wantsToRun = true
+        resumeIfPossible()
     }
 
     /**
      * Para el loop de refresco y deja las barras en 0, para que la
      * proxima vez que se abra el panel no se vea "congelada" en la
-     * ultima forma que tenia el audio.
+     * ultima forma que tenia el audio. Fija el estado deseado: no se
+     * va a reactivar solo hasta el proximo start().
      */
     fun stop() {
-        if (!running) return
-        running = false
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
-        levels = FloatArray(levels.size)
-        invalidate()
+        wantsToRun = false
+        pauseInternal(resetLevels = true)
     }
 
     /**
@@ -96,15 +115,53 @@ class AudioSpectrumView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        stop()
+        // Al desengancharse de verdad (Activity destruida, etc.) si o
+        // si se corta todo, incluido el estado deseado.
+        wantsToRun = false
+        pauseInternal(resetLevels = true)
     }
 
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
-        // Ahorro extra: si la vista queda oculta por fuera del ciclo
-        // expand/collapse del panel (p.ej. la Activity entera se va a
-        // background), no seguimos pidiendo frames.
-        if (visibility != VISIBLE) stop()
+        // Esto es lo que se dispara al ir a la pantalla de apps
+        // recientes (antes incluso que onWindowVisibilityChanged). NO
+        // tocamos wantsToRun aqui: solo pausamos/reanudamos el loop
+        // real segun corresponda.
+        if (visibility == VISIBLE) {
+            resumeIfPossible()
+        } else {
+            pauseInternal(resetLevels = true)
+        }
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        // Red de seguridad adicional por si en algun dispositivo/version
+        // de Android la ventana cambia de visibilidad sin que se dispare
+        // onVisibilityChanged para esta vista.
+        if (visibility == VISIBLE) {
+            resumeIfPossible()
+        } else {
+            pauseInternal(resetLevels = false)
+        }
+    }
+
+    /** Reanuda el loop real solo si el estado deseado lo pide y no esta ya corriendo. */
+    private fun resumeIfPossible() {
+        if (!wantsToRun || running) return
+        running = true
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    /** Pausa el loop real (sin tocar el estado deseado wantsToRun). */
+    private fun pauseInternal(resetLevels: Boolean) {
+        if (!running) return
+        running = false
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        if (resetLevels) {
+            levels = FloatArray(levels.size)
+            invalidate()
+        }
     }
 
     private fun pullLatestData() {

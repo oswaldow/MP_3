@@ -27,6 +27,12 @@ import androidx.recyclerview.widget.RecyclerView
 class QueueSheetController(
     private val activity: AppCompatActivity,
     private val getMusicService: () -> MusicService?,
+    // Reutiliza la misma instancia de PlaylistDialogs que ya usa la
+    // lista principal de canciones, para que "Agregar a playlist",
+    // "Editar nombre y artista" y "Eliminar del dispositivo" se
+    // comporten identico (mismos dialogos, mismo flujo de borrado)
+    // sin importar si se abren desde la lista o desde la cola.
+    private val playlistDialogs: PlaylistDialogs,
     private val getAccentColor: () -> Int = {
         ContextCompat.getColor(
             activity,
@@ -405,6 +411,16 @@ class QueueSheetController(
                         ).show()
 
                         refreshHeader()
+                    }
+                },
+
+                onLongPress = { position ->
+
+                    val song =
+                        songs.getOrNull(position)
+
+                    if (song != null) {
+                        playlistDialogs.showSongItemMenu(song)
                     }
                 }
             )
