@@ -98,7 +98,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var currentSort: SortType = SortType.TITLE
     private var searchQuery: String = ""
 
-    private val playlistDialogs: PlaylistDialogs by lazy {
+    private val playlistDialogs by lazy {
         PlaylistDialogs(
             context = this,
             isPlaylistsTabActive = { topBarController.isPlaylistsTabActive },
@@ -227,7 +227,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         )
     }
 
-    private val topBarController: TopBarController by lazy {
+    private val topBarController by lazy {
         TopBarController(
             activity = this,
             rootLayout = rootLayout,
@@ -554,8 +554,36 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             getCurrentSong = { musicService?.getCurrentSong() },
             isPlaying = { musicService?.isPlaying() == true },
             onPlaySong = { song ->
-                val index = allSongs.indexOfFirst { it.id == song.id }
-                if (index >= 0) openPlayer(allSongs, index)
+                // Desde Home, las tres secciones (Recientemente reproducido,
+                // Mas escuchadas y Agregadas recientemente) usan la MISMA
+                // cola cronologica: todas las canciones de la biblioteca,
+                // ordenadas por la fecha en que fueron agregadas.
+                //
+                // Se ordena de la mas antigua a la mas nueva para que, al
+                // tocar una cancion, la siguiente sea exactamente la que
+                // se agrego despues de ella. Las anteriores quedan arriba
+                // de la actual en la cola y las posteriores quedan debajo.
+                val homeQueue = allSongs
+                    .sortedWith(
+                        compareBy<Song> { it.dateAdded }
+                            .thenBy { it.id }
+                    )
+
+                val index = homeQueue.indexOfFirst { it.id == song.id }
+
+                if (index >= 0) {
+                    val service = musicService
+                    val current = service?.getCurrentSong()
+
+                    if (service != null && current?.id == song.id) {
+                        // La cancion ya esta sonando. Solo reconstruimos la
+                        // cola sin reiniciar el audio ni perder la posicion.
+                        service.replaceQueueKeepingCurrent(homeQueue)
+                        playerPanelController.expandWhenReady()
+                    } else {
+                        openPlayer(homeQueue, index)
+                    }
+                }
             },
             onOpenSongs = { showSongsHomeTarget() }
         )
@@ -759,12 +787,41 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         val lastSongId = PlaybackStateRepository.getLastSongId(this)
         if (lastSongId == -1L) return
 
-        val song = allSongs.firstOrNull { it.id == lastSongId } ?: return
+        val lastSong = allSongs.firstOrNull { it.id == lastSongId } ?: return
         val positionMs = PlaybackStateRepository.getLastPositionMs(this)
 
-        musicService?.restorePlaylist(listOf(song), 0, positionMs)
-        showMiniPlayer(song, false)
-        songAdapter.setCurrentPlayingId(song.id)
+        /*
+         * IMPORTANTE:
+         *
+         * Si Android mato el proceso, MusicService pierde la cola que tenia
+         * en memoria. Antes de esta correccion aqui se restauraba solamente
+         * la ultima cancion, por lo que al volver a abrir la app la cola
+         * quedaba con una sola cancion.
+         *
+         * Home utiliza una cola cronologica formada por TODA la biblioteca:
+         * de la mas antigua a la mas nueva. Restauramos exactamente esa misma
+         * cola y colocamos como actual la cancion que estaba reproduciendose.
+         * Asi la cola vuelve a estar completa aunque el proceso haya sido
+         * eliminado y tambien se haya quitado el reproductor de la
+         * notificacion.
+         */
+        val restoredQueue = allSongs
+            .sortedWith(
+                compareBy<Song> { it.dateAdded }
+                    .thenBy { it.id }
+            )
+
+        val restoredIndex = restoredQueue.indexOfFirst { it.id == lastSong.id }
+        if (restoredIndex < 0) return
+
+        musicService?.restorePlaylist(
+            restoredQueue,
+            restoredIndex,
+            positionMs
+        )
+
+        showMiniPlayer(lastSong, false)
+        songAdapter.setCurrentPlayingId(lastSong.id)
     }
 
     private fun applyFilterAndSort() {
@@ -1022,4 +1079,3 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 }
-

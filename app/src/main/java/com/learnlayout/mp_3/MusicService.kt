@@ -8,20 +8,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 
-/**
- * Servicio de reproduccion. Desde el refactor, este archivo es solo una
- * FACHADA delgada: la logica pesada vive en tres colaboradores que este
- * servicio orquesta pero que no conocen nada de Android Service:
- *
- *  - [QueueManager]: cola de canciones, indice actual, modo de reproduccion.
- *  - [PlaybackEngine]: ExoPlayer, crossfade, progreso de reproduccion.
- *  - [PlaybackNotifier]: MediaSession y notificacion de reproduccion.
- *  - [SleepTimerManager]: temporizador para dormir.
- *
- * El API publico (los metodos que llaman Activities/Controllers a traves
- * de MusicBinder) se mantiene identico al de antes del refactor para no
- * romper a quienes ya usan `musicService?.algo(...)`.
- */
+
 class MusicService : Service() {
 
     private val binder = MusicBinder()
@@ -133,6 +120,29 @@ class MusicService : Service() {
         queueManager.setPlaylist(songs, startIndex)
         if (songs.isNotEmpty()) {
             playbackEngine.playSongAt(startIndex)
+        }
+    }
+
+    /**
+     * Reemplaza la cola manteniendo la cancion que ya esta sonando.
+     *
+     * Se usa cuando el usuario toca desde Home una cancion que ya estaba
+     * reproduciendose: queremos reconstruir la cola completa sin reiniciar
+     * ExoPlayer ni perder la posicion actual.
+     */
+    fun replaceQueueKeepingCurrent(songs: List<Song>) {
+        if (songs.isEmpty()) return
+
+        val currentSong = getCurrentSong()
+        val currentIndex = songs.indexOfFirst { it.id == currentSong?.id }
+
+        if (currentIndex >= 0) {
+            playbackEngine.cancelCrossfadeIfAny()
+            queueManager.setPlaylist(songs, currentIndex)
+        } else {
+            // Caso de seguridad: si por alguna razon la cancion actual ya no
+            // existe en la biblioteca, no modificamos la reproduccion.
+            return
         }
     }
 

@@ -298,6 +298,12 @@ class QueueSheetController(
         }
 
         queueDialog.show()
+
+        // Al abrir la cola, siempre llevamos la lista hasta la canción
+        // que se está reproduciendo en este momento. Se hace después de
+        // mostrar el diálogo para asegurarnos de que RecyclerView ya tenga
+        // sus dimensiones y pueda colocar correctamente el elemento.
+        scrollToCurrentSong()
     }
 
     private fun bindViews(
@@ -791,6 +797,22 @@ class QueueSheetController(
 
             refreshHeader()
             refreshList()
+            scrollToCurrentSong()
+        }
+    }
+
+    private fun scrollToCurrentSong() {
+        val currentIndex =
+            getMusicService()?.getCurrentIndex()
+                ?: return
+
+        if (currentIndex < 0) return
+
+        recyclerView?.post {
+            layoutManager?.scrollToPositionWithOffset(
+                currentIndex,
+                dp(10)
+            )
         }
     }
 
