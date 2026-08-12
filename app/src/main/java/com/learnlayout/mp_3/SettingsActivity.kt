@@ -63,7 +63,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         binding.rowDownloadLyrics.setOnClickListener {
-            downloadAllLyrics()
+            downloadAllLyricsAndArt()
         }
     }
 
@@ -81,9 +81,17 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    // ==================== DESCARGA MASIVA DE LETRAS ====================
+    // ==================== DESCARGA MASIVA DE LETRAS Y CARATULAS ====================
+    //
+    // Este es el unico lugar (junto con el selector de mantener presionada
+    // la caratula) donde la app sale a buscar letras/caratulas en red de
+    // forma masiva. Se guarda todo en disco (SavedLyricsRepository /
+    // AlbumArtRepository) para que despues, mientras se esta escuchando
+    // musica, no haga falta ninguna busqueda en red (ver
+    // AlbumArtRepository.loadCoverCacheOnly y LyricsPanelController
+    // .loadForSong).
 
-    private fun downloadAllLyrics() {
+    private fun downloadAllLyricsAndArt() {
         if (isDownloadingLyrics) return
 
         val songs = SongRepository.getAllSongs(this)
@@ -97,33 +105,35 @@ class SettingsActivity : AppCompatActivity() {
         binding.progressDownloadLyrics.visibility = View.VISIBLE
 
         var index = 0
-        var foundCount = 0
+        var lyricsFoundCount = 0
+        var artFoundCount = 0
 
         fun finishDownload() {
             isDownloadingLyrics = false
             binding.rowDownloadLyrics.isEnabled = true
             binding.progressDownloadLyrics.visibility = View.GONE
-            binding.tvDownloadLyricsSummary.text = "Se encontraron $foundCount de ${songs.size} letras"
+            binding.tvDownloadLyricsSummary.text =
+                "Letras: $lyricsFoundCount de ${songs.size} - Caratulas: $artFoundCount de ${songs.size}"
             Toast.makeText(
                 this,
-                "Listo: $foundCount de ${songs.size} letras encontradas",
+                "Listo: $lyricsFoundCount letras y $artFoundCount caratulas de ${songs.size} canciones",
                 Toast.LENGTH_LONG
             ).show()
         }
 
-        fun processNext() {
-            while (index < songs.size && SavedLyricsRepository.isSaved(this, songs[index].id)) {
-                foundCount++
-                index++
-            }
+        // processNext se referencia a si misma indirectamente a traves de
+        // fetchLyricsForCurrentSong (y viceversa), asi que no puede ser un
+        // simple "fun" local: se declara primero como variable para que
+        // ambas closures puedan capturarla antes de que tenga cuerpo.
+        lateinit var processNext: () -> Unit
 
-            if (index >= songs.size) {
-                finishDownload()
+        fun fetchLyricsForCurrentSong(song: Song) {
+            if (SavedLyricsRepository.isSaved(this, song.id)) {
+                lyricsFoundCount++
+                index++
+                processNext()
                 return
             }
-
-            val song = songs[index]
-            binding.tvDownloadLyricsSummary.text = "Buscando ${index + 1}/${songs.size}: ${song.title}"
 
             val durationSeconds = song.duration / 1000
             LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
@@ -132,7 +142,7 @@ class SettingsActivity : AppCompatActivity() {
                             (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
                     if (hasLyrics) {
                         SavedLyricsRepository.save(this@SettingsActivity, song.id, result)
-                        foundCount++
+                        lyricsFoundCount++
                     }
                     index++
                     processNext()
@@ -145,8 +155,22 @@ class SettingsActivity : AppCompatActivity() {
             })
         }
 
+        processNext = {
+            if (index >= songs.size) {
+                finishDownload()
+            } else {
+                val song = songs[index]
+                binding.tvDownloadLyricsSummary.text = "Descargando ${index + 1}/${songs.size}: ${song.title}"
+
+                AlbumArtRepository.prefetchCover(this, song) { found ->
+                    if (found) artFoundCount++
+                    fetchLyricsForCurrentSong(song)
+                }
+            }
+        }
+
         processNext()
     }
 
-    // ==================== FIN DESCARGA MASIVA DE LETRAS ====================
+    // ==================== FIN DESCARGA MASIVA DE LETRAS Y CARATULAS ====================
 }

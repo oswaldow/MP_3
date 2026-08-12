@@ -192,16 +192,25 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 }
             },
             onAlbumArtLongPress = { song ->
-                AlbumArtPickerDialog(this, song) { chosenSong, bitmap ->
-                    AlbumArtRepository.applyOverride(
-                        this, chosenSong, bitmap,
-                        object : AlbumArtRepository.Callback {
-                            override fun onCoverReady(bmp: android.graphics.Bitmap) {
-                                playerPanelController.applyAlbumArtOverride(chosenSong, bmp)
+                AlbumArtPickerDialog(
+                    context = this,
+                    song = song,
+                    onCoverChosen = { chosenSong, bitmap ->
+                        AlbumArtRepository.applyOverride(
+                            this, chosenSong, bitmap,
+                            object : AlbumArtRepository.Callback {
+                                override fun onCoverReady(bmp: android.graphics.Bitmap) {
+                                    playerPanelController.applyAlbumArtOverride(chosenSong, bmp)
+                                }
                             }
-                        }
-                    )
-                }.show()
+                        )
+                    },
+                    onLyricsChosen = { chosenSong, result ->
+                        SavedLyricsRepository.save(this, chosenSong.id, result)
+                        lyricsPanelController.reloadSavedLyrics(chosenSong)
+                        Toast.makeText(this, "Letra guardada", Toast.LENGTH_SHORT).show()
+                    }
+                ).show()
             },
             onAlbumArtChanged = { bitmap ->
                 if (bitmap != null) {

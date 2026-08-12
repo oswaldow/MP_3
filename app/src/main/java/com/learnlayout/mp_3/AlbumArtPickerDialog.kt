@@ -6,20 +6,28 @@ import android.view.View
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 
 /**
  * Bottom sheet que se abre al mantener presionada la caratula del
  * reproductor expandido (ver PlayerPanelController.ivPanelAlbumArt
- * .setOnLongClickListener). Busca caratulas alternativas en iTunes/Deezer
- * para la cancion actual y, si el usuario elige una, la guarda como
- * override via AlbumArtRepository y avisa por [onCoverChosen].
+ * .setOnLongClickListener). Es el UNICO lugar donde la app busca en red
+ * caratulas y letras alternativas mientras se esta escuchando musica (ver
+ * AlbumArtRepository.loadCoverCacheOnly / LyricsPanelController.loadForSong,
+ * que ya no lo hacen automaticamente).
+ *
+ * Busca caratulas en iTunes/Deezer y letras en LRCLIB para la cancion
+ * actual. Si el usuario elige una caratula, se guarda como override via
+ * AlbumArtRepository y se avisa por [onCoverChosen]. Si elige una letra, se
+ * guarda en SavedLyricsRepository y se avisa por [onLyricsChosen].
  */
 class AlbumArtPickerDialog(
     private val context: Context,
     private val song: Song,
-    private val onCoverChosen: (Song, android.graphics.Bitmap) -> Unit
+    private val onCoverChosen: (Song, android.graphics.Bitmap) -> Unit,
+    private val onLyricsChosen: (Song, LyricsResult) -> Unit
 ) {
 
     fun show() {
@@ -31,6 +39,15 @@ class AlbumArtPickerDialog(
         val subtitle = view.findViewById<TextView>(R.id.tvPickerSubtitle)
         subtitle.text = "Para \"${song.title}\" - ${song.artist}"
 
+        setupArtSection(view)
+        setupLyricsSection(view, dialog)
+
+        dialog.show()
+    }
+
+    // ---------- Caratulas ----------
+
+    private fun setupArtSection(view: View) {
         val progress = view.findViewById<ProgressBar>(R.id.progressCandidates)
         val empty = view.findViewById<TextView>(R.id.tvCandidatesEmpty)
         val recycler = view.findViewById<RecyclerView>(R.id.rvCandidates)
@@ -48,11 +65,34 @@ class AlbumArtPickerDialog(
                 recycler.visibility = View.VISIBLE
                 recycler.adapter = AlbumArtCandidateAdapter(candidates) { chosen ->
                     onCoverChosen(song, chosen.bitmap)
+                }
+            }
+        })
+    }
+
+    // ---------- Letras ----------
+
+    private fun setupLyricsSection(view: View, dialog: BottomSheetDialog) {
+        val progress = view.findViewById<ProgressBar>(R.id.progressLyricsCandidates)
+        val empty = view.findViewById<TextView>(R.id.tvLyricsCandidatesEmpty)
+        val recycler = view.findViewById<RecyclerView>(R.id.rvLyricsCandidates)
+        recycler.layoutManager = LinearLayoutManager(context)
+
+        LyricsRepository.searchCandidates(song.title, song.artist, object : LyricsRepository.LyricsCandidatesCallback {
+            override fun onCandidatesReady(candidates: List<LyricsCandidate>) {
+                progress.visibility = View.GONE
+
+                if (candidates.isEmpty()) {
+                    empty.visibility = View.VISIBLE
+                    return
+                }
+
+                recycler.visibility = View.VISIBLE
+                recycler.adapter = LyricsCandidateAdapter(candidates) { chosen ->
+                    onLyricsChosen(song, chosen.result)
                     dialog.dismiss()
                 }
             }
         })
-
-        dialog.show()
     }
 }

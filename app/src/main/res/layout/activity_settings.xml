@@ -295,7 +295,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"
                 android:layout_marginBottom="10dp"
-                android:text="Letras"
+                android:text="Letras y caratulas"
                 android:textColor="@color/text_secondary_light"
                 android:textSize="13sp"
                 android:textStyle="bold"
@@ -316,7 +316,7 @@
                     android:layout_width="24dp"
                     android:layout_height="24dp"
                     android:src="@drawable/ic_lyrics"
-                    android:contentDescription="Letras" />
+                    android:contentDescription="Letras y caratulas" />
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -328,7 +328,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Descargar todas las letras"
+                        android:text="Descargar letras y caratulas"
                         android:textColor="@color/text_primary_light"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -338,7 +338,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="Busca y guarda la letra de cada cancion que reconozca"
+                        android:text="Busca y guarda la letra y la caratula de cada cancion que reconozca"
                         android:textColor="@color/text_secondary_light"
                         android:textSize="13sp" />
 

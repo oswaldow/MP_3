@@ -213,37 +213,42 @@ class LyricsPanelController(
     }
 
     /**
-     * Pide la letra sincronizada de la cancion actual y la deja lista en el
-     * panel. Se ignora si la respuesta llega para una peticion vieja
-     * (cancion ya cambiada) usando lyricsRequestId.
+     * Muestra la letra de la cancion actual usando SOLO lo que ya este
+     * guardado localmente (SavedLyricsRepository): descargada antes desde
+     * "Descargar todas las letras" en Configuracion, o elegida a mano desde
+     * el selector que se abre al mantener presionada la caratula (ver
+     * AlbumArtPickerDialog / reloadSavedLyrics). Ya NO busca en LRCLIB por
+     * su cuenta: escuchar musica no debe disparar trafico de red solo por
+     * cambiar de cancion, ni siquiera con wifi.
      */
     fun loadForSong(song: Song) {
         if (lyricsSongId == song.id) return
         lyricsSongId = song.id
         lyricsRequestId++
-        val requestId = lyricsRequestId
 
         val saved = SavedLyricsRepository.getSavedLyrics(activity, song.id)
         if (saved != null) {
             showLyricsResult(saved, song.id)
-            return
+        } else {
+            btnPanelLyricsSync.visibility = View.GONE
+            showLyricsMessage("Sin letra guardada. Manten presionada la caratula para buscarla")
         }
+    }
 
-        btnPanelLyricsSync.visibility = View.GONE
-        showLyricsMessage("Buscando letra...")
-
-        val durationSeconds = song.duration / 1000
-        LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
-            override fun onSuccess(result: LyricsResult) {
-                if (requestId != lyricsRequestId) return
-                showLyricsResult(result, song.id)
-            }
-
-            override fun onError(message: String) {
-                if (requestId != lyricsRequestId) return
-                showLyricsMessage(message)
-            }
-        })
+    /**
+     * Vuelve a leer SavedLyricsRepository para [song] y refresca el panel
+     * si es la cancion vigente. Se llama despues de que el usuario elige
+     * una letra en el selector de la caratula (AlbumArtPickerDialog), ya
+     * que ese flujo guarda la letra elegida directamente en
+     * SavedLyricsRepository sin pasar por loadForSong (que no vuelve a
+     * cargar nada si ya es la misma cancion).
+     */
+    fun reloadSavedLyrics(song: Song) {
+        if (lyricsSongId != song.id) return
+        val saved = SavedLyricsRepository.getSavedLyrics(activity, song.id)
+        if (saved != null) {
+            showLyricsResult(saved, song.id)
+        }
     }
 
     private fun showLyricsResult(result: LyricsResult, songId: Long) {

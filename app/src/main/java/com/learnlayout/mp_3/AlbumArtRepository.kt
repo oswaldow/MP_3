@@ -120,6 +120,93 @@ object AlbumArtRepository {
     }
 
     /**
+     * Version de [loadCover] que NUNCA pega a la red: solo revisa memoria
+     * y disco. La usa el reproductor (mini player y panel expandido) para
+     * que escuchar musica no dispare busquedas de caratula por wifi/datos
+     * cada vez que cambia la cancion. La busqueda en red solo se dispara
+     * ahora al mantener presionada la caratula (ver AlbumArtPickerDialog)
+     * o desde la descarga masiva en Configuracion (ver [prefetchCover]),
+     * que es la que deja la caratula ya guardada en disco para que esta
+     * funcion la encuentre despues sin tocar la red.
+     */
+    fun loadCoverCacheOnly(
+        context: Context,
+        song: Song,
+        callback: Callback,
+        isStillNeeded: () -> Boolean = { true }
+    ) {
+        memoryCache.get(song.id)?.let {
+            if (isStillNeeded()) callback.onCoverReady(it)
+            return
+        }
+
+        if (!inFlight.add(song.id)) return
+
+        val appContext = context.applicationContext
+        executor.execute {
+            try {
+                if (!isStillNeeded()) return@execute
+
+                val cacheKey = cacheKeyFor(song)
+                val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
+                if (!diskFile.exists()) return@execute
+
+                val bitmap = decodeSampledBitmapFromFile(diskFile) ?: return@execute
+
+                memoryCache.put(song.id, bitmap)
+                if (isStillNeeded()) {
+                    mainHandler.post { callback.onCoverReady(bitmap) }
+                }
+            } finally {
+                inFlight.remove(song.id)
+            }
+        }
+    }
+
+    /**
+     * Descarga (si hace falta) y guarda en disco la caratula de [song] sin
+     * necesitar pintarla en ninguna vista. A diferencia de [loadCover],
+     * SIEMPRE llama a [onComplete] al terminar -haya encontrado caratula o
+     * no- para que quien dispara descargas en lote (ver
+     * SettingsActivity.downloadAllLyrics) pueda avanzar a la siguiente
+     * cancion sin quedarse esperando. [onComplete] recibe true si la
+     * caratula quedo disponible en disco (ya estaba o se acaba de
+     * descargar) y false si no se encontro en ninguna fuente. No decodifica
+     * el bitmap completo a memoria (solo lo necesario para comprimirlo a
+     * disco), para no acumular cientos de bitmaps en RAM durante una
+     * descarga masiva.
+     */
+    fun prefetchCover(context: Context, song: Song, onComplete: (found: Boolean) -> Unit) {
+        if (memoryCache.get(song.id) != null) {
+            onComplete(true)
+            return
+        }
+
+        val appContext = context.applicationContext
+        executor.execute {
+            var found = false
+            try {
+                val cacheKey = cacheKeyFor(song)
+                val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
+                found = diskFile.exists()
+                if (!found) {
+                    val bitmap = fetchFromNetwork(song)
+                    if (bitmap != null) {
+                        saveToDisk(diskFile, bitmap)
+                        found = true
+                    }
+                }
+            } catch (e: Exception) {
+                // found se queda en su ultimo valor conocido (false si aun
+                // no se habia resuelto nada).
+            } finally {
+                val result = found
+                mainHandler.post { onComplete(result) }
+            }
+        }
+    }
+
+    /**
      * Busca varias posibles caratulas para [song] (iTunes + Deezer, hasta
      * [CANDIDATES_LIMIT_PER_SOURCE] de cada una) para que el usuario elija
      * manualmente cual es la correcta cuando la automatica no coincide.

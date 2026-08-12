@@ -816,7 +816,12 @@ class PlayerPanelController(
         }
 
         showAlbumArtPlaceholder()
-        AlbumArtRepository.loadCover(activity, song, callback)
+        // Solo memoria/disco: escuchar musica ya no dispara busqueda de
+        // caratula por red (ver AlbumArtRepository.loadCoverCacheOnly).
+        // La busqueda en red ahora solo ocurre al mantener presionada la
+        // caratula (ver onAlbumArtLongPress) o desde la descarga masiva
+        // en Configuracion.
+        AlbumArtRepository.loadCoverCacheOnly(activity, song, callback)
     }
 
     /**

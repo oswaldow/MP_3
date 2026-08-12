@@ -25,6 +25,17 @@ data class LyricsResult(
 )
 
 /**
+ * Una opcion de letra entre varias que devuelve LRCLIB para la misma
+ * busqueda (distintas versiones/duraciones/idiomas). Ver [LyricsRepository
+ * .searchCandidates], usado por el selector que se abre al mantener
+ * presionada la caratula del reproductor.
+ */
+data class LyricsCandidate(
+    val label: String,
+    val result: LyricsResult
+)
+
+/**
  * Cliente para la API publica de LRCLIB (https://lrclib.net).
  * No requiere API key. Devuelve letra plana y, cuando existe, letra
  * sincronizada en formato LRC ("[mm:ss.xx] texto").
@@ -55,6 +66,10 @@ object LyricsRepository {
     interface LyricsCallback {
         fun onSuccess(result: LyricsResult)
         fun onError(message: String)
+    }
+
+    interface LyricsCandidatesCallback {
+        fun onCandidatesReady(candidates: List<LyricsCandidate>)
     }
 
     fun fetch(title: String, artist: String, durationSeconds: Long, callback: LyricsCallback) {
@@ -97,6 +112,80 @@ object LyricsRepository {
                 }
             }
         })
+    }
+
+    /**
+     * Busca TODAS las coincidencias que LRCLIB tenga para title/artist (via
+     * /search, no /get) para que el usuario elija manualmente cual letra
+     * corresponde a la version que tiene. Se usa desde el selector que se
+     * abre al mantener presionada la caratula del reproductor, junto con
+     * [AlbumArtRepository.searchCandidates]. Descarta candidatos sin
+     * contenido util (instrumental sin texto, o sin letra plana/sincronizada).
+     */
+    fun searchCandidates(title: String, artist: String, callback: LyricsCandidatesCallback) {
+        val (cleanTitle, cleanArtist) = sanitizeTitleArtist(title, artist)
+        val searchUrl = "$BASE_URL/search?track_name=${encode(cleanTitle)}&artist_name=${encode(cleanArtist)}"
+        val request = Request.Builder()
+            .url(searchUrl)
+            .header("User-Agent", USER_AGENT)
+            .build()
+
+        Log.d(TAG, "SEARCH (candidates) $searchUrl")
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.w(TAG, "SEARCH (candidates) falló", e)
+                mainHandler.post { callback.onCandidatesReady(emptyList()) }
+            }
+
+            override fun onResponse(call: Call, response: okhttp3.Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        mainHandler.post { callback.onCandidatesReady(emptyList()) }
+                        return
+                    }
+                    val body = it.body?.string()
+                    try {
+                        val array = JSONArray(body ?: "[]")
+                        val out = mutableListOf<LyricsCandidate>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            val result = parseSingleResult(obj)
+                            val hasContent = !result.isInstrumental &&
+                                    (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
+                            if (!hasContent) continue
+
+                            out += LyricsCandidate(label = buildCandidateLabel(obj, result, cleanTitle, cleanArtist), result = result)
+                        }
+                        mainHandler.post { callback.onCandidatesReady(out) }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parseando respuesta de /search (candidates)", e)
+                        mainHandler.post { callback.onCandidatesReady(emptyList()) }
+                    }
+                }
+            }
+        })
+    }
+
+    private fun buildCandidateLabel(
+        obj: JSONObject,
+        result: LyricsResult,
+        fallbackTitle: String,
+        fallbackArtist: String
+    ): String {
+        val trackName = obj.optString("trackName", fallbackTitle).ifBlank { fallbackTitle }
+        val artistName = obj.optString("artistName", fallbackArtist).ifBlank { fallbackArtist }
+        val durationSeconds = obj.optInt("duration", -1)
+
+        val durationLabel = if (durationSeconds > 0) {
+            val minutes = durationSeconds / 60
+            val seconds = durationSeconds % 60
+            String.format(java.util.Locale.getDefault(), " (%d:%02d)", minutes, seconds)
+        } else ""
+
+        val syncLabel = if (!result.syncedLines.isNullOrEmpty()) "Sincronizada" else "Sin sincronizar"
+
+        return "$trackName - $artistName$durationLabel - $syncLabel"
     }
 
     private fun fetchViaSearch(title: String, artist: String, callback: LyricsCallback) {
