@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.ImageButton
@@ -27,7 +28,13 @@ import androidx.palette.graphics.Palette
  * - Accesos rapidos
  *
  * El fondo del Home cambia dinamicamente usando el color
- * predominante de la caratula de la cancion actual.
+ * predominante de la caratula de la cancion actual (o, si no
+ * hay nada sonando, de la cancion que se muestra en la tarjeta
+ * principal). Sobre un degradado de base oscuro se dibujan
+ * "destellos" animados (ver [HomeGlowSparkleDrawable]): chispas
+ * de luz que aparecen, brillan y se apagan en distintos puntos,
+ * como pequenos fuegos artificiales, con el color vivo de la
+ * caratula actual.
  */
 class HomeController(
     private val context: Context,
@@ -112,18 +119,42 @@ class HomeController(
     private var backgroundSongId: Long? = null
 
     /**
-     * Drawable del degradado.
-     *
-     * Este drawable se aplica al rootSongListLayout,
-     * no solamente al NestedScrollView.
+     * Capa de base: degradado vertical oscuro (arriba -> abajo).
+     * Sirve de piso para que se lea bien el texto y para que los
+     * destellos tengan contra que resaltar.
      */
-    private val homeBackgroundDrawable =
+    private val baseGradientDrawable =
         GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
             intArrayOf(
                 defaultBackgroundTop(),
                 defaultBackgroundMiddle(),
                 defaultBackgroundBottom()
+            )
+        )
+
+    /**
+     * Capa de destellos animados (chispas de luz tipo "fuegos
+     * artificiales"), con el color vivo de la caratula actual.
+     * Ver [HomeGlowSparkleDrawable].
+     */
+    private val glowSparkleDrawable =
+        HomeGlowSparkleDrawable(
+            density = context.resources.displayMetrics.density
+        )
+
+    /**
+     * Union de ambas capas. Esto es lo que se aplica como fondo
+     * de toda la pantalla (fullScreenRoot).
+     *
+     * El orden importa: la primera capa queda ABAJO, la ultima
+     * queda ARRIBA. Por eso los destellos van despues de la base.
+     */
+    private val homeBackgroundDrawable =
+        LayerDrawable(
+            arrayOf(
+                baseGradientDrawable,
+                glowSparkleDrawable
             )
         )
 
@@ -280,8 +311,8 @@ class HomeController(
         // (reproduciendose, o si no hay nada sonando, la mas reciente
         // o la ultima agregada). Antes se usaba "current", que es null
         // cuando no hay reproduccion activa, asi que el fondo dinamico
-        // (extraido con Palette, estilo Material You) nunca reaccionaba
-        // a las canciones mostradas en el Home, solo a la que sonaba.
+        // nunca reaccionaba a las canciones mostradas en el Home, solo
+        // a la que sonaba.
         applyDynamicBackground(hero)
     }
 
@@ -545,6 +576,8 @@ class HomeController(
 
             backgroundSongId = null
 
+            glowSparkleDrawable.setActive(false)
+
             animateBackgroundTo(
                 defaultBackgroundTop(),
                 defaultBackgroundMiddle(),
@@ -639,12 +672,20 @@ class HomeController(
                 /*
                  * Palette puede ser nullable.
                  * Por eso usamos ?. en todas las propiedades.
+                 *
+                 * Para los destellos preferimos los swatches MAS
+                 * VIVOS (vibrant/lightVibrant) en vez de los oscuros,
+                 * porque es justo esa saturacion la que hace que se
+                 * note el chispazo, igual que en el reproductor del
+                 * sistema. Si la caratula no tiene un tono vivo (por
+                 * ejemplo, una portada en blanco y negro), caemos en
+                 * los swatches oscuros/dominantes.
                  */
 
                 val swatch =
-                    palette?.darkVibrantSwatch
-                        ?: palette?.darkMutedSwatch
-                        ?: palette?.vibrantSwatch
+                    palette?.vibrantSwatch
+                        ?: palette?.lightVibrantSwatch
+                        ?: palette?.darkVibrantSwatch
                         ?: palette?.mutedSwatch
                         ?: palette?.dominantSwatch
 
@@ -654,6 +695,8 @@ class HomeController(
                 // ------------------------------------------------
 
                 if (swatch == null) {
+
+                    glowSparkleDrawable.setActive(false)
 
                     animateBackgroundTo(
                         defaultBackgroundTop(),
@@ -674,7 +717,7 @@ class HomeController(
 
 
                 /*
-                 * Parte superior.
+                 * Parte superior de la base (oscura, con matiz).
                  */
                 val topColor =
                     darkenForBackground(
@@ -684,7 +727,7 @@ class HomeController(
 
 
                 /*
-                 * Parte central.
+                 * Parte central de la base.
                  */
                 val middleColor =
                     darkenForBackground(
@@ -694,7 +737,7 @@ class HomeController(
 
 
                 /*
-                 * Parte inferior.
+                 * Parte inferior de la base: casi negro.
                  */
                 val bottomColor =
                     ColorUtils.blendARGB(
@@ -702,6 +745,15 @@ class HomeController(
                         Color.BLACK,
                         0.90f
                     )
+
+
+                /*
+                 * Destellos: usan el color original de la caratula.
+                 * HomeGlowSparkleDrawable se encarga de convertirlo
+                 * en algo vivo/luminoso para cada chispa.
+                 */
+                glowSparkleDrawable.setAccentColor(originalColor)
+                glowSparkleDrawable.setActive(true)
 
 
                 animateBackgroundTo(
@@ -714,7 +766,7 @@ class HomeController(
 
 
     // ============================================================
-    // ANIMAR DEGRADADO
+    // ANIMAR DEGRADADO DE BASE
     // ============================================================
 
     private fun animateBackgroundTo(
@@ -741,7 +793,7 @@ class HomeController(
         // --------------------------------------------------------
 
         val currentColors =
-            homeBackgroundDrawable.colors
+            baseGradientDrawable.colors
                 ?: intArrayOf(
                     defaultBackgroundTop(),
                     defaultBackgroundMiddle(),
@@ -816,7 +868,7 @@ class HomeController(
                         ) as Int
 
 
-                    homeBackgroundDrawable.colors =
+                    baseGradientDrawable.colors =
                         intArrayOf(
                             top,
                             middle,
