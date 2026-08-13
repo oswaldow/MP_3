@@ -75,15 +75,12 @@ object LyricsRepository {
 
     fun fetch(title: String, artist: String, durationSeconds: Long, callback: LyricsCallback) {
         val (cleanTitle, cleanArtist) = sanitizeTitleArtist(title, artist)
-        Log.d(TAG, "Buscando letra -> title=\"$cleanTitle\" artist=\"$cleanArtist\" (original title=\"$title\" artist=\"$artist\")")
 
         val getUrl = buildGetUrl(cleanTitle, cleanArtist, durationSeconds)
         val request = Request.Builder()
             .url(getUrl)
             .header("User-Agent", USER_AGENT)
             .build()
-
-        Log.d(TAG, "GET $getUrl")
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -93,7 +90,6 @@ object LyricsRepository {
 
             override fun onResponse(call: Call, response: okhttp3.Response) {
                 response.use {
-                    Log.d(TAG, "GET respondió código ${it.code}")
                     if (!it.isSuccessful) {
                         fetchViaSearch(cleanTitle, cleanArtist, callback)
                         return
@@ -130,8 +126,6 @@ object LyricsRepository {
             .url(searchUrl)
             .header("User-Agent", USER_AGENT)
             .build()
-
-        Log.d(TAG, "SEARCH (candidates) $searchUrl")
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -192,8 +186,6 @@ object LyricsRepository {
             .header("User-Agent", USER_AGENT)
             .build()
 
-        Log.d(TAG, "SEARCH $searchUrl")
-
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 Log.w(TAG, "SEARCH falló", e)
@@ -202,7 +194,6 @@ object LyricsRepository {
 
             override fun onResponse(call: Call, response: okhttp3.Response) {
                 response.use {
-                    Log.d(TAG, "SEARCH respondió código ${it.code}")
                     if (!it.isSuccessful) {
                         mainHandler.post { callback.onError("No se encontró letra para esta canción") }
                         return
@@ -229,19 +220,6 @@ object LyricsRepository {
         val instrumental = json.optBoolean("instrumental", false)
         val plain = optNullableString(json, "plainLyrics")
         val syncedRaw = optNullableString(json, "syncedLyrics")
-
-        // Log de diagnostico: para detectar si LRCLIB esta devolviendo una
-        // letra que no corresponde a la duracion real de la cancion (lo que
-        // causaria timestamps que no cuadran con el audio). Comparar
-        // "matchedDuration" contra la duracion real del archivo mp3.
-        Log.d(
-            TAG,
-            "Resultado LRCLIB -> id=${json.optLong("id", -1)} " +
-                    "trackName=\"${json.optString("trackName")}\" " +
-                    "artistName=\"${json.optString("artistName")}\" " +
-                    "matchedDuration=${json.optInt("duration", -1)}s " +
-                    "instrumental=$instrumental hasSynced=${!syncedRaw.isNullOrBlank()}"
-        )
 
         val synced = syncedRaw?.let { parseLrc(it) }
         return LyricsResult(plainLyrics = plain, syncedLines = synced, isInstrumental = instrumental)
@@ -282,28 +260,6 @@ object LyricsRepository {
             }
         }
         val sorted = lines.sortedBy { it.timeMs }
-
-        // Log de diagnostico temporal: cuantas lineas se parsearon, el
-        // offset detectado, y las primeras 5 (tiempo + texto). Si "offsetMs"
-        // sale distinto de 0 aqui, ese es el problema. Si sale 0 y aun asi
-        // la primera linea real ya tiene un timeMs bajo con texto que no es
-        // el inicio de la cancion, el problema esta en el LRC que devuelve
-        // LRCLIB (letra desincronizada o de otra version), no en el parser.
-        Log.d(
-            TAG,
-            "parseLrc -> offsetMs=$offsetMs totalLineas=${sorted.size} " +
-                    "primeras=${sorted.take(5).joinToString(" | ") { "${it.timeMs}ms:\"${it.text}\"" }}"
-        )
-
-        // Diagnostico extra: si el LRC llego con contenido pero no se
-        // extrajo ninguna linea, es que el regex no matchea el formato de
-        // ESTE LRC en particular. Se imprime tal cual llegaron las primeras
-        // lineas crudas (sin parsear) para poder ver el formato exacto.
-        if (sorted.isEmpty() && raw.isNotBlank()) {
-            val rawPreview = raw.lines().filter { it.isNotBlank() }.take(5)
-            Log.w(TAG, "parseLrc -> 0 lineas extraidas, LRC crudo (primeras lineas no vacias):")
-            rawPreview.forEachIndexed { i, l -> Log.w(TAG, "  raw[$i] = \"$l\"") }
-        }
 
         return sorted
     }

@@ -3,7 +3,6 @@ package com.learnlayout.mp_3
 import android.content.Context
 import android.media.AudioManager
 import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -15,7 +14,6 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
-import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import kotlin.math.cos
 import kotlin.math.sin
@@ -84,8 +82,6 @@ class PlaybackEngine(
     // Marca de tiempo del ultimo tick del progressRunnable (cada 500ms) y
     // del crossfadeRunnable (cada 100ms), para detectar jank del hilo
     // principal.
-    private var lastProgressTickNanos: Long = 0L
-    private var lastFadeTickNanos: Long = 0L
 
     companion object {
         // Cada cuanto se revisa el progreso y se recalcula el volumen del
@@ -94,15 +90,7 @@ class PlaybackEngine(
 
         private const val CROSSFADE_PREPARE_LEAD_MS = 4000L
 
-        // --- DEBUG: instrumentacion temporal para hallar el origen del corte ---
-        // Todo lo etiquetado con TAG_XFADE se puede filtrar en Logcat con:
-        //   adb logcat -s MP3_XFADE
         private const val TAG_XFADE = "MP3_XFADE"
-
-        // --- DEBUG: instrumentacion temporal para el ecualizador por software ---
-        // Filtrar en Logcat con:
-        //   adb logcat -s MP3_EQ
-        private const val TAG_EQ = "MP3_EQ"
 
         // AudioAttributes explicitos para todos los ExoPlayer de musica.
         private val MUSIC_AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
@@ -117,14 +105,6 @@ class PlaybackEngine(
     // setOnCompletionListener(...) / setOnCompletionListener(null)).
     private val mainPlayerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
-            val stateName = when (playbackState) {
-                Player.STATE_IDLE -> "IDLE"
-                Player.STATE_BUFFERING -> "BUFFERING"
-                Player.STATE_READY -> "READY"
-                Player.STATE_ENDED -> "ENDED"
-                else -> "?"
-            }
-            Log.d(TAG_XFADE, "mainPlayerListener.onPlaybackStateChanged -> $stateName (isCrossfading=$isCrossfading)")
             if (playbackState == Player.STATE_ENDED) {
                 callback.onTrackEnded()
             }
@@ -132,10 +112,6 @@ class PlaybackEngine(
 
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG_XFADE, "onPlayerError en player principal: ${error.message}")
-        }
-
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            Log.d(TAG_XFADE, "mainPlayerListener.onIsPlayingChanged -> $isPlaying (isCrossfading=$isCrossfading)")
         }
     }
 
@@ -166,8 +142,6 @@ class PlaybackEngine(
         player.playWhenReady = true
         mediaPlayer = player
         loadedIndex = index
-
-        Log.d(TAG_XFADE, "playSongAt() indice=$index nuevo player=$player")
 
         startProgressUpdates()
         callback.onSongStarted(song, index, SongStartReason.NEW)
@@ -254,64 +228,7 @@ class PlaybackEngine(
     private fun attachAudioDiagnostics(player: ExoPlayer, label: String) {
         val playerId = System.identityHashCode(player)
 
-        player.addListener(object : Player.Listener {
-            override fun onVolumeChanged(volume: Float) {
-                Log.w(TAG_XFADE, "[$label #$playerId] onVolumeChanged -> $volume (isCrossfading=$isCrossfading)")
-            }
-
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                Log.w(
-                    TAG_XFADE,
-                    "[$label #$playerId] onAudioSessionIdChanged -> $audioSessionId (isCrossfading=$isCrossfading) <-- si pasa durante el cruce, la sesion de audio se esta reasignando"
-                )
-            }
-
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                Log.d(
-                    TAG_XFADE,
-                    "[$label #$playerId] onPlayWhenReadyChanged -> $playWhenReady reason=$reason (isCrossfading=$isCrossfading)"
-                )
-            }
-        })
-
         player.addAnalyticsListener(object : AnalyticsListener {
-            override fun onAudioUnderrun(
-                eventTime: AnalyticsListener.EventTime,
-                bufferSize: Int,
-                bufferSizeMs: Long,
-                elapsedSinceLastFeedMs: Long
-            ) {
-                Log.w(
-                    TAG_XFADE,
-                    "[$label #$playerId] *** onAudioUnderrun *** bufferSizeMs=$bufferSizeMs " +
-                            "elapsedSinceLastFeedMs=$elapsedSinceLastFeedMs (isCrossfading=$isCrossfading) " +
-                            "<-- CANDIDATO PRINCIPAL: el hilo de audio se quedo sin datos un instante, " +
-                            "eso se oye exactamente como 'bajon y vuelve'"
-                )
-            }
-
-            override fun onAudioTrackInitialized(
-                eventTime: AnalyticsListener.EventTime,
-                audioTrackConfig: AudioSink.AudioTrackConfig
-            ) {
-                Log.w(
-                    TAG_XFADE,
-                    "[$label #$playerId] onAudioTrackInitialized encoding=${audioTrackConfig.encoding} " +
-                            "sampleRate=${audioTrackConfig.sampleRate} channelConfig=${audioTrackConfig.channelConfig} " +
-                            "bufferSize=${audioTrackConfig.bufferSize} offload=${audioTrackConfig.offload} " +
-                            "tunneling=${audioTrackConfig.tunneling} (isCrossfading=$isCrossfading) " +
-                            "<-- si esto aparece DURANTE el cruce (no solo al arrancar el player), " +
-                            "el sistema esta reconstruyendo el AudioTrack a mitad del fundido"
-                )
-            }
-
-            override fun onAudioTrackReleased(
-                eventTime: AnalyticsListener.EventTime,
-                audioTrackConfig: AudioSink.AudioTrackConfig
-            ) {
-                Log.w(TAG_XFADE, "[$label #$playerId] onAudioTrackReleased (isCrossfading=$isCrossfading)")
-            }
-
             override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
                 Log.e(TAG_XFADE, "[$label #$playerId] onAudioSinkError: ${audioSinkError.message}", audioSinkError)
             }
@@ -345,7 +262,6 @@ class PlaybackEngine(
             .setTrackSelector(trackSelector)
             .build()
             .apply {
-                Log.d(TAG_EQ, "buildPlayer: player creado CON EqAudioSinkRenderersFactory (EQ inyectado)")
                 // handleAudioFocus = false: mismo comportamiento manual que
                 // tenia MediaPlayer (la app nunca gestiono audio focus).
                 setAudioAttributes(MUSIC_AUDIO_ATTRIBUTES, false)
@@ -365,7 +281,6 @@ class PlaybackEngine(
                     // sharedAudioSessionId para el resto de la vida del
                     // servicio (ver comentario grande junto al campo).
                     val ownSessionId = this.audioSessionId
-                    Log.d(TAG_XFADE, "buildPlayer: primer player, sesion propia de ExoPlayer=$ownSessionId")
                     if (ownSessionId != AudioManager.ERROR && ownSessionId != 0) {
                         sharedAudioSessionId = ownSessionId
                     }
@@ -376,21 +291,8 @@ class PlaybackEngine(
     private fun startProgressUpdates() {
         progressRunnable?.let { handler.removeCallbacks(it) }
 
-        lastProgressTickNanos = 0L
         val runnable = object : Runnable {
             override fun run() {
-                // DEBUG: si este tick tarda mucho mas de 500ms en llegar,
-                // significa que el hilo principal estuvo bloqueado por algo
-                // (GC, disco, binder IPC...) justo en ese hueco de tiempo.
-                val now = System.nanoTime()
-                if (lastProgressTickNanos != 0L) {
-                    val deltaMs = (now - lastProgressTickNanos) / 1_000_000
-                    if (deltaMs > 600) {
-                        Log.w(TAG_XFADE, "JANK en hilo principal: tick de progreso tardo ${deltaMs}ms (esperado ~500ms). isCrossfading=$isCrossfading")
-                    }
-                }
-                lastProgressTickNanos = now
-
                 val player = mediaPlayer
                 if (player != null) {
                     val current = player.currentPosition
@@ -455,7 +357,6 @@ class PlaybackEngine(
             preparedNextPlayer == null &&
             prepareRequestedForIndex != upcomingIndex
         ) {
-            Log.d(TAG_XFADE, "FASE1 -> pidiendo preparar indice=$upcomingIndex remainingMs=$remainingMs fadeMs=$fadeMs")
             prepareNextPlayerAsync(upcomingIndex)
         }
 
@@ -463,10 +364,7 @@ class PlaybackEngine(
         if (remainingMs <= fadeMs) {
             val ready = preparedNextPlayer
             if (ready != null && preparedNextIndex == upcomingIndex) {
-                Log.d(TAG_XFADE, "FASE2 -> arrancando beginCrossfade indice=$upcomingIndex remainingMs=$remainingMs")
                 beginCrossfade(upcomingIndex, ready, remainingMs.coerceAtMost(fadeMs))
-            } else {
-                Log.w(TAG_XFADE, "FASE2 -> NO estaba listo el siguiente player (ready=${ready != null}, preparedNextIndex=$preparedNextIndex, upcomingIndex=$upcomingIndex). Se hara salto SIN crossfade.")
             }
             // Si aun no esta listo (cancion muy corta, almacenamiento lento,
             // etc.) no se fuerza nada: se deja que termine normal y el
@@ -487,8 +385,6 @@ class PlaybackEngine(
         // arranca solo, sonando en silencio (volume = 0 puesto en
         // buildPlayer), sin bloquear el hilo principal.
         player.playWhenReady = true
-
-        Log.d(TAG_XFADE, "prepareNextPlayerAsync indice=$index (offload desactivado, sesion propia)")
     }
 
     // Listener de preparado/error para el player que se esta precargando
@@ -498,13 +394,10 @@ class PlaybackEngine(
         return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
-                    Log.d(TAG_XFADE, "onReady indice=$index (async, no deberia afectar al hilo principal)")
                     if (prepareRequestedForIndex == index && preparedNextIndex != index) {
                         preparedNextPlayer = player
                         preparedNextIndex = index
                     }
-                } else if (playbackState == Player.STATE_BUFFERING) {
-                    Log.d(TAG_XFADE, "player entrante indice=$index -> BUFFERING (isCrossfading=$isCrossfading)")
                 }
             }
 
@@ -529,22 +422,11 @@ class PlaybackEngine(
     }
 
     private fun beginCrossfade(upcomingIndex: Int, readyPlayer: ExoPlayer, durationMs: Long) {
-        val fnStart = System.nanoTime()
         val current = mediaPlayer
         if (current == null || durationMs <= 0) {
             discardPreparedNextIfAny()
             return
         }
-
-        val readyIsPlayingBefore = runCatching { readyPlayer.isPlaying }.getOrDefault(false)
-        val readyPosBefore = runCatching { readyPlayer.currentPosition }.getOrDefault(-1L)
-        val currentPos = runCatching { current.currentPosition }.getOrDefault(-1L)
-        Log.d(TAG_XFADE, "beginCrossfade() indice=$upcomingIndex durationMs=$durationMs | readyIsPlayingBefore=$readyIsPlayingBefore readyPosBefore=$readyPosBefore currentPos=$currentPos")
-
-        val streamVolBefore = runCatching {
-            (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).getStreamVolume(AudioManager.STREAM_MUSIC)
-        }.getOrNull()
-        Log.d(TAG_XFADE, "beginCrossfade() streamVolAntes=$streamVolBefore")
 
         nextMediaPlayer = readyPlayer
         nextIndexDuringCrossfade = upcomingIndex
@@ -569,20 +451,10 @@ class PlaybackEngine(
             readyPlayer.playWhenReady = true
         }
 
-        lastFadeTickNanos = 0L
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         val crossfadeRunnableLocal = object : Runnable {
             override fun run() {
                 if (!isCrossfading) return
-
-                val now = System.nanoTime()
-                if (lastFadeTickNanos != 0L) {
-                    val deltaMs = (now - lastFadeTickNanos) / 1_000_000
-                    if (deltaMs > 150) {
-                        Log.w(TAG_XFADE, "JANK durante crossfade: tick de fundido tardo ${deltaMs}ms (esperado ~100ms)")
-                    }
-                }
-                lastFadeTickNanos = now
 
                 crossfadeElapsedMs += FADE_STEP_MS
                 val fraction = (crossfadeElapsedMs.toFloat() / crossfadeTotalMs.toFloat()).coerceIn(0f, 1f)
@@ -601,26 +473,6 @@ class PlaybackEngine(
                 runCatching { mediaPlayer?.volume = outgoingVolume }
                 runCatching { nextMediaPlayer?.volume = incomingVolume }
 
-                val outReadback = runCatching { mediaPlayer?.volume }.getOrNull()
-                val inReadback = runCatching { nextMediaPlayer?.volume }.getOrNull()
-                val outState = runCatching { mediaPlayer?.playbackState }.getOrNull()
-                val inState = runCatching { nextMediaPlayer?.playbackState }.getOrNull()
-                val outIsPlaying = runCatching { mediaPlayer?.isPlaying }.getOrNull()
-                val inIsPlaying = runCatching { nextMediaPlayer?.isPlaying }.getOrNull()
-                val streamVol = runCatching {
-                    (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).getStreamVolume(AudioManager.STREAM_MUSIC)
-                }.getOrNull()
-                val musicActive = runCatching {
-                    (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).isMusicActive
-                }.getOrNull()
-                Log.d(
-                    TAG_XFADE,
-                    "TICK fraction=${"%.2f".format(fraction)} " +
-                            "outSet=${"%.2f".format(outgoingVolume)} outReadback=$outReadback outState=$outState outIsPlaying=$outIsPlaying " +
-                            "inSet=${"%.2f".format(incomingVolume)} inReadback=$inReadback inState=$inState inIsPlaying=$inIsPlaying " +
-                            "streamVol=$streamVol musicActive=$musicActive"
-                )
-
                 if (fraction >= 1f) {
                     finishCrossfade()
                 } else {
@@ -630,15 +482,9 @@ class PlaybackEngine(
         }
         crossfadeRunnable = crossfadeRunnableLocal
         handler.post(crossfadeRunnableLocal)
-
-        val fnMs = (System.nanoTime() - fnStart) / 1_000_000
-        Log.d(TAG_XFADE, "beginCrossfade() function completa en ${fnMs}ms")
     }
 
     private fun finishCrossfade() {
-        val fnStart = System.nanoTime()
-        Log.d(TAG_XFADE, "finishCrossfade() INICIO")
-
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = null
 
@@ -649,10 +495,8 @@ class PlaybackEngine(
             return
         }
 
-        var t = System.nanoTime()
         mediaPlayer?.removeListener(mainPlayerListener)
         mediaPlayer?.release()
-        logStep("mediaPlayer.release() (cancion vieja)", t)
 
         val song = callback.songAt(finishedIndex)
         mediaPlayer = incomingPlayer.apply {
@@ -665,24 +509,7 @@ class PlaybackEngine(
         isCrossfading = false
 
         if (song != null) {
-            t = System.nanoTime()
             callback.onSongStarted(song, finishedIndex, SongStartReason.CROSSFADE)
-            logStep("callback.onSongStarted() (metadata/notificacion/UI)", t)
-        }
-
-        val fnMs = (System.nanoTime() - fnStart) / 1_000_000
-        Log.d(TAG_XFADE, "finishCrossfade() FIN, total ${fnMs}ms")
-    }
-
-    // DEBUG: helper para loguear cuanto tardo un paso puntual, marcando en
-    // rojo (Log.w) los que superen 30ms -suficiente para notarse como un
-    // "salto" en el audio.
-    private fun logStep(label: String, startNanos: Long) {
-        val ms = (System.nanoTime() - startNanos) / 1_000_000
-        if (ms > 30) {
-            Log.w(TAG_XFADE, "$label tardo ${ms}ms")
-        } else {
-            Log.d(TAG_XFADE, "$label tardo ${ms}ms")
         }
     }
 
@@ -694,10 +521,6 @@ class PlaybackEngine(
         discardPreparedNextIfAny()
 
         if (!isCrossfading && nextMediaPlayer == null) return
-
-        if (isCrossfading) {
-            Log.w(TAG_XFADE, "cancelCrossfadeIfAny() aborto un crossfade EN CURSO -> esto tambien puede sonar como un corte", Throwable("stacktrace de origen"))
-        }
 
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = null

@@ -9,11 +9,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.content.pm.PackageManager
-import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import androidx.activity.addCallback
-import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -728,10 +726,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun loadSongs() {
-        val t0 = System.currentTimeMillis()
         val rawSongs = SongRepository.getAllSongs(this)
-        val t1 = System.currentTimeMillis()
-        android.util.Log.d("PERF_DEBUG", "getAllSongs(): ${t1 - t0} ms, ${rawSongs.size} canciones")
 
         val overrides = SongMetadataRepository.getAllOverrides(this)
         allSongs = rawSongs.map { song ->
@@ -745,8 +740,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 song
             }
         }
-        val t2 = System.currentTimeMillis()
-        android.util.Log.d("PERF_DEBUG", "overrides x${rawSongs.size}: ${t2 - t1} ms")
 
         if (allSongs.isEmpty()) {
             tvEmptyState.visibility = View.VISIBLE
@@ -756,8 +749,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         applyFilterAndSort()
         if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
-        val t3 = System.currentTimeMillis()
-        android.util.Log.d("PERF_DEBUG", "loadSongs() TOTAL: ${t3 - t0} ms")
     }
 
     private fun tryRestoreLastSong() {
@@ -775,7 +766,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private fun applyFilterAndSort() {
         if (topBarController.isPlaylistsTabActive) return
 
-        val tStart = System.currentTimeMillis()
         var list = allSongs
 
         if (searchQuery.isNotBlank()) {
@@ -784,7 +774,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                         it.artist.contains(searchQuery, ignoreCase = true)
             }
         }
-        val tFilter = System.currentTimeMillis()
 
         list = when (currentSort) {
             SortType.TITLE -> list.sortedBy { it.title.lowercase() }
@@ -796,10 +785,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 list.sortedByDescending { counts[it.id] ?: 0 }
             }
         }
-        val tSort = System.currentTimeMillis()
 
         songAdapter.updateData(list)
-        val tAdapter = System.currentTimeMillis()
 
         val hasResults = list.isNotEmpty()
         tvEmptyState.visibility = if (hasResults) View.GONE else View.VISIBLE
@@ -817,14 +804,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         musicService?.getCurrentSong()?.let {
             songAdapter.setCurrentPlayingId(it.id)
         }
-        val tEnd = System.currentTimeMillis()
-
-        android.util.Log.d(
-            "PERF_DEBUG",
-            "applyFilterAndSort(query='$searchQuery', sort=$currentSort, total=${allSongs.size}, resultado=${list.size}) -> " +
-                    "filter=${tFilter - tStart}ms sort=${tSort - tFilter}ms " +
-                    "adapter.updateData=${tAdapter - tSort}ms resto=${tEnd - tAdapter}ms TOTAL=${tEnd - tStart}ms"
-        )
     }
 
     private fun loadPlaylists() {
@@ -867,13 +846,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             // reiniciamos con setPlaylist (que siempre arranca desde el
             // principio): solo abrimos el panel donde va quedo.
             val isSameSongPlaying = tappedSong != null && service.getCurrentSong()?.id == tappedSong.id
-            Log.d("MP3_PANEL", "openPlayer: tappedSong='${tappedSong?.title}' isSameSongPlaying=$isSameSongPlaying thread=${Thread.currentThread().name}")
             if (!isSameSongPlaying) {
-                Log.d("MP3_PANEL", "openPlayer: llamando service.setPlaylist(...)")
                 service.setPlaylist(playlist, startIndex)
-                Log.d("MP3_PANEL", "openPlayer: service.setPlaylist(...) retorno")
             }
-            Log.d("MP3_PANEL", "openPlayer: llamando playerPanelController.expandWhenReady()")
             playerPanelController.expandWhenReady()
         } else {
             musicServiceConnectionController.queuePlayback(playlist, startIndex)
@@ -917,16 +892,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun showMiniPlayer(song: Song, playing: Boolean) {
-        Log.d("MP3_PANEL", "showMiniPlayer: song='${song.title}' playing=$playing thread=${Thread.currentThread().name}")
         playerPanelController.updateNowPlaying(song, playing)
         lyricsPanelController.updatePeekHeight()
         lyricsPanelController.loadForSong(song)
     }
 
     override fun onSongChanged(song: Song, index: Int) {
-        Log.d("MP3_PANEL", "onSongChanged: song='${song.title}' index=$index thread(antes de runOnUiThread)=${Thread.currentThread().name}")
         runOnUiThread {
-            Log.d("MP3_PANEL", "onSongChanged: dentro de runOnUiThread thread=${Thread.currentThread().name}")
             showMiniPlayer(song, musicService?.isPlaying() == true)
             songAdapter.setCurrentPlayingId(song.id)
             if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()

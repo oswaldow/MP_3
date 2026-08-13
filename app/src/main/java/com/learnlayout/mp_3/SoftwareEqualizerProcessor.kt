@@ -10,7 +10,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
-import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -38,7 +37,6 @@ class SoftwareEqualizerProcessor : AudioProcessor {
 
         // Para no inundar Logcat: solo logueamos 1 de cada N buffers
         // procesados en queueInput, y logueamos SIEMPRE que cambia un valor.
-        @Volatile private var logCounter = 0
 
         // Ganancia por banda en milibeles (100 mB = 1 dB), y flag global
         // de enabled/disabled. @Volatile: se leen desde el hilo de audio
@@ -61,7 +59,6 @@ class SoftwareEqualizerProcessor : AudioProcessor {
             newArray[band] = clamped
             bandGainsMillibel = newArray
             configVersion++
-            Log.d(TAG_EQ, "setBandGainMillibel: band=$band gain=$clamped mB masterEnabled=$masterEnabled configVersion=$configVersion")
         }
 
         fun getBandGainMillibel(band: Int): Int {
@@ -72,7 +69,6 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         fun setMasterEnabled(enabled: Boolean) {
             masterEnabled = enabled
             configVersion++
-            Log.d(TAG_EQ, "setMasterEnabled: enabled=$enabled configVersion=$configVersion")
         }
 
         fun isMasterEnabled(): Boolean = masterEnabled
@@ -134,14 +130,11 @@ class SoftwareEqualizerProcessor : AudioProcessor {
             Array(NUM_BANDS) { ChannelBandState() }
         }
         appliedVersion = -1 // fuerza a recalcular coeficientes con el nuevo sampleRate
-        Log.d(TAG_EQ, "configure: OK sampleRate=${inputAudioFormat.sampleRate} channels=${inputAudioFormat.channelCount} instance=${System.identityHashCode(this)}")
         return outputAudioFormat
     }
 
     override fun isActive(): Boolean {
-        val active = outputAudioFormat != AudioFormat.NOT_SET
-        Log.d(TAG_EQ, "isActive: $active instance=${System.identityHashCode(this)}")
-        return active
+        return outputAudioFormat != AudioFormat.NOT_SET
     }
 
     private fun recomputeCoeffsIfNeeded() {
@@ -172,8 +165,6 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         }
         preGainLinear = 10.0.pow((manualPreampDb + automaticDb) / 20.0)
         appliedVersion = configVersion
-        val preGainDb = 20.0 * log10(preGainLinear)
-        Log.d(TAG_EQ, "recomputeCoeffsIfNeeded: recalculado, appliedVersion=$appliedVersion gains=${gains.toList()} preGainDb=$preGainDb instance=${System.identityHashCode(this)}")
     }
 
     /**
@@ -273,13 +264,6 @@ class SoftwareEqualizerProcessor : AudioProcessor {
 
         val channelCount = inputAudioFormat.channelCount
         val out = replaceOutputBuffer(size)
-
-        // DEBUG: solo 1 de cada 200 buffers (~cada par de segundos con
-        // buffers tipicos) para no inundar Logcat.
-        logCounter++
-        if (logCounter % 200 == 0) {
-            Log.d(TAG_EQ, "queueInput: buffer #$logCounter size=$size masterEnabled=$masterEnabled instance=${System.identityHashCode(this)}")
-        }
 
         if (!masterEnabled) {
             // Bypass: copia directa, sin gastar CPU en filtrado.

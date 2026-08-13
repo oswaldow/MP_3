@@ -4,7 +4,6 @@ import android.animation.ValueAnimator
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.os.Bundle
-import android.os.IBinder
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
