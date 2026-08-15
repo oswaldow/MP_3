@@ -104,6 +104,14 @@ class EqualizerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_equalizer)
 
+        // Red de seguridad: si por alguna razon esta pantalla se abre antes
+        // de que MusicService haya arrancado (y por lo tanto antes de que
+        // se haya llamado a EqualizerRepository.init desde ahi), esto evita
+        // mostrar el estado por defecto en vez del guardado. init() ya se
+        // protege a si mismo para no volver a ejecutar su logica si ya
+        // corrio antes, asi que llamarlo de nuevo aqui no tiene costo.
+        EqualizerRepository.init(applicationContext)
+
         bindViews()
         eqCurveView.setAccentColor(ContextCompat.getColor(this, R.color.spotify_green))
 

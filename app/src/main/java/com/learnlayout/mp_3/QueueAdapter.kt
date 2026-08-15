@@ -21,7 +21,12 @@ class QueueAdapter(
     // Eliminar del dispositivo), igual que en la lista principal.
     // Con valor por defecto para no romper otros callers que todavia
     // no lo necesitan.
-    private val onLongPress: (Int) -> Unit = {}
+    private val onLongPress: (Int) -> Unit = {},
+    // true mientras se esta mostrando una lista filtrada por busqueda.
+    // En ese modo se oculta el handle de arrastre: las posiciones ya no
+    // son continuas respecto a la cola real, asi que reordenar no tiene
+    // sentido hasta que se limpie la busqueda.
+    private val searchMode: Boolean = false
 ) : RecyclerView.Adapter<QueueAdapter.QueueViewHolder>() {
 
     var dragStartListener: ((RecyclerView.ViewHolder) -> Unit)? = null
@@ -157,7 +162,16 @@ class QueueAdapter(
             true
         }
 
+        holder.ivDragHandle.visibility =
+            if (searchMode) View.GONE else View.VISIBLE
+
         holder.ivDragHandle.setOnTouchListener { _, event ->
+
+            if (
+                searchMode
+            ) {
+                return@setOnTouchListener false
+            }
 
             if (
                 event.actionMasked ==

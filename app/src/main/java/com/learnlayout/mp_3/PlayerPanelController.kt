@@ -49,7 +49,12 @@ class PlayerPanelController(
     private val onCollapsed: () -> Unit,
     private val onShowQueue: () -> Unit,
     private val onFavoriteToggled: () -> Unit,
+    // Opcion "Buscar caratula y letra" del menu que aparece al mantener
+    // presionada la caratula (ver showAlbumArtLongPressMenu). Es la misma
+    // funcion que ya existia antes de agregar el menu.
     private val onAlbumArtLongPress: (Song) -> Unit,
+    // Opcion "Editar nombre y artista" del mismo menu.
+    private val onEditSongMetadata: (Song) -> Unit = {},
     // Avisa cada vez que cambia la caratula (o se va a placeholder, bitmap
     // null) para que quien arme este controller pueda enterar a otras
     // vistas, p.ej. el banner del panel de letra (Material You).
@@ -156,7 +161,7 @@ class PlayerPanelController(
         ivPanelAlbumArt.setOnLongClickListener {
             val song = getMusicService()?.getCurrentSong()
             if (song != null) {
-                onAlbumArtLongPress(song)
+                showAlbumArtLongPressMenu(song)
             }
             true
         }
@@ -380,6 +385,42 @@ class PlayerPanelController(
         getMusicService()?.setSleepTimerMinutes(minutes)
         updateSleepTimerIcon()
         Toast.makeText(activity, "Se pausara en $minutes min", Toast.LENGTH_SHORT).show()
+    }
+
+    // ---------- Menu de la caratula (mantener presionada) ----------
+
+    /**
+     * Menu con dos opciones al mantener presionada la caratula del panel:
+     * 1. Editar nombre y artista (reusa el mismo dialogo que ya existe en
+     *    la lista principal, ver PlaylistDialogs.showEditSongMetadataDialog).
+     * 2. Buscar caratula y letra (la funcion que antes se disparaba
+     *    directo con el long-press, sin pasar por ningun menu).
+     */
+    private fun showAlbumArtLongPressMenu(song: Song) {
+        val popupView = activity.layoutInflater.inflate(R.layout.popup_album_art_menu, null)
+        val popupWindow = PopupWindow(
+            popupView,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            true
+        )
+        popupWindow.isOutsideTouchable = true
+        popupWindow.elevation = 16f
+
+        val tvEdit: TextView = popupView.findViewById(R.id.tvAlbumArtMenuEdit)
+        val tvSearch: TextView = popupView.findViewById(R.id.tvAlbumArtMenuSearch)
+
+        tvEdit.setOnClickListener {
+            onEditSongMetadata(song)
+            popupWindow.dismiss()
+        }
+
+        tvSearch.setOnClickListener {
+            onAlbumArtLongPress(song)
+            popupWindow.dismiss()
+        }
+
+        popupWindow.showAsDropDown(ivPanelAlbumArt, 0, 12)
     }
 
     // Version atenuada (mismo tono, menos opaca) del acento actual cuando

@@ -51,6 +51,15 @@ class MusicService : Service() {
     override fun onCreate() {
         super.onCreate()
 
+        // Debe ir antes de crear playbackEngine: es lo que carga desde
+        // SharedPreferences si el ecualizador estaba activado y con que
+        // valores, para que la cadena de audio arranque ya configurada.
+        // Antes esto nunca se llamaba en ningun lugar de la app, asi que
+        // el estado guardado jamas se leia y el ecualizador volvia a
+        // quedar desactivado cada vez que el proceso de la app moria en
+        // segundo plano (tras unas horas, por ejemplo).
+        EqualizerRepository.init(applicationContext)
+
         notifier = PlaybackNotifier(this, CHANNEL_ID, object : PlaybackNotifier.ActionCallback {
             override fun onPlayRequested() = play()
             override fun onPauseRequested() = pause()
@@ -121,6 +130,7 @@ class MusicService : Service() {
         if (songs.isNotEmpty()) {
             playbackEngine.playSongAt(startIndex)
         }
+        persistQueueState()
     }
 
     /**
@@ -139,6 +149,7 @@ class MusicService : Service() {
         if (currentIndex >= 0) {
             playbackEngine.cancelCrossfadeIfAny()
             queueManager.setPlaylist(songs, currentIndex)
+            persistQueueState()
         } else {
             // Caso de seguridad: si por alguna razon la cancion actual ya no
             // existe en la biblioteca, no modificamos la reproduccion.
@@ -151,6 +162,32 @@ class MusicService : Service() {
         if (songs.isEmpty()) return
         queueManager.restorePlaylist(songs, startIndex)
         playbackEngine.restoreSongAt(queueManager.getCurrentIndex(), positionMs)
+        persistQueueState()
+    }
+
+    /**
+     * Reconstruye la cola COMPLETA (no solo la cancion actual) tal cual
+     * habia quedado guardada en QueueStateRepository: mismo orden, misma
+     * lista original para shuffle, mismo indice actual y mismo modo de
+     * reproduccion. No se cuenta como reproduccion nueva ni arranca en
+     * automatico.
+     *
+     * Se usa al reabrir la app despues de que Android mato el proceso en
+     * segundo plano (por ejemplo, al deslizarla fuera de la lista de apps
+     * recientes): MusicService arranca desde cero con la cola vacia, y
+     * esto la deja exactamente como el usuario la dejo.
+     */
+    fun restorePersistedQueue(
+        songs: List<Song>,
+        originalSongs: List<Song>,
+        startIndex: Int,
+        mode: PlaybackMode,
+        positionMs: Long
+    ) {
+        if (songs.isEmpty()) return
+        queueManager.restorePersistedQueue(songs, originalSongs, startIndex, mode)
+        playbackEngine.restoreSongAt(queueManager.getCurrentIndex(), positionMs)
+        persistQueueState()
     }
 
     fun getCurrentSong(): Song? = queueManager.getCurrentSong()
@@ -188,12 +225,15 @@ class MusicService : Service() {
 
     fun cyclePlaybackMode(): PlaybackMode {
         playbackEngine.cancelCrossfadeIfAny()
-        return queueManager.cyclePlaybackMode()
+        val mode = queueManager.cyclePlaybackMode()
+        persistQueueState()
+        return mode
     }
 
     fun setPlaybackMode(mode: PlaybackMode) {
         playbackEngine.cancelCrossfadeIfAny()
         queueManager.setPlaybackMode(mode)
+        persistQueueState()
     }
 
     fun playAt(index: Int) {
@@ -206,17 +246,26 @@ class MusicService : Service() {
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {
         playbackEngine.cancelCrossfadeIfAny()
         queueManager.moveQueueItem(fromIndex, toIndex)
+        persistQueueState()
     }
 
     fun removeQueueItem(index: Int): Boolean {
         if (index == queueManager.getCurrentIndex()) return false
         playbackEngine.cancelCrossfadeIfAny()
-        return queueManager.removeQueueItem(index)
+        val removed = queueManager.removeQueueItem(index)
+        if (removed) {
+            persistQueueState()
+        }
+        return removed
     }
 
     fun clearUpcomingQueue(): Int {
         playbackEngine.cancelCrossfadeIfAny()
-        return queueManager.clearUpcomingQueue()
+        val removedCount = queueManager.clearUpcomingQueue()
+        if (removedCount > 0) {
+            persistQueueState()
+        }
+        return removedCount
     }
 
     /** Inserta una cancion justo despues de la actual (como "Agregar a la cola" en Spotify). */
@@ -227,6 +276,7 @@ class MusicService : Service() {
         }
         playbackEngine.cancelCrossfadeIfAny()
         queueManager.addToPlayNext(song)
+        persistQueueState()
     }
 
     // ---------- Reproduccion (delega en PlaybackEngine) ----------
@@ -309,6 +359,12 @@ class MusicService : Service() {
 
         startForeground(NOTIFICATION_ID, notifier.buildNotification(song, isPlayingNow))
         updateWidgets()
+
+        // La cancion (y por tanto el indice actual dentro de la cola)
+        // acaba de cambiar: se persiste la cola completa para que, si el
+        // proceso muere justo despues, se restaure con el indice correcto
+        // en vez de reiniciar en la primera cancion.
+        persistQueueState()
     }
 
     private fun handlePlaybackStateChanged(isPlaying: Boolean) {
@@ -358,8 +414,58 @@ class MusicService : Service() {
         MusicWidgetProvider.pushUpdate(applicationContext, getCurrentSong(), isPlaying())
     }
 
+    /**
+     * Escribe en disco (de forma NO bloqueante) la cola completa tal como
+     * esta ahora mismo: IDs de canciones en orden, IDs de la lista original
+     * (para reconstruir shuffle), indice actual, ID de la cancion actual y
+     * modo de reproduccion.
+     *
+     * Se llama cada vez que la cola cambia de alguna forma (nueva cola,
+     * reordenar, quitar, agregar a continuacion, cambiar de modo, cambiar
+     * de cancion). Es lo que permite que QueueStateRepository.get() siempre
+     * tenga una version reciente de la cola disponible, sin importar en que
+     * momento Android decida matar el proceso.
+     */
+    private fun persistQueueState() {
+        val songs = queueManager.getSongList()
+
+        if (songs.isEmpty()) {
+            QueueStateRepository.clear(applicationContext)
+            return
+        }
+
+        QueueStateRepository.save(
+            context = applicationContext,
+            queueIds = songs.map { it.id },
+            originalQueueIds = queueManager.getOriginalSongList().map { it.id },
+            currentIndex = queueManager.getCurrentIndex(),
+            currentSongId = queueManager.getCurrentSong()?.id,
+            playbackMode = queueManager.getPlaybackMode()
+        )
+    }
+
+    /** Version bloqueante de persistQueueState(), para onTaskRemoved()/onDestroy(). */
+    private fun persistQueueStateBlocking() {
+        val songs = queueManager.getSongList()
+
+        if (songs.isEmpty()) {
+            QueueStateRepository.clear(applicationContext)
+            return
+        }
+
+        QueueStateRepository.saveBlocking(
+            context = applicationContext,
+            queueIds = songs.map { it.id },
+            originalQueueIds = queueManager.getOriginalSongList().map { it.id },
+            currentIndex = queueManager.getCurrentIndex(),
+            currentSongId = queueManager.getCurrentSong()?.id,
+            playbackMode = queueManager.getPlaybackMode()
+        )
+    }
+
     private fun stopPlaybackAndService() {
         PlaybackStateRepository.clearLastSong(applicationContext)
+        QueueStateRepository.clear(applicationContext)
         playbackEngine.releasePlayer()
         listener?.onPlaybackStateChanged(false)
         notifier.updatePlaybackState(false, 0L)
@@ -373,11 +479,16 @@ class MusicService : Service() {
         // A partir de aqui el sistema puede matar el proceso en cualquier
         // momento (sobre todo en fabricantes agresivos tipo MIUI/HyperOS),
         // sin llegar a llamar onDestroy(). Se escribe de forma bloqueante
-        // para asegurar que la posicion quede en disco antes de que eso
-        // pase.
+        // para asegurar que la posicion Y la cola completa queden en disco
+        // antes de que eso pase. Antes solo se guardaba la cancion+posicion
+        // (PlaybackStateRepository), nunca la cola completa
+        // (QueueStateRepository), asi que al volver a abrir la app la cola
+        // se reconstruia con una sola cancion en vez de con todas las que
+        // habia antes de salir.
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
         }
+        persistQueueStateBlocking()
     }
 
     override fun onDestroy() {
@@ -386,6 +497,7 @@ class MusicService : Service() {
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
         }
+        persistQueueStateBlocking()
         playbackEngine.releasePlayer()
         notifier.release()
     }

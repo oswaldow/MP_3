@@ -3,9 +3,13 @@ package com.learnlayout.mp_3
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.app.Dialog
+import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.ProgressBar
@@ -78,6 +82,28 @@ class QueueSheetController(
         null
 
     private var queueAdapter: QueueAdapter? =
+        null
+
+    private var btnQueueSearch: ImageButton? =
+        null
+
+    private var llQueueSearchBar: View? =
+        null
+
+    private var etQueueSearch: EditText? =
+        null
+
+    // Texto actual de busqueda. Vacio = sin filtro, se muestra la cola
+    // completa con drag & drop y swipe habilitados como siempre.
+    private var searchQuery: String =
+        ""
+
+    // Mapa "posicion mostrada en pantalla -> indice real en la cola" que
+    // solo existe mientras hay una busqueda activa. Se usa para traducir
+    // el click/long-press de un resultado filtrado al indice verdadero
+    // que conoce MusicService (playAt, etc.), ya que QueueAdapter siempre
+    // recibe una lista y no sabe si esta filtrada o no.
+    private var filteredIndices: List<Int>? =
         null
 
     private val artworkController =
@@ -236,6 +262,38 @@ class QueueSheetController(
             saveQueueAsPlaylist()
         }
 
+        btnQueueSearch?.setOnClickListener {
+            toggleSearchBar()
+        }
+
+        etQueueSearch?.addTextChangedListener(
+            object : TextWatcher {
+
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    count: Int,
+                    after: Int
+                ) {
+                }
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    before: Int,
+                    count: Int
+                ) {
+                    searchQuery = s?.toString() ?: ""
+                    refreshList()
+                }
+
+                override fun afterTextChanged(
+                    s: Editable?
+                ) {
+                }
+            }
+        )
+
         btnModeNormal?.setOnClickListener {
 
             getMusicService()
@@ -285,6 +343,12 @@ class QueueSheetController(
             btnModeNormal = null
             btnModeRepeat = null
             btnModeShuffle = null
+
+            btnQueueSearch = null
+            llQueueSearchBar = null
+            etQueueSearch = null
+            searchQuery = ""
+            filteredIndices = null
 
             touchHelper = null
             layoutManager = null
@@ -360,6 +424,21 @@ class QueueSheetController(
             view.findViewById(
                 R.id.btnModeShuffle
             )
+
+        btnQueueSearch =
+            view.findViewById(
+                R.id.btnQueueSearch
+            )
+
+        llQueueSearchBar =
+            view.findViewById(
+                R.id.llQueueSearchBar
+            )
+
+        etQueueSearch =
+            view.findViewById(
+                R.id.etQueueSearch
+            )
     }
 
     fun refreshList() {
@@ -368,8 +447,42 @@ class QueueSheetController(
             getMusicService()
                 ?: return
 
-        val songs =
+        val allQueueSongs =
             service.getSongList()
+
+        // Si hay texto de busqueda activo, se muestra solo lo que
+        // coincide por titulo o artista (mismo criterio que la busqueda
+        // de la biblioteca principal). filteredIndices guarda, para cada
+        // posicion mostrada en pantalla, cual es su indice real dentro
+        // de la cola completa -esto es lo que permite traducir un click
+        // o un long-press de un resultado filtrado al indice verdadero
+        // que conoce MusicService.
+        val isSearching =
+            searchQuery.isNotBlank()
+
+        val indices: List<Int> =
+            if (isSearching) {
+                allQueueSongs.indices.filter { i ->
+                    val song = allQueueSongs[i]
+                    song.title.contains(searchQuery, ignoreCase = true) ||
+                            song.artist.contains(searchQuery, ignoreCase = true)
+                }
+            } else {
+                allQueueSongs.indices.toList()
+            }
+
+        filteredIndices =
+            if (isSearching) indices else null
+
+        val songs =
+            indices.map { allQueueSongs[it] }
+
+        val displayCurrentIndex =
+            if (isSearching) {
+                indices.indexOf(service.getCurrentIndex())
+            } else {
+                service.getCurrentIndex()
+            }
 
         // Guardamos la posicion visual actual antes de reemplazar el adapter.
         // Al crear un QueueAdapter nuevo, RecyclerView tiende a volver a
@@ -397,16 +510,38 @@ class QueueSheetController(
                     songs.toMutableList(),
 
                 currentIndex =
-                    service.getCurrentIndex(),
+                    displayCurrentIndex,
+
+                searchMode =
+                    isSearching,
 
                 onItemClick = { position ->
 
-                    // No reconstruimos manualmente la lista aqui.
-                    // playAt() dispara onSongChanged(), que actualiza la cola.
-                    // refreshList() ya conserva la posicion visual actual,
-                    // evitando el salto al primer elemento.
-                    getMusicService()
-                        ?.playAt(position)
+                    // En modo busqueda, "position" es la posicion dentro
+                    // de la lista filtrada: hay que traducirla al indice
+                    // real de la cola antes de pedir la reproduccion.
+                    val realIndex =
+                        if (isSearching) {
+                            indices.getOrNull(position)
+                        } else {
+                            position
+                        }
+
+                    if (realIndex != null) {
+                        // No reconstruimos manualmente la lista aqui.
+                        // playAt() dispara onSongChanged(), que actualiza la cola.
+                        // refreshList() ya conserva la posicion visual actual,
+                        // evitando el salto al primer elemento.
+                        getMusicService()
+                            ?.playAt(realIndex)
+                    }
+
+                    // Elegir un resultado cierra la busqueda: ya cumplio su
+                    // proposito (encontrar y saltar a esa cancion) y el
+                    // usuario vuelve a ver la cola completa de inmediato.
+                    if (isSearching) {
+                        toggleSearchBar()
+                    }
 
                     refreshHeader()
                 },
@@ -415,6 +550,10 @@ class QueueSheetController(
                         from,
                         to ->
 
+                    // El arrastre esta deshabilitado durante la busqueda
+                    // (ver searchMode en QueueAdapter / touchHelper mas
+                    // abajo), asi que "from"/"to" siempre son indices
+                    // reales de la cola cuando esto se llega a invocar.
                     getMusicService()
                         ?.moveQueueItem(
                             from,
@@ -426,21 +565,32 @@ class QueueSheetController(
 
                 onRemove = { position ->
 
-                    val removed =
-                        getMusicService()
-                            ?.removeQueueItem(
-                                position
-                            ) == true
+                    val realIndex =
+                        if (isSearching) {
+                            indices.getOrNull(position)
+                        } else {
+                            position
+                        }
 
-                    if (removed) {
+                    if (realIndex != null) {
 
-                        Toast.makeText(
-                            activity,
-                            "Canción quitada de la cola",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        val removed =
+                            getMusicService()
+                                ?.removeQueueItem(
+                                    realIndex
+                                ) == true
 
-                        refreshHeader()
+                        if (removed) {
+
+                            Toast.makeText(
+                                activity,
+                                "Canción quitada de la cola",
+                                Toast.LENGTH_SHORT
+                            ).show()
+
+                            refreshList()
+                            refreshHeader()
+                        }
                     }
                 },
 
@@ -474,85 +624,98 @@ class QueueSheetController(
             }
         }
 
-        val newTouchHelper =
-            ItemTouchHelper(
-                QueueTouchHelperCallback(
-                    adapter = adapter,
+        // Arrastrar para reordenar y deslizar para quitar/reproducir a
+        // continuacion solo tienen sentido sobre la cola completa: en
+        // modo busqueda las posiciones mostradas no son continuas
+        // respecto a la cola real, asi que ni siquiera se conecta el
+        // ItemTouchHelper (ademas de que QueueAdapter ya oculta el
+        // handle de arrastre via searchMode).
+        if (!isSearching) {
 
-                    onSwipeToPlayNext = {
-                            position ->
+            val newTouchHelper =
+                ItemTouchHelper(
+                    QueueTouchHelperCallback(
+                        adapter = adapter,
 
-                        val current =
-                            service.getCurrentIndex()
+                        onSwipeToPlayNext = {
+                                position ->
 
-                        /*
-                         * La canción deslizada se mueve
-                         * inmediatamente después de la actual.
-                         */
-                        val target =
-                            if (
-                                position > current
-                            ) {
-                                current + 1
-                            } else {
-                                current
-                            }
+                            val current =
+                                service.getCurrentIndex()
 
-                        getMusicService()
-                            ?.moveQueueItem(
-                                position,
-                                target
-                            )
+                            /*
+                             * La canción deslizada se mueve
+                             * inmediatamente después de la actual.
+                             */
+                            val target =
+                                if (
+                                    position > current
+                                ) {
+                                    current + 1
+                                } else {
+                                    current
+                                }
 
-                        Toast.makeText(
-                            activity,
-                            "Sonará a continuación",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        refreshList()
-                    },
-
-                    onSwipeToRemove = {
-                            position ->
-
-                        val removed =
                             getMusicService()
-                                ?.removeQueueItem(
-                                    position
-                                ) == true
-
-                        if (removed) {
+                                ?.moveQueueItem(
+                                    position,
+                                    target
+                                )
 
                             Toast.makeText(
                                 activity,
-                                "Quitada de la cola",
+                                "Sonará a continuación",
                                 Toast.LENGTH_SHORT
                             ).show()
+
+                            refreshList()
+                        },
+
+                        onSwipeToRemove = {
+                                position ->
+
+                            val removed =
+                                getMusicService()
+                                    ?.removeQueueItem(
+                                        position
+                                    ) == true
+
+                            if (removed) {
+
+                                Toast.makeText(
+                                    activity,
+                                    "Quitada de la cola",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+
+                            refreshList()
                         }
-
-                        refreshList()
-                    }
+                    )
                 )
+
+            newTouchHelper.attachToRecyclerView(
+                recyclerView
             )
 
-        newTouchHelper.attachToRecyclerView(
-            recyclerView
-        )
+            touchHelper =
+                newTouchHelper
 
-        touchHelper =
-            newTouchHelper
+            adapter.dragStartListener = {
+                    viewHolder ->
 
-        adapter.dragStartListener = {
-                viewHolder ->
+                newTouchHelper.startDrag(
+                    viewHolder
+                )
+            }
 
-            newTouchHelper.startDrag(
-                viewHolder
-            )
+        } else {
+            touchHelper = null
         }
 
         updateQueueCount()
     }
+
 
     private fun updateQueueCount() {
 
@@ -753,6 +916,59 @@ class QueueSheetController(
             currentIndex,
             dp(10)
         )
+    }
+
+    /**
+     * Muestra u oculta la barra de busqueda de la cola. Al ocultarla se
+     * limpia el texto y el filtro, volviendo a mostrar la cola completa
+     * con drag & drop habilitado de nuevo.
+     */
+    private fun toggleSearchBar() {
+
+        val bar =
+            llQueueSearchBar
+                ?: return
+
+        val isVisible =
+            bar.visibility == View.VISIBLE
+
+        if (isVisible) {
+
+            bar.visibility =
+                View.GONE
+
+            etQueueSearch?.setText("")
+            searchQuery = ""
+
+            val imm =
+                activity.getSystemService(
+                    AppCompatActivity.INPUT_METHOD_SERVICE
+                ) as InputMethodManager
+
+            imm.hideSoftInputFromWindow(
+                etQueueSearch?.windowToken,
+                0
+            )
+
+            refreshList()
+
+        } else {
+
+            bar.visibility =
+                View.VISIBLE
+
+            etQueueSearch?.requestFocus()
+
+            val imm =
+                activity.getSystemService(
+                    AppCompatActivity.INPUT_METHOD_SERVICE
+                ) as InputMethodManager
+
+            imm.showSoftInput(
+                etQueueSearch,
+                InputMethodManager.SHOW_IMPLICIT
+            )
+        }
     }
 
     private fun saveQueueAsPlaylist() {

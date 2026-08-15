@@ -238,6 +238,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     }
                 ).show()
             },
+            onEditSongMetadata = { song ->
+                playlistDialogs.showEditSongMetadataDialog(song)
+            },
             onAlbumArtChanged = { bitmap ->
                 if (bitmap != null) {
                     lyricsPanelController.applyAlbumArtColor(bitmap)
@@ -751,7 +754,66 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
     }
 
+    /**
+     * Restaura la cola de reproduccion al reabrir la app.
+     *
+     * Se llama cuando el MusicService ya esta conectado pero no tiene
+     * ninguna cancion cargada: eso pasa cuando Android mato el proceso en
+     * segundo plano (por ejemplo, al deslizar la app fuera de la lista de
+     * apps recientes) y el servicio arranca de cero.
+     *
+     * Antes esto solo restauraba la ULTIMA cancion sonada como una cola de
+     * una sola cancion (PlaybackStateRepository), asi que al volver a abrir
+     * la app el resto de la cola desaparecia. Ahora se usa
+     * QueueStateRepository, que guarda la cola completa (orden, lista
+     * original para shuffle, indice actual y modo de reproduccion) cada vez
+     * que cambia, para reconstruirla tal cual estaba.
+     */
     private fun tryRestoreLastSong() {
+        val queueState = QueueStateRepository.get(this)
+
+        if (queueState != null) {
+            val songsById = allSongs.associateBy { it.id }
+
+            val restoredQueue = queueState.queueIds.mapNotNull { songsById[it] }
+
+            if (restoredQueue.isNotEmpty()) {
+                val restoredOriginal =
+                    queueState.originalQueueIds
+                        .mapNotNull { songsById[it] }
+                        .ifEmpty { restoredQueue }
+
+                val currentSong = songsById[queueState.currentSongId]
+
+                val startIndex =
+                    if (currentSong != null) {
+                        restoredQueue.indexOfFirst { it.id == currentSong.id }
+                            .let { if (it >= 0) it else 0 }
+                    } else {
+                        queueState.currentIndex.coerceIn(0, restoredQueue.lastIndex)
+                    }
+
+                val positionMs = PlaybackStateRepository.getLastPositionMs(this)
+
+                musicService?.restorePersistedQueue(
+                    songs = restoredQueue,
+                    originalSongs = restoredOriginal,
+                    startIndex = startIndex,
+                    mode = queueState.playbackMode,
+                    positionMs = positionMs
+                )
+
+                val restoredCurrent = restoredQueue[startIndex]
+                showMiniPlayer(restoredCurrent, false)
+                songAdapter.setCurrentPlayingId(restoredCurrent.id)
+                return
+            }
+        }
+
+        // Red de seguridad: no habia cola persistida (instalacion nueva,
+        // datos borrados, etc.) o ninguna de sus canciones sigue existiendo
+        // en la biblioteca. Se restaura al menos la ultima cancion
+        // individual, igual que se hacia antes.
         val lastSongId = PlaybackStateRepository.getLastSongId(this)
         if (lastSongId == -1L) return
 
