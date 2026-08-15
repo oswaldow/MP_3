@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -53,4 +54,7 @@ dependencies {
     implementation("androidx.media3:media3-common:1.4.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.palette:palette-ktx:1.0.0")
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 }

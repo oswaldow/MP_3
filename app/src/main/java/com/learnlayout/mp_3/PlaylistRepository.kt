@@ -1,57 +1,28 @@
 package com.learnlayout.mp_3
 
 import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.UUID
 
 object PlaylistRepository {
 
-    private const val PREFS_NAME = "playlists_prefs"
-    private const val KEY_PLAYLISTS = "playlists_json"
-
     const val FAVORITES_PLAYLIST_ID = "favorites_default"
     private const val FAVORITES_PLAYLIST_NAME = "Favoritos"
 
-    fun getAllPlaylists(context: Context): MutableList<Playlist> {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val json = prefs.getString(KEY_PLAYLISTS, null) ?: return mutableListOf()
-
-        val result = mutableListOf<Playlist>()
-        val array = JSONArray(json)
-
-        for (i in 0 until array.length()) {
-            val obj = array.getJSONObject(i)
-            val id = obj.getString("id")
-            val name = obj.getString("name")
-            val songIdsArray = obj.getJSONArray("songIds")
-            val songIds = mutableListOf<Long>()
-            for (j in 0 until songIdsArray.length()) {
-                songIds.add(songIdsArray.getLong(j))
-            }
-            val cover = obj.optString("cover", "")
-            result.add(Playlist(id, name, songIds, if (cover.isBlank()) null else cover))
-        }
-
-        return result
+    private fun dao(context: Context): PlaylistDao {
+        LegacyDataMigrator.migrateIfNeeded(context)
+        return AppDatabase.getInstance(context).playlistDao()
     }
 
-    private fun savePlaylists(context: Context, playlists: List<Playlist>) {
-        val array = JSONArray()
-
-        playlists.forEach { playlist ->
-            val obj = JSONObject()
-            obj.put("id", playlist.id)
-            obj.put("name", playlist.name)
-            val songIdsArray = JSONArray()
-            playlist.songIds.forEach { songIdsArray.put(it) }
-            obj.put("songIds", songIdsArray)
-            obj.put("cover", playlist.coverImageUri ?: "")
-            array.put(obj)
-        }
-
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_PLAYLISTS, array.toString()).apply()
+    fun getAllPlaylists(context: Context): MutableList<Playlist> {
+        val dao = dao(context)
+        return dao.getAllPlaylistEntities().map { entity ->
+            Playlist(
+                id = entity.id,
+                name = entity.name,
+                songIds = dao.getSongIdsForPlaylist(entity.id).toMutableList(),
+                coverImageUri = entity.coverImageUri
+            )
+        }.toMutableList()
     }
 
     /**
@@ -59,17 +30,21 @@ object PlaylistRepository {
      * al arrancar la pantalla principal para garantizar que siempre este disponible.
      */
     fun ensureFavoritesPlaylist(context: Context) {
-        val playlists = getAllPlaylists(context)
-        if (playlists.none { it.id == FAVORITES_PLAYLIST_ID }) {
-            val favorites = Playlist(FAVORITES_PLAYLIST_ID, FAVORITES_PLAYLIST_NAME, mutableListOf())
-            playlists.add(0, favorites)
-            savePlaylists(context, playlists)
+        val dao = dao(context)
+        if (dao.getPlaylistEntity(FAVORITES_PLAYLIST_ID) == null) {
+            dao.insertPlaylist(
+                PlaylistEntity(
+                    id = FAVORITES_PLAYLIST_ID,
+                    name = FAVORITES_PLAYLIST_NAME,
+                    coverImageUri = null,
+                    sortOrder = -1 // Favoritos siempre primero, igual que antes
+                )
+            )
         }
     }
 
     fun isFavorite(context: Context, songId: Long): Boolean {
-        val playlist = getAllPlaylists(context).find { it.id == FAVORITES_PLAYLIST_ID } ?: return false
-        return playlist.songIds.contains(songId)
+        return dao(context).getSongIdsForPlaylist(FAVORITES_PLAYLIST_ID).contains(songId)
     }
 
     /**
@@ -77,55 +52,43 @@ object PlaylistRepository {
      * como favorita, false si se quito.
      */
     fun toggleFavorite(context: Context, songId: Long): Boolean {
-        val playlists = getAllPlaylists(context)
-        var favorites = playlists.find { it.id == FAVORITES_PLAYLIST_ID }
-        if (favorites == null) {
-            favorites = Playlist(FAVORITES_PLAYLIST_ID, FAVORITES_PLAYLIST_NAME, mutableListOf())
-            playlists.add(0, favorites)
-        }
+        val dao = dao(context)
+        ensureFavoritesPlaylist(context)
 
-        val isNowFavorite: Boolean
-        if (favorites.songIds.contains(songId)) {
-            favorites.songIds.remove(songId)
-            isNowFavorite = false
+        val currentSongIds = dao.getSongIdsForPlaylist(FAVORITES_PLAYLIST_ID)
+        return if (currentSongIds.contains(songId)) {
+            dao.removeSongFromPlaylist(FAVORITES_PLAYLIST_ID, songId)
+            false
         } else {
-            favorites.songIds.add(songId)
-            isNowFavorite = true
+            val nextPosition = dao.getMaxPosition(FAVORITES_PLAYLIST_ID) + 1
+            dao.insertPlaylistSong(PlaylistSongCrossRef(FAVORITES_PLAYLIST_ID, songId, nextPosition))
+            true
         }
-
-        savePlaylists(context, playlists)
-        return isNowFavorite
     }
 
     fun createPlaylist(context: Context, name: String): Playlist {
-        val playlists = getAllPlaylists(context)
-        val newPlaylist = Playlist(UUID.randomUUID().toString(), name, mutableListOf())
-        playlists.add(newPlaylist)
-        savePlaylists(context, playlists)
-        return newPlaylist
+        val dao = dao(context)
+        val id = UUID.randomUUID().toString()
+        val nextOrder = dao.getMaxSortOrder() + 1
+        dao.insertPlaylist(PlaylistEntity(id = id, name = name, coverImageUri = null, sortOrder = nextOrder))
+        return Playlist(id, name, mutableListOf())
     }
 
     fun deletePlaylist(context: Context, playlistId: String) {
         if (playlistId == FAVORITES_PLAYLIST_ID) return
-        val playlists = getAllPlaylists(context)
-        playlists.removeAll { it.id == playlistId }
-        savePlaylists(context, playlists)
+        dao(context).deletePlaylist(playlistId)
     }
 
     fun addSongToPlaylist(context: Context, playlistId: String, songId: Long) {
-        val playlists = getAllPlaylists(context)
-        val playlist = playlists.find { it.id == playlistId } ?: return
-        if (!playlist.songIds.contains(songId)) {
-            playlist.songIds.add(songId)
-        }
-        savePlaylists(context, playlists)
+        val dao = dao(context)
+        val currentSongIds = dao.getSongIdsForPlaylist(playlistId)
+        if (currentSongIds.contains(songId)) return
+        val nextPosition = dao.getMaxPosition(playlistId) + 1
+        dao.insertPlaylistSong(PlaylistSongCrossRef(playlistId, songId, nextPosition))
     }
 
     fun removeSongFromPlaylist(context: Context, playlistId: String, songId: Long) {
-        val playlists = getAllPlaylists(context)
-        val playlist = playlists.find { it.id == playlistId } ?: return
-        playlist.songIds.remove(songId)
-        savePlaylists(context, playlists)
+        dao(context).removeSongFromPlaylist(playlistId, songId)
     }
 
     /**
@@ -134,26 +97,23 @@ object PlaylistRepository {
      * referencias colgando a un archivo que ya no existe.
      */
     fun removeSongFromAllPlaylists(context: Context, songId: Long) {
-        val playlists = getAllPlaylists(context)
-        var changed = false
-        playlists.forEach { playlist ->
-            if (playlist.songIds.remove(songId)) {
-                changed = true
-            }
-        }
-        if (changed) {
-            savePlaylists(context, playlists)
-        }
+        dao(context).removeSongFromAllPlaylists(songId)
     }
 
     fun getPlaylistById(context: Context, playlistId: String): Playlist? {
-        return getAllPlaylists(context).find { it.id == playlistId }
+        val dao = dao(context)
+        val entity = dao.getPlaylistEntity(playlistId) ?: return null
+        return Playlist(
+            id = entity.id,
+            name = entity.name,
+            songIds = dao.getSongIdsForPlaylist(entity.id).toMutableList(),
+            coverImageUri = entity.coverImageUri
+        )
     }
 
     fun setCoverImage(context: Context, playlistId: String, uri: String) {
-        val playlists = getAllPlaylists(context)
-        val playlist = playlists.find { it.id == playlistId } ?: return
-        playlist.coverImageUri = uri
-        savePlaylists(context, playlists)
+        val dao = dao(context)
+        val entity = dao.getPlaylistEntity(playlistId) ?: return
+        dao.updatePlaylist(entity.copy(coverImageUri = uri))
     }
 }
