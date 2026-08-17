@@ -215,42 +215,27 @@ class TopBarController(
         popupWindow.elevation = 16f
 
         val tvReverse: TextView = popupView.findViewById(R.id.tvSortReverse)
-        val tvTitle: TextView = popupView.findViewById(R.id.tvSortTitle)
-        val tvArtist: TextView = popupView.findViewById(R.id.tvSortArtist)
-        val tvDuration: TextView = popupView.findViewById(R.id.tvSortDuration)
-        val tvDateAdded: TextView = popupView.findViewById(R.id.tvSortDateAdded)
-        val tvMostPlayed: TextView = popupView.findViewById(R.id.tvSortMostPlayed)
-
         tvReverse.text = if (isSortReversed()) "Invertir orden ✓" else "Invertir orden"
-
         tvReverse.setOnClickListener {
             onSortReverseToggled()
             popupWindow.dismiss()
         }
 
-        tvTitle.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.TITLE)
-            popupWindow.dismiss()
-        }
-
-        tvArtist.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.ARTIST)
-            popupWindow.dismiss()
-        }
-
-        tvDuration.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.DURATION)
-            popupWindow.dismiss()
-        }
-
-        tvDateAdded.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.DATE_ADDED)
-            popupWindow.dismiss()
-        }
-
-        tvMostPlayed.setOnClickListener {
-            onSortSelected(SongListActivity.SortType.MOST_PLAYED)
-            popupWindow.dismiss()
+        // Las cinco opciones de orden comparten exactamente el mismo
+        // comportamiento (aplicar el tipo y cerrar el popup), asi que se
+        // recorren en lugar de repetir el mismo listener cinco veces.
+        val sortOptions = listOf(
+            R.id.tvSortTitle to SongListActivity.SortType.TITLE,
+            R.id.tvSortArtist to SongListActivity.SortType.ARTIST,
+            R.id.tvSortDuration to SongListActivity.SortType.DURATION,
+            R.id.tvSortDateAdded to SongListActivity.SortType.DATE_ADDED,
+            R.id.tvSortMostPlayed to SongListActivity.SortType.MOST_PLAYED
+        )
+        for ((viewId, sortType) in sortOptions) {
+            popupView.findViewById<TextView>(viewId).setOnClickListener {
+                onSortSelected(sortType)
+                popupWindow.dismiss()
+            }
         }
 
         popupWindow.showAsDropDown(btnSort, -180, 12)
@@ -437,17 +422,7 @@ class TopBarController(
         styleTabBackgrounds()
 
         tvEmptyState.visibility = View.GONE
-
-        if (isSearchVisible) {
-            isSearchVisible = false
-            llInlineSearch.visibility = View.GONE
-            tvAppName.visibility = View.VISIBLE
-            ivMascot.visibility = View.VISIBLE
-            btnSort.visibility = View.VISIBLE
-            btnSettings.visibility = View.VISIBLE
-            btnSearch.setImageResource(R.drawable.ic_search)
-            etSearch.setText("")
-        }
+        closeSearchIfVisible()
 
         btnSort.visibility = View.VISIBLE
         btnSearch.visibility = View.GONE
@@ -455,6 +430,22 @@ class TopBarController(
         rvPlaylists.visibility = View.VISIBLE
 
         onPlaylistsTabSelected()
+    }
+
+    // Cierra la barra de busqueda inline si estaba abierta, dejando los
+    // botones/textos del encabezado en su estado normal. Se usa al entrar
+    // a Playlists (desde Home o desde Canciones), donde la busqueda no
+    // aplica.
+    private fun closeSearchIfVisible() {
+        if (!isSearchVisible) return
+        isSearchVisible = false
+        llInlineSearch.visibility = View.GONE
+        tvAppName.visibility = View.VISIBLE
+        ivMascot.visibility = View.VISIBLE
+        btnSort.visibility = View.VISIBLE
+        btnSettings.visibility = View.VISIBLE
+        btnSearch.setImageResource(R.drawable.ic_search)
+        etSearch.setText("")
     }
 
     // ============================================================
@@ -518,17 +509,7 @@ class TopBarController(
         styleTabBackgrounds()
 
         tvEmptyState.visibility = View.GONE
-
-        if (isSearchVisible) {
-            isSearchVisible = false
-            llInlineSearch.visibility = View.GONE
-            tvAppName.visibility = View.VISIBLE
-            ivMascot.visibility = View.VISIBLE
-            btnSort.visibility = View.VISIBLE
-            btnSettings.visibility = View.VISIBLE
-            btnSearch.setImageResource(R.drawable.ic_search)
-            etSearch.setText("")
-        }
+        closeSearchIfVisible()
 
         btnSearch.visibility = View.GONE
 
@@ -587,10 +568,6 @@ class TopBarController(
             .setInterpolator(DecelerateInterpolator())
             .start()
     }
-
-    // ============================================================
-    // CONSTANTES
-    // ============================================================
 
     companion object {
         private const val SWIPE_MIN_DISTANCE = 120

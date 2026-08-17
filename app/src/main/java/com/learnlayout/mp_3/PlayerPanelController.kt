@@ -249,13 +249,20 @@ class PlayerPanelController(
         animationController.applyTopInset(systemBarsTop)
     }
 
-
-
     fun applyBottomInset(systemBarsBottom: Int) {
         animationController.applyBottomInset(systemBarsBottom)
     }
 
     // ---------- Now playing ----------
+
+    // Actualiza a la vez el icono play/pause del mini player y el del
+    // panel expandido: los tres callers (updateNowPlaying,
+    // updatePlaybackState, updateProgress) necesitaban exactamente la
+    // misma pareja de resourceId segun isPlaying.
+    private fun applyPlayPauseIcons(isPlaying: Boolean) {
+        btnMiniPlayPause.setImageResource(if (isPlaying) R.drawable.ic_pause_small else R.drawable.ic_play_small)
+        btnPanelPlayPause.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
+    }
 
     fun updateNowPlaying(song: Song, playing: Boolean) {
         playerPanel.visibility = View.VISIBLE
@@ -266,12 +273,7 @@ class PlayerPanelController(
         tvPanelArtist.text = song.artist
         sbPanelProgress.setWaveformSeed(song.id)
 
-        btnMiniPlayPause.setImageResource(
-            if (playing) R.drawable.ic_pause_small else R.drawable.ic_play_small
-        )
-        btnPanelPlayPause.setImageResource(
-            if (playing) R.drawable.ic_pause else R.drawable.ic_play_arrow
-        )
+        applyPlayPauseIcons(playing)
 
         updateFavoriteIcon(song.id)
         loadAlbumArt(song)
@@ -279,23 +281,16 @@ class PlayerPanelController(
     }
 
     fun updatePlaybackState(isPlaying: Boolean) {
-        btnMiniPlayPause.setImageResource(
-            if (isPlaying) R.drawable.ic_pause_small else R.drawable.ic_play_small
-        )
-        btnPanelPlayPause.setImageResource(
-            if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
-        )
+        applyPlayPauseIcons(isPlaying)
     }
 
     // Llamado desde el poller de progreso de la Activity (cada 500ms),
     // solo mientras isVisible es true.
     fun updateProgress(currentMs: Int, totalMs: Int) {
-        val service = getMusicService()
+        val isPlaying = getMusicService()?.isPlaying() == true
 
         circularMiniProgress.setProgress(currentMs, totalMs)
-        btnMiniPlayPause.setImageResource(
-            if (service?.isPlaying() == true) R.drawable.ic_pause_small else R.drawable.ic_play_small
-        )
+        applyPlayPauseIcons(isPlaying)
 
         if (!isUserSeekingPanel) {
             sbPanelProgress.max = if (totalMs > 0) totalMs else 0
@@ -303,9 +298,6 @@ class PlayerPanelController(
         }
         tvPanelCurrentTime.text = formatTime(currentMs.toLong())
         tvPanelTotalTime.text = formatTime(totalMs.toLong())
-        btnPanelPlayPause.setImageResource(
-            if (service?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play_arrow
-        )
         updateSleepTimerIcon()
     }
 
@@ -587,8 +579,4 @@ class PlayerPanelController(
         val seconds = totalSeconds % 60
         return String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
-
-
-
-
 }

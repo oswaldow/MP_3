@@ -32,61 +32,66 @@ import android.widget.Toast
 
 class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
-    private lateinit var rootCoordinator: CoordinatorLayout
-    private lateinit var rootLayout: ConstraintLayout
-    private lateinit var rvSongs: RecyclerView
-    private lateinit var rvPlaylists: RecyclerView
-    private lateinit var tvEmptyState: TextView
-    private lateinit var tvAppName: TextView
-    private lateinit var ivMascot: ImageView
-    private lateinit var ivMonito: ImageView
-    private lateinit var llInlineSearch: View
-    private lateinit var etSearch: EditText
-    private lateinit var btnSearch: ImageButton
-    private lateinit var btnSort: ImageButton
-    private lateinit var btnSettings: ImageButton
-    private lateinit var tabSongs: TextView
-    private lateinit var tabPlaylists: TextView
-    private lateinit var homeView: View
+    // Las vistas se resuelven con findViewById() al primer acceso (by lazy)
+    // en lugar de lateinit + asignacion manual en bindViews(): mismo
+    // resultado, menos codigo repetido. Como el primer acceso siempre
+    // ocurre despues de setContentView() (bindViews() se llama justo
+    // despues en onCreate), el comportamiento es identico al anterior.
+    private val rootCoordinator: CoordinatorLayout by lazy { findViewById(R.id.rootCoordinator) }
+    private val rootLayout: ConstraintLayout by lazy { findViewById(R.id.rootSongListLayout) }
+    private val rvSongs: RecyclerView by lazy { findViewById(R.id.rvSongs) }
+    private val rvPlaylists: RecyclerView by lazy { findViewById(R.id.rvPlaylists) }
+    private val tvEmptyState: TextView by lazy { findViewById(R.id.tvEmptyState) }
+    private val tvAppName: TextView by lazy { findViewById(R.id.tvAppName) }
+    private val ivMascot: ImageView by lazy { findViewById(R.id.ivMascot) }
+    private val ivMonito: ImageView by lazy { findViewById(R.id.ivMonito) }
+    private val llInlineSearch: View by lazy { findViewById(R.id.llInlineSearch) }
+    private val etSearch: EditText by lazy { findViewById(R.id.etSearch) }
+    private val btnSearch: ImageButton by lazy { findViewById(R.id.btnSearch) }
+    private val btnSort: ImageButton by lazy { findViewById(R.id.btnSort) }
+    private val btnSettings: ImageButton by lazy { findViewById(R.id.btnSettings) }
+    private val tabSongs: TextView by lazy { findViewById(R.id.tabSongs) }
+    private val tabPlaylists: TextView by lazy { findViewById(R.id.tabPlaylists) }
+    private val homeView: View by lazy { findViewById(R.id.homeView) }
     private lateinit var homeController: HomeController
     private lateinit var homeNavigationController: HomeNavigationController
 
-    private lateinit var playerPanel: FrameLayout
-    private lateinit var groupExpanded: View
-    private lateinit var groupMini: View
-    private lateinit var ivMiniAlbumArt: ImageView
-    private lateinit var tvMiniTitle: TextView
-    private lateinit var tvMiniArtist: TextView
-    private lateinit var btnMiniPlayPause: ImageButton
-    private lateinit var btnMiniPlayMode: ImageButton
-    private lateinit var circularMiniProgress: CircularProgressView
-    private lateinit var btnPanelBack: ImageButton
-    private lateinit var btnPanelSleepTimer: ImageButton
-    private lateinit var btnPanelLyricsSync: ImageButton
-    private lateinit var btnPanelQueue: ImageButton
-    private lateinit var ivPanelAlbumArt: ImageView
-    private lateinit var audioSpectrumView: AudioSpectrumView
-    private lateinit var viewPanelArtBanner: View
-    private lateinit var tvPanelSongTitle: TextView
-    private lateinit var tvPanelArtist: TextView
-    private lateinit var sbPanelProgress: WaveformSeekBar
-    private lateinit var tvPanelCurrentTime: TextView
-    private lateinit var tvPanelTotalTime: TextView
-    private lateinit var btnPanelPrevious: ImageButton
-    private lateinit var btnPanelPlayPause: ImageButton
-    private lateinit var btnPanelNext: ImageButton
-    private lateinit var llPanelControls: View
+    private val playerPanel: FrameLayout by lazy { findViewById(R.id.playerPanel) }
+    private val groupExpanded: View by lazy { findViewById(R.id.groupExpanded) }
+    private val groupMini: View by lazy { findViewById(R.id.groupMini) }
+    private val ivMiniAlbumArt: ImageView by lazy { findViewById(R.id.ivMiniAlbumArt) }
+    private val tvMiniTitle: TextView by lazy { findViewById(R.id.tvMiniTitle) }
+    private val tvMiniArtist: TextView by lazy { findViewById(R.id.tvMiniArtist) }
+    private val btnMiniPlayPause: ImageButton by lazy { findViewById(R.id.btnMiniPlayPause) }
+    private val btnMiniPlayMode: ImageButton by lazy { findViewById(R.id.btnMiniPlayMode) }
+    private val circularMiniProgress: CircularProgressView by lazy { findViewById(R.id.circularMiniProgress) }
+    private val btnPanelBack: ImageButton by lazy { findViewById(R.id.btnPanelBack) }
+    private val btnPanelSleepTimer: ImageButton by lazy { findViewById(R.id.btnPanelSleepTimer) }
+    private val btnPanelLyricsSync: ImageButton by lazy { findViewById(R.id.btnPanelLyricsSync) }
+    private val btnPanelQueue: ImageButton by lazy { findViewById(R.id.btnPanelQueue) }
+    private val ivPanelAlbumArt: ImageView by lazy { findViewById(R.id.ivPanelAlbumArt) }
+    private val audioSpectrumView: AudioSpectrumView by lazy { findViewById(R.id.audioSpectrumView) }
+    private val viewPanelArtBanner: View by lazy { findViewById(R.id.viewPanelArtBanner) }
+    private val tvPanelSongTitle: TextView by lazy { findViewById(R.id.tvPanelSongTitle) }
+    private val tvPanelArtist: TextView by lazy { findViewById(R.id.tvPanelArtist) }
+    private val sbPanelProgress: WaveformSeekBar by lazy { findViewById(R.id.sbPanelProgress) }
+    private val tvPanelCurrentTime: TextView by lazy { findViewById(R.id.tvPanelCurrentTime) }
+    private val tvPanelTotalTime: TextView by lazy { findViewById(R.id.tvPanelTotalTime) }
+    private val btnPanelPrevious: ImageButton by lazy { findViewById(R.id.btnPanelPrevious) }
+    private val btnPanelPlayPause: ImageButton by lazy { findViewById(R.id.btnPanelPlayPause) }
+    private val btnPanelNext: ImageButton by lazy { findViewById(R.id.btnPanelNext) }
+    private val llPanelControls: View by lazy { findViewById(R.id.llPanelControls) }
 
     // ---------- Panel de letra deslizable ----------
-    private lateinit var lyricsCoordinator: View
-    private lateinit var lyricsPanel: FrameLayout
-    private lateinit var rvLyricsPanel: RecyclerView
-    private lateinit var btnSaveLyrics: ImageButton
+    private val lyricsCoordinator: View by lazy { findViewById(R.id.lyricsCoordinator) }
+    private val lyricsPanel: FrameLayout by lazy { findViewById(R.id.lyricsPanel) }
+    private val rvLyricsPanel: RecyclerView by lazy { findViewById(R.id.rvLyricsPanel) }
+    private val btnSaveLyrics: ImageButton by lazy { findViewById(R.id.btnSaveLyrics) }
 
     private lateinit var songAdapter: SongAdapter
     private lateinit var playlistAdapter: PlaylistAdapter
 
-    private lateinit var btnPanelFavorite: ImageButton
+    private val btnPanelFavorite: ImageButton by lazy { findViewById(R.id.btnPanelFavorite) }
 
     private var allSongs: List<Song> = emptyList()
     private var currentSort: SortType = SortType.TITLE
@@ -469,55 +474,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     private fun bindViews() {
-        rootCoordinator = findViewById(R.id.rootCoordinator)
-        rootLayout = findViewById(R.id.rootSongListLayout)
-        rvSongs = findViewById(R.id.rvSongs)
-        rvPlaylists = findViewById(R.id.rvPlaylists)
-        tvEmptyState = findViewById(R.id.tvEmptyState)
-        tvAppName = findViewById(R.id.tvAppName)
-        ivMascot = findViewById(R.id.ivMascot)
-        ivMonito = findViewById(R.id.ivMonito)
-        llInlineSearch = findViewById(R.id.llInlineSearch)
-        etSearch = findViewById(R.id.etSearch)
-        btnSearch = findViewById(R.id.btnSearch)
-        btnSort = findViewById(R.id.btnSort)
-        btnSettings = findViewById(R.id.btnSettings)
-        tabSongs = findViewById(R.id.tabSongs)
-        tabPlaylists = findViewById(R.id.tabPlaylists)
-        homeView = findViewById(R.id.homeView)
-
-        playerPanel = findViewById(R.id.playerPanel)
-        groupExpanded = findViewById(R.id.groupExpanded)
-        groupMini = findViewById(R.id.groupMini)
-        ivMiniAlbumArt = findViewById(R.id.ivMiniAlbumArt)
-        tvMiniTitle = findViewById(R.id.tvMiniTitle)
-        tvMiniArtist = findViewById(R.id.tvMiniArtist)
-        btnMiniPlayPause = findViewById(R.id.btnMiniPlayPause)
-        btnMiniPlayMode = findViewById(R.id.btnMiniPlayMode)
-        circularMiniProgress = findViewById(R.id.circularMiniProgress)
-        btnPanelBack = findViewById(R.id.btnPanelBack)
-        btnPanelSleepTimer = findViewById(R.id.btnPanelSleepTimer)
-        btnPanelQueue = findViewById(R.id.btnPanelQueue)
-        btnPanelFavorite = findViewById(R.id.btnPanelFavorite)
-        btnPanelLyricsSync = findViewById(R.id.btnPanelLyricsSync)
-        ivPanelAlbumArt = findViewById(R.id.ivPanelAlbumArt)
-        audioSpectrumView = findViewById(R.id.audioSpectrumView)
-        viewPanelArtBanner = findViewById(R.id.viewPanelArtBanner)
-        tvPanelSongTitle = findViewById(R.id.tvPanelSongTitle)
-        tvPanelArtist = findViewById(R.id.tvPanelArtist)
-        sbPanelProgress = findViewById(R.id.sbPanelProgress)
-        tvPanelCurrentTime = findViewById(R.id.tvPanelCurrentTime)
-        tvPanelTotalTime = findViewById(R.id.tvPanelTotalTime)
-        btnPanelPrevious = findViewById(R.id.btnPanelPrevious)
-        btnPanelPlayPause = findViewById(R.id.btnPanelPlayPause)
-        btnPanelNext = findViewById(R.id.btnPanelNext)
-        llPanelControls = findViewById(R.id.llPanelControls)
-
-        lyricsCoordinator = findViewById(R.id.lyricsCoordinator)
-        lyricsPanel = findViewById(R.id.lyricsPanel)
-        rvLyricsPanel = findViewById(R.id.rvLyricsPanel)
-        btnSaveLyrics = findViewById(R.id.btnSaveLyrics)
-
+        // Las propiedades de vista (rootCoordinator, rvSongs, tvAppName,
+        // etc.) ya se resuelven solas por su delegado "by lazy" la primera
+        // vez que se usan; aqui solo queda configurar adapters y listeners.
         rvSongs.layoutManager = LinearLayoutManager(this)
         songAdapter = SongAdapter(
             emptyList(),

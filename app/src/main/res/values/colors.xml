@@ -7,14 +7,12 @@
 
     <color name="blue_primary">#9C27B0</color>
     <color name="blue_dark">#0A0A0A</color>
-    <color name="blue_light">#669C27B0</color>
 
     <color name="gradient_start">#000000</color>
     <color name="gradient_end">#1C1C1C</color>
 
     <!-- Paleta principal: negro, blanco y morado fuerte -->
     <color name="spotify_green">#9C27B0</color>
-    <color name="spotify_green_dark">#7B1FA2</color>
     <color name="spotify_black">#000000</color>
     <color name="spotify_elevated">#101010</color>
     <color name="spotify_card">#1C1C1C</color>
@@ -23,12 +21,9 @@
 
     <color name="background_dark">#000000</color>
     <color name="surface_dark">#101010</color>
-    <color name="surface_light">#F4F1FF</color>
 
     <color name="text_primary_light">#FFFFFF</color>
     <color name="text_secondary_light">#B3B3B3</color>
-    <color name="text_primary_dark">#1A1630</color>
-    <color name="text_secondary_dark">#6E6892</color>
 
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
