@@ -24,7 +24,9 @@ class PlayerPanelAnimationController(
     private val btnPanelBack: View,
     private val btnPanelSleepTimer: View,
     private val onExpanded: () -> Unit,
-    private val onCollapsed: () -> Unit
+    private val onCollapsed: () -> Unit,
+
+    private val getAccentColor: () -> Int
 ) {
     companion object {
         private const val TAG = "MP3_PANEL"
@@ -98,7 +100,7 @@ class PlayerPanelAnimationController(
         audioSpectrumView.stop()
 
         groupMini.setOnClickListener { onMiniClicked() }
-        btnPanelBack.setOnClickListener { collapse() }
+        ButtonTapFillAnimator.setOnClickListener(btnPanelBack, getAccentColor) { collapse() }
     }
 
     fun setDraggable(draggable: Boolean) {

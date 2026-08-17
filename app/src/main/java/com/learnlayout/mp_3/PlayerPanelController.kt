@@ -104,6 +104,7 @@ class PlayerPanelController(
             audioSpectrumView = audioSpectrumView,
             btnPanelBack = btnPanelBack,
             btnPanelSleepTimer = btnPanelSleepTimer,
+            getAccentColor = { currentAccentColor },
             onExpanded = onExpanded,
             onCollapsed = onCollapsed
         )
@@ -141,20 +142,25 @@ class PlayerPanelController(
     fun setup() {
         animationController.setup()
 
-        btnPanelSleepTimer.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnPanelSleepTimer, { currentAccentColor }) {
             showSleepTimerMenu()
         }
         updateSleepTimerIcon()
 
-        btnPanelQueue.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnPanelSleepTimer, { currentAccentColor }) {
+            showSleepTimerMenu()
+        }
+        updateSleepTimerIcon()
+
+        ButtonTapFillAnimator.setOnClickListener(btnPanelQueue, { currentAccentColor }) {
             onShowQueue()
         }
 
-        btnPanelFavorite.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnPanelFavorite, { currentAccentColor }) {
             toggleFavorite()
         }
 
-        btnPanelLyricsSync.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnPanelLyricsSync, { currentAccentColor }) {
             openLyricsSyncScreen()
         }
 
@@ -166,33 +172,38 @@ class PlayerPanelController(
             true
         }
 
+        // btnPanelPlayPause queda igual: ya esta permanentemente relleno
+        // con el acento (ver applyControlsAccent), asi que el flash no
+        // aportaria nada visualmente.
         btnPanelPlayPause.setOnClickListener {
             getMusicService()?.togglePlayPause()
         }
 
-        btnPanelPrevious.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnPanelPrevious, { currentAccentColor }) {
             getMusicService()?.playPrevious()
         }
 
-        btnPanelNext.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnPanelNext, { currentAccentColor }) {
             getMusicService()?.playNext()
         }
 
-        btnMiniPlayPause.setOnClickListener {
+        ButtonTapFillAnimator.setOnClickListener(btnMiniPlayPause, { currentAccentColor }) {
             getMusicService()?.togglePlayPause()
         }
 
-        btnMiniPlayMode.setOnClickListener {
-            val service = getMusicService() ?: return@setOnClickListener
-            val newMode = service.cyclePlaybackMode()
-            updateModeButtonIcon(newMode)
+        ButtonTapFillAnimator.setOnClickListener(btnMiniPlayMode, { currentAccentColor }) {
+            val service = getMusicService()
+            if (service != null) {
+                val newMode = service.cyclePlaybackMode()
+                updateModeButtonIcon(newMode)
 
-            val message = when (newMode) {
-                MusicService.PlaybackMode.NORMAL -> "Reproduccion normal"
-                MusicService.PlaybackMode.REPEAT_ONE -> "Repitiendo cancion actual"
-                MusicService.PlaybackMode.SHUFFLE -> "Reproduccion aleatoria"
+                val message = when (newMode) {
+                    MusicService.PlaybackMode.NORMAL -> "Reproduccion normal"
+                    MusicService.PlaybackMode.REPEAT_ONE -> "Repitiendo cancion actual"
+                    MusicService.PlaybackMode.SHUFFLE -> "Reproduccion aleatoria"
+                }
+                Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
             }
-            Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
         }
 
         sbPanelProgress.listener = object : WaveformSeekBar.OnWaveformSeekListener {

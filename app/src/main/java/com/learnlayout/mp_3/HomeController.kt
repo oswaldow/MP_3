@@ -17,25 +17,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
 
-/**
- * Home de la biblioteca musical.
- *
- * Presenta:
- * - Cancion actual / continuar escuchando
- * - Canciones recientes
- * - Canciones mas escuchadas
- * - Canciones agregadas recientemente
- * - Accesos rapidos
- *
- * El fondo del Home cambia dinamicamente usando el color
- * predominante de la caratula de la cancion actual (o, si no
- * hay nada sonando, de la cancion que se muestra en la tarjeta
- * principal). Sobre un degradado de base oscuro se dibujan
- * "destellos" animados (ver [HomeGlowSparkleDrawable]): chispas
- * de luz que aparecen, brillan y se apagan en distintos puntos,
- * como pequenos fuegos artificiales, con el color vivo de la
- * caratula actual.
- */
 class HomeController(
     private val context: Context,
     private val root: View,
@@ -171,13 +152,13 @@ class HomeController(
         val recentIds =
             PlayCountRepository.getRecentlyPlayedSongIds(
                 context,
-                12
+                20
             )
 
         val mostIds =
             PlayCountRepository.getMostPlayedSongIds(
                 context,
-                12
+                20
             )
 
         val favorites =
@@ -257,7 +238,7 @@ class HomeController(
 
         populateSongRow(
             recentContainer,
-            recentSongs.take(8)
+            recentSongs.take(20)
         )
 
         recentSection.visibility =
