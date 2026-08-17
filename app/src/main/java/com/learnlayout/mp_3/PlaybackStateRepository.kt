@@ -8,6 +8,7 @@ object PlaybackStateRepository {
     private const val KEY_LAST_SONG_ID = "last_song_id"
     private const val KEY_LAST_POSITION_MS = "last_position_ms"
     private const val KEY_SORT_TYPE = "sort_type"
+    private const val KEY_SORT_REVERSED = "sort_reversed"
 
     private const val NO_SONG_ID = -1L
 
@@ -60,4 +61,13 @@ object PlaybackStateRepository {
             SongListActivity.SortType.TITLE
         }
     }
+
+    fun saveSortReversed(context: Context, reversed: Boolean) {
+        prefs(context).edit()
+            .putBoolean(KEY_SORT_REVERSED, reversed)
+            .apply()
+    }
+
+    fun getSortReversed(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SORT_REVERSED, false)
 }

@@ -90,6 +90,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private var allSongs: List<Song> = emptyList()
     private var currentSort: SortType = SortType.TITLE
+    private var isReverseOrder: Boolean = false
     private var searchQuery: String = ""
 
     private val playlistDialogs by lazy {
@@ -289,6 +290,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 PlaybackStateRepository.saveSortType(this, type)
                 applyFilterAndSort()
             },
+            isSortReversed = { isReverseOrder },
+            onSortReverseToggled = {
+                isReverseOrder = !isReverseOrder
+                PlaybackStateRepository.saveSortReversed(this, isReverseOrder)
+                applyFilterAndSort()
+            },
             onSongsTabSelected = { applyFilterAndSort() },
             onPlaylistsTabSelected = { loadPlaylists() },
             onHomeRequested = { showHome() }
@@ -372,6 +379,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         setupBackPress()
 
         currentSort = PlaybackStateRepository.getSortType(this)
+        isReverseOrder = PlaybackStateRepository.getSortReversed(this)
 
         checkPermissionsAndLoad()
 
@@ -846,6 +854,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 val counts = PlayCountRepository.getAllPlayCounts(this)
                 list.sortedByDescending { counts[it.id] ?: 0 }
             }
+        }
+
+        if (isReverseOrder) {
+            list = list.reversed()
         }
 
         songAdapter.updateData(list)
