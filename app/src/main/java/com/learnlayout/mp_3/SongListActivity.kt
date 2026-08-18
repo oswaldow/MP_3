@@ -70,6 +70,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private val btnPanelLyricsSync: ImageButton by lazy { findViewById(R.id.btnPanelLyricsSync) }
     private val btnPanelQueue: ImageButton by lazy { findViewById(R.id.btnPanelQueue) }
     private val ivPanelAlbumArt: ImageView by lazy { findViewById(R.id.ivPanelAlbumArt) }
+
+    private val albumArtTransitionOverlay: FrameLayout by lazy { findViewById(R.id.flAlbumArtTransitionOverlay) }
     private val audioSpectrumView: AudioSpectrumView by lazy { findViewById(R.id.audioSpectrumView) }
     private val viewPanelArtBanner: View by lazy { findViewById(R.id.viewPanelArtBanner) }
     private val tvPanelSongTitle: TextView by lazy { findViewById(R.id.tvPanelSongTitle) }
@@ -198,6 +200,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnPanelFavorite = btnPanelFavorite,
             btnPanelLyricsSync = btnPanelLyricsSync,
             ivPanelAlbumArt = ivPanelAlbumArt,
+            albumArtTransitionOverlay = albumArtTransitionOverlay,
             audioSpectrumView = audioSpectrumView,
             viewPanelArtBanner = viewPanelArtBanner,
             tvPanelSongTitle = tvPanelSongTitle,

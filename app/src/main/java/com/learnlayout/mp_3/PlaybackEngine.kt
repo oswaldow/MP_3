@@ -18,15 +18,6 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import kotlin.math.cos
 import kotlin.math.sin
 
-/**
- * Motor de reproduccion: crea y administra los ExoPlayer (el principal y
- * los del crossfade), el fundido cruzado entre canciones y el reporte
- * periodico de progreso.
- *
- * No sabe nada de notificaciones, MediaSession ni de la cola de
- * canciones: todo eso se lo pide a [Callback]. Extraido de MusicService,
- * que se habia vuelto gigante por concentrar toda esta logica de audio.
- */
 class PlaybackEngine(
     private val context: Context,
     private val handler: Handler,
@@ -75,6 +66,17 @@ class PlaybackEngine(
     private var crossfadeTotalMs: Long = 0L
     private var crossfadeElapsedMs: Long = 0L
 
+    // --- Fundido en pausa / play y en cambio manual de cancion ---
+    // Independiente del crossfade automatico de arriba (que solo aplica
+    // cerca del final de una cancion). Estos fundidos son cortos y se
+    // usan para que pausar/reanudar y saltar de cancion a mano
+    // (siguiente/anterior/tocar una de la lista) no suenen como un corte
+    // seco.
+    private var pauseFadeRunnable: Runnable? = null
+    private var playFadeRunnable: Runnable? = null
+    private var manualFadeOutRunnable: Runnable? = null
+    private var manualFadeInRunnable: Runnable? = null
+
     private var preparedNextPlayer: ExoPlayer? = null
     private var preparedNextIndex: Int = -1
     private var prepareRequestedForIndex: Int = -1
@@ -87,6 +89,13 @@ class PlaybackEngine(
         // Cada cuanto se revisa el progreso y se recalcula el volumen del
         // crossfade. 100ms da un fundido suave sin gastar mucha CPU.
         private const val FADE_STEP_MS = 100L
+
+        // Paso mas fino para los fundidos cortos (pausa/play y cambio
+        // manual de cancion): con duraciones de ~180-220ms, un paso de
+        // 100ms daria solo 2 escalones y se notaria "a saltos".
+        private const val FAST_FADE_STEP_MS = 20L
+        private const val PAUSE_PLAY_FADE_MS = 220L
+        private const val MANUAL_CHANGE_FADE_MS = 200L
 
         private const val CROSSFADE_PREPARE_LEAD_MS = 4000L
 
@@ -132,9 +141,32 @@ class PlaybackEngine(
     fun playSongAt(index: Int) {
         val song = callback.songAt(index) ?: return
 
-        releasePlayer()
+        // Si ya habia algo sonando, no se libera de inmediato: se deja
+        // sonando un instante mas mientras se apaga con un fundido corto
+        // (manualFadeOutAndRelease), al mismo tiempo que la cancion nueva
+        // arranca en silencio y sube (manualFadeIn). Asi el cambio manual
+        // de cancion (siguiente/anterior/tocar una de la lista) tambien
+        // suena a fundido y no a corte seco, igual que el crossfade
+        // automatico de fin de cancion.
+        val outgoingPlayer = mediaPlayer
+        val hadOutgoing = outgoingPlayer != null && outgoingPlayer.isPlaying
 
-        val player = buildPlayer(startVolume = 1f)
+        progressRunnable?.let { handler.removeCallbacks(it) }
+        cancelCrossfadeIfAny()
+        cancelManualChangeFadesIfAny()
+        cancelPausePlayFadesIfAny()
+
+        if (hadOutgoing && outgoingPlayer != null) {
+            outgoingPlayer.removeListener(mainPlayerListener)
+        } else {
+            outgoingPlayer?.let {
+                it.removeListener(mainPlayerListener)
+                it.release()
+            }
+        }
+        mediaPlayer = null
+
+        val player = buildPlayer(startVolume = if (hadOutgoing) 0f else 1f)
         player.addListener(mainPlayerListener)
         attachAudioDiagnostics(player, "MAIN idx=$index")
         player.setMediaItem(MediaItem.fromUri(song.uri))
@@ -142,6 +174,11 @@ class PlaybackEngine(
         player.playWhenReady = true
         mediaPlayer = player
         loadedIndex = index
+
+        if (hadOutgoing && outgoingPlayer != null) {
+            manualFadeOutAndRelease(outgoingPlayer)
+            manualFadeIn(player)
+        }
 
         startProgressUpdates()
         callback.onSongStarted(song, index, SongStartReason.NEW)
@@ -176,7 +213,9 @@ class PlaybackEngine(
     fun play() {
         val player = mediaPlayer ?: return
         if (!player.isPlaying) {
+            cancelPausePlayFadesIfAny()
             player.playWhenReady = true
+            fadeInOnPlay(player)
         }
         nextMediaPlayer?.let { if (!it.isPlaying) it.playWhenReady = true }
         callback.onPlaybackStateChanged(true)
@@ -189,7 +228,8 @@ class PlaybackEngine(
         cancelCrossfadeIfAny()
         val player = mediaPlayer ?: return
         if (player.isPlaying) {
-            player.playWhenReady = false
+            cancelPausePlayFadesIfAny()
+            fadeOutThenPause(player)
         }
         callback.onPlaybackStateChanged(false)
     }
@@ -197,6 +237,8 @@ class PlaybackEngine(
     fun releasePlayer() {
         progressRunnable?.let { handler.removeCallbacks(it) }
         cancelCrossfadeIfAny()
+        cancelPausePlayFadesIfAny()
+        cancelManualChangeFadesIfAny()
         mediaPlayer?.let {
             it.removeListener(mainPlayerListener)
             it.release()
@@ -511,6 +553,114 @@ class PlaybackEngine(
         if (song != null) {
             callback.onSongStarted(song, finishedIndex, SongStartReason.CROSSFADE)
         }
+    }
+
+    // --- Fundido corto de pausa/play ---
+    // A diferencia del crossfade (que cruza DOS canciones), esto solo
+    // sube/baja el volumen de la cancion actual al pausar/reanudar
+    // manualmente, para evitar el "click" de volumen al 100% cortando
+    // seco.
+    private fun fadeOutThenPause(player: ExoPlayer) {
+        val startVolume = player.volume.takeIf { it > 0f } ?: 1f
+        var elapsed = 0L
+        val runnable = object : Runnable {
+            override fun run() {
+                if (mediaPlayer !== player) return
+                elapsed += FAST_FADE_STEP_MS
+                val fraction = (elapsed.toFloat() / PAUSE_PLAY_FADE_MS.toFloat()).coerceIn(0f, 1f)
+                runCatching { player.volume = startVolume * (1f - fraction) }
+                if (fraction < 1f) {
+                    handler.postDelayed(this, FAST_FADE_STEP_MS)
+                } else {
+                    player.playWhenReady = false
+                    runCatching { player.volume = 1f }
+                    if (pauseFadeRunnable === this) pauseFadeRunnable = null
+                }
+            }
+        }
+        pauseFadeRunnable = runnable
+        handler.post(runnable)
+    }
+
+    private fun fadeInOnPlay(player: ExoPlayer) {
+        runCatching { player.volume = 0f }
+        var elapsed = 0L
+        val runnable = object : Runnable {
+            override fun run() {
+                if (mediaPlayer !== player) return
+                elapsed += FAST_FADE_STEP_MS
+                val fraction = (elapsed.toFloat() / PAUSE_PLAY_FADE_MS.toFloat()).coerceIn(0f, 1f)
+                runCatching { player.volume = fraction }
+                if (fraction < 1f) {
+                    handler.postDelayed(this, FAST_FADE_STEP_MS)
+                } else if (playFadeRunnable === this) {
+                    playFadeRunnable = null
+                }
+            }
+        }
+        playFadeRunnable = runnable
+        handler.post(runnable)
+    }
+
+    private fun cancelPausePlayFadesIfAny() {
+        pauseFadeRunnable?.let { handler.removeCallbacks(it) }
+        playFadeRunnable?.let { handler.removeCallbacks(it) }
+        pauseFadeRunnable = null
+        playFadeRunnable = null
+    }
+
+    // --- Fundido corto de cambio manual de cancion ---
+    // Se usa desde playSongAt(): el player saliente se apaga y se libera,
+    // el entrante arranca en silencio y sube, ambos en paralelo durante
+    // MANUAL_CHANGE_FADE_MS. No es un crossfade "de verdad" (no hay
+    // pre-buffering con antelacion como en el automatico de fin de
+    // cancion), pero para archivos locales el prepare() es practicamente
+    // instantaneo, asi que el resultado se escucha igual de suave.
+    private fun manualFadeOutAndRelease(player: ExoPlayer) {
+        var elapsed = 0L
+        val runnable = object : Runnable {
+            override fun run() {
+                elapsed += FAST_FADE_STEP_MS
+                val fraction = (elapsed.toFloat() / MANUAL_CHANGE_FADE_MS.toFloat()).coerceIn(0f, 1f)
+                runCatching { player.volume = (1f - fraction) }
+                if (fraction < 1f) {
+                    handler.postDelayed(this, FAST_FADE_STEP_MS)
+                } else {
+                    runCatching { player.stop() }
+                    runCatching { player.release() }
+                    if (manualFadeOutRunnable === this) manualFadeOutRunnable = null
+                }
+            }
+        }
+        manualFadeOutRunnable = runnable
+        handler.post(runnable)
+    }
+
+    private fun manualFadeIn(player: ExoPlayer) {
+        runCatching { player.volume = 0f }
+        var elapsed = 0L
+        val runnable = object : Runnable {
+            override fun run() {
+                if (mediaPlayer !== player) return
+                elapsed += FAST_FADE_STEP_MS
+                val fraction = (elapsed.toFloat() / MANUAL_CHANGE_FADE_MS.toFloat()).coerceIn(0f, 1f)
+                runCatching { player.volume = fraction }
+                if (fraction < 1f) {
+                    handler.postDelayed(this, FAST_FADE_STEP_MS)
+                } else if (manualFadeInRunnable === this) {
+                    manualFadeInRunnable = null
+                }
+            }
+        }
+        manualFadeInRunnable = runnable
+        handler.post(runnable)
+    }
+
+    private fun cancelManualChangeFadesIfAny() {
+        manualFadeOutRunnable?.let { handler.removeCallbacks(it) }
+        manualFadeInRunnable?.let { handler.removeCallbacks(it) }
+        manualFadeOutRunnable = null
+        manualFadeInRunnable = null
     }
 
     // Aborta un crossfade en curso (si lo hay) y deja "mediaPlayer" como la

@@ -6,6 +6,7 @@ import android.animation.ValueAnimator
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
@@ -14,6 +15,13 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior
  * Encapsula exclusivamente el comportamiento/animaciones del BottomSheet del
  * reproductor. PlayerPanelController queda encargado del contenido y de los
  * controles, mientras esta clase maneja estados, insets y transiciones.
+ *
+ * Ademas de expandir/colapsar el panel, esta clase es responsable de la
+ * transicion "shared element" de la caratula (ver [SharedAlbumArtTransition]):
+ * mientras el panel se desliza entre mini y expandido -ya sea arrastrando
+ * con el dedo o con las animaciones programaticas de [smoothExpand]/
+ * [collapse]-, la caratula del mini reproductor "vuela" hasta la posicion y
+ * tamano de la caratula del panel expandido (y viceversa al colapsar).
  */
 class PlayerPanelAnimationController(
     private val activity: AppCompatActivity,
@@ -23,6 +31,9 @@ class PlayerPanelAnimationController(
     private val audioSpectrumView: AudioSpectrumView,
     private val btnPanelBack: View,
     private val btnPanelSleepTimer: View,
+    private val ivMiniAlbumArt: ImageView,
+    private val ivPanelAlbumArt: ImageView,
+    private val albumArtTransitionOverlay: FrameLayout,
     private val onExpanded: () -> Unit,
     private val onCollapsed: () -> Unit,
 
@@ -31,11 +42,22 @@ class PlayerPanelAnimationController(
     companion object {
         private const val TAG = "MP3_PANEL"
         private const val EXPAND_ANIM_DURATION_MS = 320L
+
+        // Mismos radios que PlayerPanelController.applyRoundedCorners() usa
+        // para ivMiniAlbumArt / ivPanelAlbumArt: deben coincidir para que la
+        // vista "volante" no pegue un salto de esquinas al empezar/terminar.
+        private const val MINI_ART_CORNER_RADIUS_DP = 6f
+        private const val PANEL_ART_CORNER_RADIUS_DP = 10f
     }
 
     private lateinit var behavior: BottomSheetBehavior<FrameLayout>
     private var coldExpandInProgress = false
     private var expandAnimator: ValueAnimator? = null
+
+    private val sharedAlbumArt = SharedAlbumArtTransition(albumArtTransitionOverlay)
+    private val density = activity.resources.displayMetrics.density
+    private val miniArtCornerRadiusPx = MINI_ART_CORNER_RADIUS_DP * density
+    private val panelArtCornerRadiusPx = PANEL_ART_CORNER_RADIUS_DP * density
 
     private val baseGroupMiniPaddingBottom = groupMini.paddingBottom
     private val baseGroupExpandedPaddingBottom = groupExpanded.paddingBottom
@@ -63,6 +85,7 @@ class PlayerPanelAnimationController(
                         groupExpanded.alpha = 1f
                         groupMini.visibility = View.INVISIBLE
                         groupExpanded.visibility = View.VISIBLE
+                        endSharedAlbumArt()
 
                         if (coldExpandInProgress) return
 
@@ -74,6 +97,7 @@ class PlayerPanelAnimationController(
                         groupExpanded.alpha = 0f
                         groupMini.visibility = View.VISIBLE
                         groupExpanded.visibility = View.INVISIBLE
+                        endSharedAlbumArt()
                         updatePeekHeight()
                         audioSpectrumView.stop()
                         onCollapsed()
@@ -89,6 +113,11 @@ class PlayerPanelAnimationController(
                 val progress = slideOffset.coerceIn(0f, 1f)
                 groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
                 groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                // Esto cubre tanto el arrastre manual del panel (el dedo del
+                // usuario) como el "settle" por defecto de BottomSheetBehavior
+                // al colapsar con el boton de atras: en ambos casos la
+                // caratula vuela en sincronia con el propio deslizamiento.
+                updateSharedAlbumArt(progress)
             }
         })
 
@@ -124,6 +153,10 @@ class PlayerPanelAnimationController(
         coldExpandInProgress = true
         behavior.isDraggable = false
 
+        // Apertura "en frio" (p.ej. la app recien arranca con una cancion en
+        // curso): no habia mini reproductor visible antes de esto, asi que
+        // no hay un origen valido para la caratula volante. Se deja sin
+        // shared element, solo el deslizamiento vertical de siempre.
         groupMini.alpha = 0f
         groupMini.visibility = View.INVISIBLE
         groupExpanded.alpha = 1f
@@ -175,6 +208,7 @@ class PlayerPanelAnimationController(
                 groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
                 groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
                 if (progress > 0.4f) groupExpanded.visibility = View.VISIBLE
+                updateSharedAlbumArt(progress)
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
@@ -186,6 +220,7 @@ class PlayerPanelAnimationController(
                     groupExpanded.visibility = View.VISIBLE
                     behavior.isDraggable = true
                     expandAnimator = null
+                    endSharedAlbumArt()
                 }
 
                 override fun onAnimationCancel(animation: Animator) {
@@ -193,6 +228,7 @@ class PlayerPanelAnimationController(
                     playerPanel.translationY = 0f
                     behavior.isDraggable = true
                     expandAnimator = null
+                    endSharedAlbumArt()
                 }
             })
             start()
@@ -284,6 +320,45 @@ class PlayerPanelAnimationController(
             })
             start()
         }
+    }
+
+    // --- Shared element de la caratula (mini <-> panel) ---
+    //
+    // progress = 0  -> caratula en la posicion/tamano/esquinas del mini
+    //                  reproductor.
+    // progress = 1  -> caratula en la posicion/tamano/esquinas del panel
+    //                  expandido.
+    // La direccion (expandiendo o colapsando) no importa: siempre se
+    // interpola de mini a panel con el mismo progress, asi que sirve tanto
+    // para smoothExpand() como para el onSlide() de un arrastre o de un
+    // collapse() por boton de atras.
+    private fun updateSharedAlbumArt(progress: Float) {
+        if (progress <= 0.001f || progress >= 0.999f) {
+            endSharedAlbumArt()
+            return
+        }
+
+        if (!sharedAlbumArt.isActive) {
+            val started = sharedAlbumArt.begin(ivMiniAlbumArt, miniArtCornerRadiusPx)
+            if (!started) return
+            ivMiniAlbumArt.alpha = 0f
+            ivPanelAlbumArt.alpha = 0f
+        }
+
+        sharedAlbumArt.update(
+            ivMiniAlbumArt,
+            ivPanelAlbumArt,
+            miniArtCornerRadiusPx,
+            panelArtCornerRadiusPx,
+            progress
+        )
+    }
+
+    private fun endSharedAlbumArt() {
+        if (!sharedAlbumArt.isActive) return
+        sharedAlbumArt.end()
+        ivMiniAlbumArt.alpha = 1f
+        ivPanelAlbumArt.alpha = 1f
     }
 
     private fun View.doOnLayoutCompat(action: () -> Unit) {

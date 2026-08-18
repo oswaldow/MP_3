@@ -35,6 +35,7 @@ class PlayerPanelController(
     private val btnPanelFavorite: ImageButton,
     private val btnPanelLyricsSync: ImageButton,
     private val ivPanelAlbumArt: ImageView,
+    private val albumArtTransitionOverlay: FrameLayout,
     private val audioSpectrumView: AudioSpectrumView,
     private val viewPanelArtBanner: View,
     private val tvPanelSongTitle: TextView,
@@ -104,6 +105,9 @@ class PlayerPanelController(
             audioSpectrumView = audioSpectrumView,
             btnPanelBack = btnPanelBack,
             btnPanelSleepTimer = btnPanelSleepTimer,
+            ivMiniAlbumArt = ivMiniAlbumArt,
+            ivPanelAlbumArt = ivPanelAlbumArt,
+            albumArtTransitionOverlay = albumArtTransitionOverlay,
             getAccentColor = { currentAccentColor },
             onExpanded = onExpanded,
             onCollapsed = onCollapsed
