@@ -2,11 +2,16 @@ package com.learnlayout.mp_3
 
 import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import android.speech.tts.Voice
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationManagerCompat
 import com.learnlayout.mp_3.databinding.ActivitySettingsBinding
 
 class SettingsActivity : AppCompatActivity() {
@@ -14,13 +19,43 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySettingsBinding
     private var isDownloadingLyrics = false
 
+    // TTS propio de esta pantalla, solo para listar/previsualizar voces.
+    // No tiene relacion con el TTS que usa WhatsAppNotificationReaderService
+    // para leer mensajes en tiempo real (ese vive en el servicio).
+    private var tts: TextToSpeech? = null
+    private var availableVoices: List<Voice> = emptyList()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivitySettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                availableVoices = tts?.voices
+                    ?.filter { it.locale?.language == "es" && !it.isNetworkConnectionRequired }
+                    ?.sortedBy { it.locale?.toString() ?: it.name }
+                    ?: emptyList()
+                updateVoiceSummary()
+            }
+        }
+
         loadCurrentSettings()
         setupListeners()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // El usuario puede volver de Ajustes del sistema tras dar (o quitar)
+        // el acceso a notificaciones, asi que refrescamos el estado aqui.
+        updateNotificationAccessStatus()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
     }
 
     private fun loadCurrentSettings() {
@@ -31,6 +66,10 @@ class SettingsActivity : AppCompatActivity() {
         binding.seekCrossfadeSeconds.progress = seconds - SettingsRepository.MIN_CROSSFADE_SECONDS
         binding.tvCrossfadeSeconds.text = "$seconds s"
         updateDurationGroupEnabled(enabled)
+
+        binding.switchWhatsappReading.isChecked = SettingsRepository.isWhatsAppReadingEnabled(this)
+        updateNotificationAccessStatus()
+        updateVoiceSummary()
     }
 
     private fun setupListeners() {
@@ -65,6 +104,28 @@ class SettingsActivity : AppCompatActivity() {
         binding.rowDownloadLyrics.setOnClickListener {
             downloadAllLyricsAndArt()
         }
+
+        binding.switchWhatsappReading.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked && !isNotificationAccessGranted()) {
+                binding.switchWhatsappReading.isChecked = false
+                Toast.makeText(
+                    this,
+                    "Primero activa el acceso a notificaciones para MP_3",
+                    Toast.LENGTH_LONG
+                ).show()
+                openNotificationAccessSettings()
+            } else {
+                SettingsRepository.setWhatsAppReadingEnabled(this, isChecked)
+            }
+        }
+
+        binding.rowNotificationAccess.setOnClickListener {
+            openNotificationAccessSettings()
+        }
+
+        binding.rowVoicePicker.setOnClickListener {
+            showVoicePickerDialog()
+        }
     }
 
     private fun updateDurationGroupEnabled(enabled: Boolean) {
@@ -80,6 +141,97 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
     }
+
+    // ==================== LECTURA DE MENSAJES DE WHATSAPP ====================
+    //
+    // El acceso a notificaciones no se puede pedir como un permiso runtime
+    // normal: Android obliga a que el usuario lo active a mano desde una
+    // pantalla especial del sistema (ACTION_NOTIFICATION_LISTENER_SETTINGS).
+    // Aqui solo detectamos si ya esta activo y mandamos para alla si hace falta.
+
+    private fun isNotificationAccessGranted(): Boolean {
+        val enabledListeners = NotificationManagerCompat.getEnabledListenerPackages(this)
+        return enabledListeners.contains(packageName)
+    }
+
+    private fun openNotificationAccessSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }.onFailure {
+            Toast.makeText(this, "No se pudo abrir el ajuste de notificaciones", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateNotificationAccessStatus() {
+        binding.tvNotificationAccessStatus.text = if (isNotificationAccessGranted()) {
+            "Activado"
+        } else {
+            "Toca para activarlo (necesario para leer WhatsApp)"
+        }
+    }
+
+    // ==================== FIN LECTURA DE MENSAJES DE WHATSAPP ====================
+
+    // ==================== VOZ DE LECTURA ====================
+    //
+    // Deja elegir con que voz del sistema se leen los mensajes (ver
+    // WhatsAppNotificationReaderService.applySavedVoice).
+
+    private fun updateVoiceSummary() {
+        val savedName = SettingsRepository.getTtsVoiceName(this)
+        val selectedIndex = availableVoices.indexOfFirst { it.name == savedName }
+
+        binding.tvVoiceSummary.text = if (selectedIndex >= 0) {
+            voiceDisplayName(availableVoices[selectedIndex], selectedIndex)
+        } else {
+            "Voz predeterminada del sistema"
+        }
+    }
+
+    private fun voiceDisplayName(voice: Voice, index: Int): String {
+        val localeLabel = voice.locale?.displayName ?: voice.name
+        return "Voz ${index + 1} ($localeLabel)"
+    }
+
+    private fun showVoicePickerDialog() {
+        if (availableVoices.isEmpty()) {
+            Toast.makeText(this, "No se encontraron voces en espanol instaladas", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val savedName = SettingsRepository.getTtsVoiceName(this)
+        val defaultLabel = "Predeterminada del sistema"
+        val voiceLabels = availableVoices.mapIndexed { index, voice -> voiceDisplayName(voice, index) }
+        val allLabels = (listOf(defaultLabel) + voiceLabels).toTypedArray()
+
+        val savedIndex = availableVoices.indexOfFirst { it.name == savedName }
+        val currentChecked = if (savedIndex >= 0) savedIndex + 1 else 0
+
+        AlertDialog.Builder(this, R.style.RoundedAlertDialog)
+            .setTitle("Voz de lectura")
+            .setSingleChoiceItems(allLabels, currentChecked) { dialog, which ->
+                if (which == 0) {
+                    SettingsRepository.setTtsVoiceName(this, null)
+                    previewVoice(null)
+                } else {
+                    val voice = availableVoices[which - 1]
+                    SettingsRepository.setTtsVoiceName(this, voice.name)
+                    previewVoice(voice)
+                }
+                updateVoiceSummary()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun previewVoice(voice: Voice?) {
+        val engine = tts ?: return
+        engine.voice = voice ?: engine.defaultVoice
+        engine.speak("Asi sueno yo", TextToSpeech.QUEUE_FLUSH, null, "voice_preview")
+    }
+
+    // ==================== FIN VOZ DE LECTURA ====================
 
     // ==================== DESCARGA MASIVA DE LETRAS Y CARATULAS ====================
     //

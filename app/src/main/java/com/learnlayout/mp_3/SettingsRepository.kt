@@ -2,15 +2,17 @@ package com.learnlayout.mp_3
 
 import android.content.Context
 
-// Guarda las preferencias de configuracion de la app (por ahora, todo lo
-// relacionado a crossfade). Se usa tanto desde SettingsActivity (para
-// escribir) como desde MusicService (para leer, en cada actualizacion de
-// progreso).
+// Guarda las preferencias de configuracion de la app (crossfade, lectura de
+// WhatsApp, voz de lectura). Se usa tanto desde SettingsActivity (para
+// escribir) como desde MusicService/WhatsAppNotificationReaderService (para
+// leer).
 object SettingsRepository {
 
     private const val PREFS_NAME = "mp3_settings"
     private const val KEY_CROSSFADE_ENABLED = "crossfade_enabled"
     private const val KEY_CROSSFADE_SECONDS = "crossfade_seconds"
+    private const val KEY_WHATSAPP_READING_ENABLED = "whatsapp_reading_enabled"
+    private const val KEY_TTS_VOICE_NAME = "tts_voice_name"
 
     const val MIN_CROSSFADE_SECONDS = 5
     const val MAX_CROSSFADE_SECONDS = 20
@@ -35,5 +37,23 @@ object SettingsRepository {
     fun setCrossfadeSeconds(context: Context, seconds: Int) {
         val clamped = seconds.coerceIn(MIN_CROSSFADE_SECONDS, MAX_CROSSFADE_SECONDS)
         prefs(context).edit().putInt(KEY_CROSSFADE_SECONDS, clamped).apply()
+    }
+
+    fun isWhatsAppReadingEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_WHATSAPP_READING_ENABLED, false)
+    }
+
+    fun setWhatsAppReadingEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_WHATSAPP_READING_ENABLED, enabled).apply()
+    }
+
+    /** Nombre interno (TextToSpeech.Voice.name) de la voz elegida para leer
+     * mensajes, o null si se debe usar la voz predeterminada del sistema. */
+    fun getTtsVoiceName(context: Context): String? {
+        return prefs(context).getString(KEY_TTS_VOICE_NAME, null)
+    }
+
+    fun setTtsVoiceName(context: Context, voiceName: String?) {
+        prefs(context).edit().putString(KEY_TTS_VOICE_NAME, voiceName).apply()
     }
 }
