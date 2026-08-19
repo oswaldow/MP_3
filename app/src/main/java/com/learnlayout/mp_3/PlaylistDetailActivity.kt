@@ -22,6 +22,19 @@ class PlaylistDetailActivity : AppCompatActivity() {
     private var playlistSongs: MutableList<Song> = mutableListOf()
     private lateinit var songAdapter: SongAdapter
 
+    // ---------- Fondo dinamico (Material You + destellos, igual al Home) ----------
+    // Preferimos la cancion que esta sonando ahora mismo (mismo criterio
+    // vivo que el resto de la app); si no hay nada sonando, usamos la
+    // primera cancion de esta playlist como referencia visual.
+    private val ambientBackground: AmbientBackgroundController by lazy {
+        AmbientBackgroundController(this, binding.root)
+    }
+
+    private fun updateAmbientBackground() {
+        val song = musicService?.getCurrentSong() ?: playlistSongs.firstOrNull()
+        ambientBackground.updateForSong(song)
+    }
+
     // Conexion directa al MusicService: reutilizamos el mismo reproductor
     // (el de SongListActivity, con letras/waveform) en lugar de abrir una
     // pantalla de player aparte (MainActivity, el reproductor viejo).
@@ -37,6 +50,8 @@ class PlaylistDetailActivity : AppCompatActivity() {
             val binder = service as MusicService.MusicBinder
             musicService = binder.getService()
             isBound = true
+
+            updateAmbientBackground()
 
             val pending = pendingPlaylist
             if (pending != null) {
@@ -128,6 +143,8 @@ class PlaylistDetailActivity : AppCompatActivity() {
         val hasSongs = playlistSongs.isNotEmpty()
         binding.tvEmptyPlaylist.visibility = if (hasSongs) View.GONE else View.VISIBLE
         binding.rvPlaylistSongs.visibility = if (hasSongs) View.VISIBLE else View.GONE
+
+        updateAmbientBackground()
     }
 
     private fun confirmRemoveSong(position: Int) {

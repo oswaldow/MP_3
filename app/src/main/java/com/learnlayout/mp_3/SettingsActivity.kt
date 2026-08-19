@@ -1,7 +1,11 @@
 package com.learnlayout.mp_3
 
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
@@ -25,10 +29,38 @@ class SettingsActivity : AppCompatActivity() {
     private var tts: TextToSpeech? = null
     private var availableVoices: List<Voice> = emptyList()
 
+    // ---------- Fondo dinamico (Material You + destellos, igual al Home) ----------
+    // Ajustes no tiene una cancion propia en pantalla, asi que nos
+    // conectamos al MusicService solo para saber que esta sonando ahora
+    // mismo y pintar el fondo con ese color. Si no hay nada sonando, se
+    // queda con el degradado neutro (sin destellos), igual que el Home.
+    private val ambientBackground: AmbientBackgroundController by lazy {
+        AmbientBackgroundController(this, binding.root)
+    }
+
+    private var musicService: MusicService? = null
+    private var isBound = false
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            musicService = (binder as MusicService.MusicBinder).getService()
+            isBound = true
+            ambientBackground.updateForSong(musicService?.getCurrentSong())
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            musicService = null
+            isBound = false
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivitySettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        ambientBackground.updateForSong(null)
+        bindService(Intent(this, MusicService::class.java), connection, Context.BIND_AUTO_CREATE)
 
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -56,6 +88,10 @@ class SettingsActivity : AppCompatActivity() {
         tts?.stop()
         tts?.shutdown()
         tts = null
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
     }
 
     private fun loadCurrentSettings() {

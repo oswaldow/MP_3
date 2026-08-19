@@ -1,12 +1,7 @@
 package com.learnlayout.mp_3
 
-import android.animation.ArgbEvaluator
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.LayerDrawable
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.ImageButton
@@ -14,8 +9,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.ColorUtils
-import androidx.palette.graphics.Palette
 
 class HomeController(
     private val context: Context,
@@ -91,53 +84,27 @@ class HomeController(
 
 
     // ============================================================
-    // FONDO DINAMICO
+    // FONDO DINAMICO (Material You con luces de fondo)
     // ============================================================
 
     /**
-     * ID de la cancion que actualmente controla el fondo.
-     */
-    private var backgroundSongId: Long? = null
-
-    /**
-     * Capa de base: degradado vertical oscuro (arriba -> abajo).
-     * Sirve de piso para que se lea bien el texto y para que los
-     * destellos tengan contra que resaltar.
-     */
-    private val baseGradientDrawable =
-        GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(
-                defaultBackgroundTop(),
-                defaultBackgroundMiddle(),
-                defaultBackgroundBottom()
-            )
-        )
-
-    /**
-     * Capa de destellos animados (chispas de luz tipo "fuegos
-     * artificiales"), con el color vivo de la caratula actual.
-     * Ver [HomeGlowSparkleDrawable].
-     */
-    private val glowSparkleDrawable =
-        HomeGlowSparkleDrawable(
-            density = context.resources.displayMetrics.density
-        )
-
-    /**
-     * Union de ambas capas. Esto es lo que se aplica como fondo
-     * de toda la pantalla (fullScreenRoot).
+     * Controlador COMPARTIDO del fondo animado (degradado + destellos
+     * de luz), usado tambien por el resto de las pantallas de la app
+     * (ver [AmbientBackgroundController]). Antes esta logica vivia
+     * duplicada aqui mismo; ahora el Home es simplemente el primer
+     * consumidor de un controlador reutilizable.
      *
-     * El orden importa: la primera capa queda ABAJO, la ultima
-     * queda ARRIBA. Por eso los destellos van despues de la base.
+     * "root" es homeView, que vive dentro de rootSongListLayout.
+     * Por eso usamos su padre: asi el fondo cubre TODA la pantalla
+     * de la actividad (Home, Canciones y Playlists comparten el
+     * mismo contenedor), no solo la porcion del Home.
      */
-    private val homeBackgroundDrawable =
-        LayerDrawable(
-            arrayOf(
-                baseGradientDrawable,
-                glowSparkleDrawable
-            )
+    private val ambientBackground: AmbientBackgroundController by lazy {
+        AmbientBackgroundController(
+            context = context,
+            targetView = (root.parent as? View) ?: root
         )
+    }
 
 
     // ============================================================
@@ -294,7 +261,7 @@ class HomeController(
         // cuando no hay reproduccion activa, asi que el fondo dinamico
         // nunca reaccionaba a las canciones mostradas en el Home, solo
         // a la que sonaba.
-        applyDynamicBackground(hero)
+        ambientBackground.updateForSong(hero)
     }
 
 
@@ -538,402 +505,6 @@ class HomeController(
             ImageView.ScaleType.CENTER_CROP
 
         imageView.setImageBitmap(bitmap)
-    }
-
-
-    // ============================================================
-    // FONDO DINAMICO
-    // ============================================================
-
-    private fun applyDynamicBackground(
-        song: Song?
-    ) {
-
-        // --------------------------------------------------------
-        // SIN CANCION ACTUAL
-        // --------------------------------------------------------
-
-        if (song == null) {
-
-            backgroundSongId = null
-
-            glowSparkleDrawable.setActive(false)
-
-            animateBackgroundTo(
-                defaultBackgroundTop(),
-                defaultBackgroundMiddle(),
-                defaultBackgroundBottom()
-            )
-
-            return
-        }
-
-
-        // --------------------------------------------------------
-        // NO REPETIR EL MISMO CAMBIO
-        // --------------------------------------------------------
-
-        if (backgroundSongId == song.id) {
-            return
-        }
-
-        backgroundSongId =
-            song.id
-
-
-        // --------------------------------------------------------
-        // BUSCAR CARATULA EN CACHE
-        // --------------------------------------------------------
-
-        val cached =
-            AlbumArtRepository.getCachedCover(song)
-
-
-        if (cached != null) {
-
-            updateBackgroundFromBitmap(
-                song.id,
-                cached
-            )
-
-            return
-        }
-
-
-        // --------------------------------------------------------
-        // CARGAR CARATULA
-        // --------------------------------------------------------
-
-        AlbumArtRepository.loadCover(
-            context,
-            song,
-            object : AlbumArtRepository.Callback {
-
-                override fun onCoverReady(
-                    bitmap: Bitmap
-                ) {
-
-                    /*
-                     * Si el usuario ya cambio de cancion,
-                     * ignoramos esta caratula.
-                     */
-                    if (backgroundSongId != song.id) {
-                        return
-                    }
-
-                    updateBackgroundFromBitmap(
-                        song.id,
-                        bitmap
-                    )
-                }
-            }
-        )
-    }
-
-
-    // ============================================================
-    // EXTRAER COLOR DE LA CARATULA
-    // ============================================================
-
-    private fun updateBackgroundFromBitmap(
-        songId: Long,
-        bitmap: Bitmap
-    ) {
-
-        if (backgroundSongId != songId) {
-            return
-        }
-
-
-        Palette
-            .from(bitmap)
-            .clearFilters()
-            .generate { palette ->
-
-                /*
-                 * Palette puede ser nullable.
-                 * Por eso usamos ?. en todas las propiedades.
-                 *
-                 * Para los destellos preferimos los swatches MAS
-                 * VIVOS (vibrant/lightVibrant) en vez de los oscuros,
-                 * porque es justo esa saturacion la que hace que se
-                 * note el chispazo, igual que en el reproductor del
-                 * sistema. Si la caratula no tiene un tono vivo (por
-                 * ejemplo, una portada en blanco y negro), caemos en
-                 * los swatches oscuros/dominantes.
-                 */
-
-                val swatch =
-                    palette?.vibrantSwatch
-                        ?: palette?.lightVibrantSwatch
-                        ?: palette?.darkVibrantSwatch
-                        ?: palette?.mutedSwatch
-                        ?: palette?.dominantSwatch
-
-
-                // ------------------------------------------------
-                // NO HAY COLOR
-                // ------------------------------------------------
-
-                if (swatch == null) {
-
-                    glowSparkleDrawable.setActive(false)
-
-                    animateBackgroundTo(
-                        defaultBackgroundTop(),
-                        defaultBackgroundMiddle(),
-                        defaultBackgroundBottom()
-                    )
-
-                    return@generate
-                }
-
-
-                // ------------------------------------------------
-                // COLOR ENCONTRADO
-                // ------------------------------------------------
-
-                val originalColor =
-                    swatch.rgb
-
-
-                /*
-                 * Parte superior de la base (oscura, con matiz).
-                 */
-                val topColor =
-                    darkenForBackground(
-                        originalColor,
-                        0.42f
-                    )
-
-
-                /*
-                 * Parte central de la base.
-                 */
-                val middleColor =
-                    darkenForBackground(
-                        originalColor,
-                        0.20f
-                    )
-
-
-                /*
-                 * Parte inferior de la base: casi negro.
-                 */
-                val bottomColor =
-                    ColorUtils.blendARGB(
-                        originalColor,
-                        Color.BLACK,
-                        0.90f
-                    )
-
-
-                /*
-                 * Destellos: usan el color original de la caratula.
-                 * HomeGlowSparkleDrawable se encarga de convertirlo
-                 * en algo vivo/luminoso para cada chispa.
-                 */
-                glowSparkleDrawable.setAccentColor(originalColor)
-                glowSparkleDrawable.setActive(true)
-
-
-                animateBackgroundTo(
-                    topColor,
-                    middleColor,
-                    bottomColor
-                )
-            }
-    }
-
-
-    // ============================================================
-    // ANIMAR DEGRADADO DE BASE
-    // ============================================================
-
-    private fun animateBackgroundTo(
-        targetTop: Int,
-        targetMiddle: Int,
-        targetBottom: Int
-    ) {
-
-        /*
-         * root es homeView.
-         *
-         * homeView está dentro de rootSongListLayout.
-         *
-         * Por eso obtenemos su padre para colocar el fondo
-         * en TODA la pantalla de la actividad.
-         */
-        val fullScreenRoot =
-            root.parent as? View
-                ?: root
-
-
-        // --------------------------------------------------------
-        // COLORES ACTUALES
-        // --------------------------------------------------------
-
-        val currentColors =
-            baseGradientDrawable.colors
-                ?: intArrayOf(
-                    defaultBackgroundTop(),
-                    defaultBackgroundMiddle(),
-                    defaultBackgroundBottom()
-                )
-
-
-        val startTop =
-            currentColors.getOrNull(0)
-                ?: defaultBackgroundTop()
-
-        val startMiddle =
-            currentColors.getOrNull(1)
-                ?: defaultBackgroundMiddle()
-
-        val startBottom =
-            currentColors.getOrNull(2)
-                ?: defaultBackgroundBottom()
-
-
-        // --------------------------------------------------------
-        // APLICAR AL CONTENEDOR COMPLETO
-        // --------------------------------------------------------
-
-        if (
-            fullScreenRoot.background !==
-            homeBackgroundDrawable
-        ) {
-
-            fullScreenRoot.background =
-                homeBackgroundDrawable
-        }
-
-
-        // --------------------------------------------------------
-        // ANIMACION
-        // --------------------------------------------------------
-
-        ValueAnimator
-            .ofFloat(0f, 1f)
-            .apply {
-
-                duration = 600L
-
-                addUpdateListener { animator ->
-
-                    val fraction =
-                        animator.animatedFraction
-
-
-                    val top =
-                        ArgbEvaluator().evaluate(
-                            fraction,
-                            startTop,
-                            targetTop
-                        ) as Int
-
-
-                    val middle =
-                        ArgbEvaluator().evaluate(
-                            fraction,
-                            startMiddle,
-                            targetMiddle
-                        ) as Int
-
-
-                    val bottom =
-                        ArgbEvaluator().evaluate(
-                            fraction,
-                            startBottom,
-                            targetBottom
-                        ) as Int
-
-
-                    baseGradientDrawable.colors =
-                        intArrayOf(
-                            top,
-                            middle,
-                            bottom
-                        )
-                }
-
-                start()
-            }
-    }
-
-
-    // ============================================================
-    // OSCURECER COLOR
-    // ============================================================
-
-    private fun darkenForBackground(
-        color: Int,
-        factor: Float
-    ): Int {
-
-        val hsl =
-            FloatArray(3)
-
-
-        ColorUtils.colorToHSL(
-            color,
-            hsl
-        )
-
-
-        /*
-         * Reducimos ligeramente la saturacion.
-         */
-        hsl[1] =
-            (hsl[1] * 0.95f)
-                .coerceIn(0f, 1f)
-
-
-        /*
-         * Reducimos la luminosidad.
-         *
-         * El limite evita que el fondo sea demasiado brillante.
-         */
-        hsl[2] =
-            (hsl[2] * factor)
-                .coerceIn(0f, 0.32f)
-
-
-        return ColorUtils.HSLToColor(hsl)
-    }
-
-
-    // ============================================================
-    // COLORES POR DEFECTO
-    // ============================================================
-
-    private fun defaultBackgroundTop(): Int {
-
-        return Color.rgb(
-            20,
-            24,
-            32
-        )
-    }
-
-
-    private fun defaultBackgroundMiddle(): Int {
-
-        return Color.rgb(
-            14,
-            16,
-            22
-        )
-    }
-
-
-    private fun defaultBackgroundBottom(): Int {
-
-        return Color.rgb(
-            8,
-            8,
-            10
-        )
     }
 
 

@@ -66,14 +66,24 @@ class LyricsActivity : AppCompatActivity() {
     private var song: Song? = null
     private var lyricsAdapter: LyricsLineAdapter? = null
 
+    // ---------- Fondo dinamico de toda la pantalla (Material You + destellos) ----------
+    // Antes esta pantalla pintaba su fondo con un solo color plano
+    // (PlayerPaletteTheme.applyFromBitmap/applyFallback sobre rootLayout).
+    // Ahora usa el mismo AmbientBackgroundController que el Home: degradado
+    // de 3 tonos + destellos animados con el color vivo de la caratula. El
+    // acento de los botones (usar letra / guardar sincronizacion) sigue
+    // usando PlayerPaletteTheme por separado, eso no cambia.
+    private val ambientBackground: AmbientBackgroundController by lazy {
+        AmbientBackgroundController(this, rootLayout)
+    }
+
     // ---------- Tema dinamico (Material You / PlayerPaletteTheme) ----------
-    // Mismo criterio que EqualizerActivity y el panel del reproductor: el
-    // fondo de toda la pantalla se oscurece segun la caratula de la
-    // cancion, y los botones que antes eran spotify_green fijo (usar letra
-    // y sincronizar / guardar sincronizacion) pasan a seguir ese acento.
-    // La linea activa de la letra (item_lyrics_line) NO se toca aqui: su
-    // color ya se ajusto en el punto 1 para mantener contraste con fondos
-    // claros, y cambiarlo a un acento dinamico podria romper eso de nuevo.
+    // Mismo criterio que el resto de la app: los botones que antes eran
+    // spotify_green fijo (usar letra y sincronizar / guardar sincronizacion)
+    // siguen el acento vivo de la caratula. La linea activa de la letra
+    // (item_lyrics_line) NO se toca aqui: su color ya se ajusto en el punto
+    // 1 para mantener contraste con fondos claros, y cambiarlo a un acento
+    // dinamico podria romper eso de nuevo.
     // Como el Song ya llega por Intent, no hace falta esperar al servicio
     // para tematizar: se carga apenas se conoce la cancion.
     private val defaultBannerColor: Int by lazy { ContextCompat.getColor(this, R.color.background_dark) }
@@ -193,6 +203,7 @@ class LyricsActivity : AppCompatActivity() {
         }
 
         applyThemeFallback()
+        ambientBackground.updateForSong(intentSong)
         loadAlbumArtTheme(intentSong)
 
         bindService(Intent(this, MusicService::class.java), connection, Context.BIND_AUTO_CREATE)
@@ -459,11 +470,11 @@ class LyricsActivity : AppCompatActivity() {
         })
         // Si no hay caratula en cache ni en red, loadCover no llama al
         // callback: la pantalla se queda con el fallback ya aplicado en
-        // onCreate (fondo background_dark, acento spotify_green).
+        // onCreate (acento spotify_green). El fondo (ambientBackground) se
+        // maneja aparte y tiene su propia logica de cache/fallback.
     }
 
     private fun applyThemeFromBitmap(bitmap: Bitmap) {
-        PlayerPaletteTheme.applyFromBitmap(bitmap, rootLayout, defaultBannerColor)
         PlayerPaletteTheme.applyAccentFromBitmap(
             bitmap, defaultAccentColor, currentAccentColor
         ) { color ->
@@ -473,7 +484,6 @@ class LyricsActivity : AppCompatActivity() {
     }
 
     private fun applyThemeFallback() {
-        PlayerPaletteTheme.applyFallback(rootLayout, defaultBannerColor)
         PlayerPaletteTheme.applyAccentFallback(defaultAccentColor, currentAccentColor) { color ->
             currentAccentColor = color
             applyAccentToControls(color)

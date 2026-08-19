@@ -1,9 +1,14 @@
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.IBinder
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -29,6 +34,7 @@ class EqualizerActivity : AppCompatActivity() {
     // revienta con ClassCastException apenas se abre la pantalla (por
     // eso se cerraba solo el Ecualizador). Debe coincidir con el tag
     // real del XML.
+    private lateinit var rootLayout: View
     private lateinit var switchEnabled: SwitchMaterial
     private lateinit var llBandsContainer: LinearLayout
     private lateinit var llPresetsContainer: LinearLayout
@@ -66,6 +72,36 @@ class EqualizerActivity : AppCompatActivity() {
         "Brillo",
         "Aire"
     )
+
+    // ============================================================
+    // FONDO DINAMICO (Material You con destellos), igual que el Home
+    // ============================================================
+    //
+    // Esta pantalla no recibe la cancion por Intent (se abre desde
+    // Ajustes), asi que nos conectamos al MusicService igual que hace
+    // LyricsActivity solo para leer que se esta reproduciendo ahora y
+    // pintar el fondo con ese color. Los chips de preset SI se quedan
+    // fijos en verde Spotify (eso no cambia): lo unico que ahora sigue
+    // a la caratula es el fondo de toda la pantalla.
+    private val ambientBackground: AmbientBackgroundController by lazy {
+        AmbientBackgroundController(this, rootLayout)
+    }
+
+    private var musicService: MusicService? = null
+    private var isBound = false
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            musicService = (binder as MusicService.MusicBinder).getService()
+            isBound = true
+            ambientBackground.updateForSong(musicService?.getCurrentSong())
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            musicService = null
+            isBound = false
+        }
+    }
 
     private fun setupPreampControls() {
         val range = EqualizerRepository.getPreampRange()
@@ -115,6 +151,12 @@ class EqualizerActivity : AppCompatActivity() {
         bindViews()
         eqCurveView.setAccentColor(ContextCompat.getColor(this, R.color.spotify_green))
 
+        // Fondo neutro (igual al del Home sin cancion) mientras se conecta
+        // el servicio; en cuanto llegue onServiceConnected se actualiza con
+        // la cancion real, si hay una sonando.
+        ambientBackground.updateForSong(null)
+        bindService(Intent(this, MusicService::class.java), connection, Context.BIND_AUTO_CREATE)
+
         if (!EqualizerRepository.isAvailable) {
             showUnavailableState()
         } else {
@@ -130,6 +172,7 @@ class EqualizerActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
+        rootLayout = findViewById(R.id.rootEqLayout)
         switchEnabled = findViewById(R.id.switchEqEnabled)
         llBandsContainer = findViewById(R.id.llEqBandsContainer)
         llPresetsContainer = findViewById(R.id.llEqPresetsContainer)
@@ -322,8 +365,9 @@ class EqualizerActivity : AppCompatActivity() {
         }
     }
 
-    // Estilo fijo del ecualizador: esta pantalla no usa Material You ni
-    // colores extraidos de la caratula. El acento siempre es verde Spotify.
+    // Estilo fijo de los chips de preset: no siguen la caratula, siempre
+    // son verde Spotify cuando estan seleccionados. Lo unico que ahora
+    // sigue a la cancion en pantalla es el fondo (ver ambientBackground).
     private fun styleChip(chip: TextView, selected: Boolean) {
         if (selected) {
             chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_selected)
@@ -388,6 +432,10 @@ class EqualizerActivity : AppCompatActivity() {
         super.onDestroy()
         runningAnimators.forEach { it.cancel() }
         runningAnimators.clear()
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

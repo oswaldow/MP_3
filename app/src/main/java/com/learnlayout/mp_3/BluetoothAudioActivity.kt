@@ -8,14 +8,19 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.Settings
 import android.view.LayoutInflater
+import android.view.View
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -27,6 +32,7 @@ import androidx.core.content.ContextCompat
 
 class BluetoothAudioActivity : AppCompatActivity() {
 
+    private lateinit var rootLayout: View
     private lateinit var btnBack: ImageButton
     private lateinit var llConnectedDevices: LinearLayout
     private lateinit var tvEmptyDevices: TextView
@@ -41,6 +47,30 @@ class BluetoothAudioActivity : AppCompatActivity() {
     // Direcciones (mac) de los dispositivos que ya se mostraron, para no
     // duplicar tarjetas cuando A2DP y Headset reportan el mismo aparato.
     private val shownAddresses = mutableSetOf<String>()
+
+    // ---------- Fondo dinamico (Material You + destellos, igual al Home) ----------
+    // Igual que en Ajustes: esta pantalla no tiene una cancion propia, asi
+    // que se conecta al MusicService solo para pintar el fondo con la
+    // cancion que este sonando en ese momento.
+    private val ambientBackground: AmbientBackgroundController by lazy {
+        AmbientBackgroundController(this, rootLayout)
+    }
+
+    private var musicService: MusicService? = null
+    private var isBound = false
+
+    private val musicServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            musicService = (binder as MusicService.MusicBinder).getService()
+            isBound = true
+            ambientBackground.updateForSong(musicService?.getCurrentSong())
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            musicService = null
+            isBound = false
+        }
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -78,6 +108,9 @@ class BluetoothAudioActivity : AppCompatActivity() {
         bindViews()
         setupListeners()
 
+        ambientBackground.updateForSong(null)
+        bindService(Intent(this, MusicService::class.java), musicServiceConnection, Context.BIND_AUTO_CREATE)
+
         val manager = getSystemService(BluetoothManager::class.java)
         bluetoothAdapter = manager?.adapter
 
@@ -85,6 +118,7 @@ class BluetoothAudioActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
+        rootLayout = findViewById(R.id.rootBluetoothLayout)
         btnBack = findViewById(R.id.btnBack)
         llConnectedDevices = findViewById(R.id.llConnectedDevices)
         tvEmptyDevices = findViewById(R.id.tvEmptyDevices)
@@ -235,5 +269,9 @@ class BluetoothAudioActivity : AppCompatActivity() {
         val adapter = bluetoothAdapter
         a2dpProxy?.let { adapter?.closeProfileProxy(BluetoothProfile.A2DP, it) }
         headsetProxy?.let { adapter?.closeProfileProxy(BluetoothProfile.HEADSET, it) }
+        if (isBound) {
+            unbindService(musicServiceConnection)
+            isBound = false
+        }
     }
 }
