@@ -46,10 +46,22 @@ class MusicService : Service() {
 
         const val CHANNEL_ID = "music_playback_channel"
         const val NOTIFICATION_ID = 1001
+
+        // Instancia en vivo del servicio, mientras este atado (bound) o
+        // corriendo en primer plano. Se usa desde componentes que NO
+        // tienen (ni deberian tener) un bind normal contra el servicio,
+        // como WhatsAppNotificationReaderService: necesita poder pedir
+        // ducking en cuanto arranca a leer un mensaje, sin depender de
+        // que alguna Activity este en pantalla en ese momento.
+        @Volatile
+        private var runningInstance: MusicService? = null
+
+        fun getRunningInstance(): MusicService? = runningInstance
     }
 
     override fun onCreate() {
         super.onCreate()
+        runningInstance = this
 
         // Debe ir antes de crear playbackEngine: es lo que carga desde
         // SharedPreferences si el ecualizador estaba activado y con que
@@ -304,6 +316,15 @@ class MusicService : Service() {
         playbackEngine.pause()
     }
 
+    // ---------- Ducking (delega en PlaybackEngine) ----------
+    // Usado por WhatsAppNotificationReaderService via getRunningInstance()
+    // para bajar/subir el volumen de la musica mientras se lee un mensaje
+    // en voz alta, sin pausarla.
+
+    fun duckForSpeech() = playbackEngine.duckForSpeech()
+
+    fun unduckAfterSpeech() = playbackEngine.unduckAfterSpeech()
+
     // ---------- Sleep timer (delega en SleepTimerManager) ----------
 
     fun setSleepTimerMinutes(minutes: Int) = sleepTimer.setMinutes(minutes)
@@ -493,6 +514,7 @@ class MusicService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (runningInstance === this) runningInstance = null
         sleepTimer.cancel()
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())

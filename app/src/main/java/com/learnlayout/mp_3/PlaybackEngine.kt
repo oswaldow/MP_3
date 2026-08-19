@@ -77,6 +77,9 @@ class PlaybackEngine(
     private var manualFadeOutRunnable: Runnable? = null
     private var manualFadeInRunnable: Runnable? = null
 
+    private var duckLevel: Float = 1f
+    private var duckRunnable: Runnable? = null
+
     private var preparedNextPlayer: ExoPlayer? = null
     private var preparedNextIndex: Int = -1
     private var prepareRequestedForIndex: Int = -1
@@ -97,6 +100,11 @@ class PlaybackEngine(
         private const val PAUSE_PLAY_FADE_MS = 220L
         private const val MANUAL_CHANGE_FADE_MS = 200L
 
+        // Duracion del fundido de ducking y a que nivel queda la musica
+        // mientras se lee un mensaje (25% del volumen normal).
+        private const val DUCK_FADE_MS = 250L
+        private const val DUCK_TARGET_LEVEL = 0.10f
+
         private const val CROSSFADE_PREPARE_LEAD_MS = 4000L
 
         private const val TAG_XFADE = "MP3_XFADE"
@@ -108,10 +116,6 @@ class PlaybackEngine(
             .build()
     }
 
-    // Listener de "cancion actual termino". Es el mismo objeto para todos
-    // los players "principales" que van pasando por mediaPlayer; se
-    // agrega/quita segun haga falta (equivalente a los antiguos
-    // setOnCompletionListener(...) / setOnCompletionListener(null)).
     private val mainPlayerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
@@ -166,7 +170,7 @@ class PlaybackEngine(
         }
         mediaPlayer = null
 
-        val player = buildPlayer(startVolume = if (hadOutgoing) 0f else 1f)
+        val player = buildPlayer(startVolume = if (hadOutgoing) 0f else duckLevel)
         player.addListener(mainPlayerListener)
         attachAudioDiagnostics(player, "MAIN idx=$index")
         player.setMediaItem(MediaItem.fromUri(song.uri))
@@ -190,7 +194,7 @@ class PlaybackEngine(
 
         releasePlayer()
 
-        val player = buildPlayer(startVolume = 1f)
+        val player = buildPlayer(startVolume = duckLevel)
         player.addListener(mainPlayerListener)
         player.setMediaItem(MediaItem.fromUri(song.uri))
         player.prepare()
@@ -509,8 +513,8 @@ class PlaybackEngine(
                 // outgoingVolume^2 + incomingVolume^2 = 1 se mantiene
                 // constante durante todo el cruce (identidad cos^2+sin^2=1).
                 val angle = fraction * (Math.PI.toFloat() / 2f)
-                val outgoingVolume = cos(angle)
-                val incomingVolume = sin(angle)
+                val outgoingVolume = cos(angle) * duckLevel
+                val incomingVolume = sin(angle) * duckLevel
 
                 runCatching { mediaPlayer?.volume = outgoingVolume }
                 runCatching { nextMediaPlayer?.volume = incomingVolume }
@@ -542,7 +546,7 @@ class PlaybackEngine(
 
         val song = callback.songAt(finishedIndex)
         mediaPlayer = incomingPlayer.apply {
-            volume = 1f
+            volume = duckLevel
             addListener(mainPlayerListener)
         }
         loadedIndex = finishedIndex
@@ -561,7 +565,7 @@ class PlaybackEngine(
     // manualmente, para evitar el "click" de volumen al 100% cortando
     // seco.
     private fun fadeOutThenPause(player: ExoPlayer) {
-        val startVolume = player.volume.takeIf { it > 0f } ?: 1f
+        val startVolume = player.volume.takeIf { it > 0f } ?: duckLevel
         var elapsed = 0L
         val runnable = object : Runnable {
             override fun run() {
@@ -573,7 +577,7 @@ class PlaybackEngine(
                     handler.postDelayed(this, FAST_FADE_STEP_MS)
                 } else {
                     player.playWhenReady = false
-                    runCatching { player.volume = 1f }
+                    runCatching { player.volume = duckLevel }
                     if (pauseFadeRunnable === this) pauseFadeRunnable = null
                 }
             }
@@ -590,7 +594,7 @@ class PlaybackEngine(
                 if (mediaPlayer !== player) return
                 elapsed += FAST_FADE_STEP_MS
                 val fraction = (elapsed.toFloat() / PAUSE_PLAY_FADE_MS.toFloat()).coerceIn(0f, 1f)
-                runCatching { player.volume = fraction }
+                runCatching { player.volume = fraction * duckLevel }
                 if (fraction < 1f) {
                     handler.postDelayed(this, FAST_FADE_STEP_MS)
                 } else if (playFadeRunnable === this) {
@@ -617,12 +621,13 @@ class PlaybackEngine(
     // cancion), pero para archivos locales el prepare() es practicamente
     // instantaneo, asi que el resultado se escucha igual de suave.
     private fun manualFadeOutAndRelease(player: ExoPlayer) {
+        val startVolume = player.volume.takeIf { it > 0f } ?: duckLevel
         var elapsed = 0L
         val runnable = object : Runnable {
             override fun run() {
                 elapsed += FAST_FADE_STEP_MS
                 val fraction = (elapsed.toFloat() / MANUAL_CHANGE_FADE_MS.toFloat()).coerceIn(0f, 1f)
-                runCatching { player.volume = (1f - fraction) }
+                runCatching { player.volume = startVolume * (1f - fraction) }
                 if (fraction < 1f) {
                     handler.postDelayed(this, FAST_FADE_STEP_MS)
                 } else {
@@ -644,7 +649,7 @@ class PlaybackEngine(
                 if (mediaPlayer !== player) return
                 elapsed += FAST_FADE_STEP_MS
                 val fraction = (elapsed.toFloat() / MANUAL_CHANGE_FADE_MS.toFloat()).coerceIn(0f, 1f)
-                runCatching { player.volume = fraction }
+                runCatching { player.volume = fraction * duckLevel }
                 if (fraction < 1f) {
                     handler.postDelayed(this, FAST_FADE_STEP_MS)
                 } else if (manualFadeInRunnable === this) {
@@ -663,6 +668,69 @@ class PlaybackEngine(
         manualFadeInRunnable = null
     }
 
+    // --- Ducking para lectura de mensajes de WhatsApp ---
+    // Baja/sube duckLevel con el mismo patron Handler/Runnable que los
+    // fundidos de arriba. No mueve el volumen de un player "a mano": lo
+    // que cambia es el TECHO (duckLevel) contra el que ya apuntan todos
+    // los demas fundidos, y ademas se aplica de inmediato al player
+    // principal si no hay ningun otro fundido corriendo en ese momento
+    // (ver applyDuckLevelToActivePlayer). Asi, si llega un mensaje justo
+    // en medio de un pausa/play o un cambio manual de cancion, no hay dos
+    // Runnables peleando por el mismo volumen: el ducking simplemente
+    // pasa a ser el nuevo techo para el fundido que ya estaba corriendo.
+    fun duckForSpeech() {
+        animateDuckLevel(DUCK_TARGET_LEVEL)
+    }
+
+    fun unduckAfterSpeech() {
+        animateDuckLevel(1f)
+    }
+
+    private fun animateDuckLevel(target: Float) {
+        duckRunnable?.let { handler.removeCallbacks(it) }
+
+        val startLevel = duckLevel
+        if (startLevel == target) {
+            applyDuckLevelToActivePlayer()
+            return
+        }
+
+        var elapsed = 0L
+        val runnable = object : Runnable {
+            override fun run() {
+                elapsed += FAST_FADE_STEP_MS
+                val fraction = (elapsed.toFloat() / DUCK_FADE_MS.toFloat()).coerceIn(0f, 1f)
+                duckLevel = startLevel + (target - startLevel) * fraction
+                applyDuckLevelToActivePlayer()
+                if (fraction < 1f) {
+                    handler.postDelayed(this, FAST_FADE_STEP_MS)
+                } else {
+                    duckLevel = target
+                    applyDuckLevelToActivePlayer()
+                    if (duckRunnable === this) duckRunnable = null
+                }
+            }
+        }
+        duckRunnable = runnable
+        handler.post(runnable)
+    }
+
+    // Aplica duckLevel de inmediato al audio que suena ahora, pero solo si
+    // ningun otro fundido lo va a pisar en su proximo tick: si hay un
+    // pausa/play, un cambio manual o un crossfade en curso, esos fundidos
+    // ya recalculan su volumen contra duckLevel en cada paso (ver arriba),
+    // asi que tocar el volumen aqui tambien seria una carrera entre dos
+    // Runnables sobre el mismo ExoPlayer.
+    private fun applyDuckLevelToActivePlayer() {
+        if (pauseFadeRunnable != null || playFadeRunnable != null ||
+            manualFadeOutRunnable != null || manualFadeInRunnable != null ||
+            isCrossfading
+        ) {
+            return
+        }
+        runCatching { mediaPlayer?.volume = duckLevel }
+    }
+
     // Aborta un crossfade en curso (si lo hay) y deja "mediaPlayer" como la
     // unica pista sonando, a volumen normal. Se llama antes de cualquier
     // accion manual del usuario (siguiente, anterior, seek, cambiar modo...)
@@ -675,7 +743,7 @@ class PlaybackEngine(
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = null
 
-        runCatching { mediaPlayer?.volume = 1f }
+        runCatching { mediaPlayer?.volume = duckLevel }
         mediaPlayer?.let {
             it.removeListener(mainPlayerListener)
             it.addListener(mainPlayerListener)
