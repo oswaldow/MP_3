@@ -382,7 +382,16 @@ class MusicService : Service() {
 
         listener?.onSongChanged(song, index)
         if (reason != PlaybackEngine.SongStartReason.RESTORED) {
-            PlayCountRepository.incrementPlayCount(applicationContext, song.id)
+            // Antes esto se llamaba directo aqui, en el hilo principal: es
+            // una lectura + escritura de Room (allowMainThreadQueries en
+            // AppDatabase), asi que cada "siguiente"/"anterior" quedaba
+            // bloqueado esperando esa consulta a disco. El conteo de
+            // reproducciones no necesita terminar antes de que el resto de
+            // este metodo siga (notificacion, widget, UI), asi que se
+            // manda al hilo de fondo compartido y se sigue de inmediato.
+            AppExecutors.runInBackground {
+                PlayCountRepository.incrementPlayCount(applicationContext, song.id)
+            }
         }
         if (reason == PlaybackEngine.SongStartReason.NEW) {
             PlaybackStateRepository.saveLastSong(applicationContext, song.id, 0L)
