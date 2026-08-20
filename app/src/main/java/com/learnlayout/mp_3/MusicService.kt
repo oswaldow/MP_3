@@ -26,6 +26,14 @@ class MusicService : Service() {
     // por segundo (cada tick de progreso), solo cada ~5s.
     private var lastPlaybackStateSaveNanos: Long = 0L
 
+    // Ultimo momento en que se empujo la posicion actual al widget de
+    // pantalla de inicio mientras suena musica. Igual que arriba, pero
+    // con una ventana mas amplia (15s): cada updateAppWidget() es una
+    // llamada entre procesos (hacia el launcher), bastante mas cara que
+    // escribir en SharedPreferences, y la barra de progreso del widget
+    // no necesita fluidez de segundo a segundo como el SeekBar de la app.
+    private var lastWidgetProgressPushNanos: Long = 0L
+
     enum class PlaybackMode { NORMAL, REPEAT_ONE, SHUFFLE }
 
     interface PlaybackListener {
@@ -43,6 +51,7 @@ class MusicService : Service() {
         const val ACTION_NEXT = "com.learnlayout.mp_3.action.NEXT"
         const val ACTION_PREVIOUS = "com.learnlayout.mp_3.action.PREVIOUS"
         const val ACTION_STOP = "com.learnlayout.mp_3.action.STOP"
+        const val ACTION_CYCLE_PLAYBACK_MODE = "com.learnlayout.mp_3.action.CYCLE_PLAYBACK_MODE"
 
         const val CHANNEL_ID = "music_playback_channel"
         const val NOTIFICATION_ID = 1001
@@ -97,6 +106,7 @@ class MusicService : Service() {
             override fun onProgress(currentMs: Int, totalMs: Int) {
                 listener?.onProgressChanged(currentMs, totalMs)
                 maybeSavePlaybackStateThrottled(currentMs.toLong())
+                maybeUpdateWidgetProgressThrottled(currentMs.toLong(), totalMs.toLong())
             }
 
             override fun onPlaybackStateChanged(isPlaying: Boolean) {
@@ -127,6 +137,7 @@ class MusicService : Service() {
             ACTION_NEXT -> playNext()
             ACTION_PREVIOUS -> playPrevious()
             ACTION_STOP -> stopPlaybackAndService()
+            ACTION_CYCLE_PLAYBACK_MODE -> cyclePlaybackMode()
         }
         return START_STICKY
     }
@@ -239,6 +250,7 @@ class MusicService : Service() {
         playbackEngine.cancelCrossfadeIfAny()
         val mode = queueManager.cyclePlaybackMode()
         persistQueueState()
+        updateWidgets()
         return mode
     }
 
@@ -432,7 +444,30 @@ class MusicService : Service() {
 
     /** Refresca el widget de pantalla de inicio (si el usuario agrego uno) con la cancion y el estado actuales. */
     private fun updateWidgets() {
-        MusicWidgetProvider.pushUpdate(applicationContext, getCurrentSong(), isPlaying())
+        MusicWidgetProvider.pushUpdate(
+            context = applicationContext,
+            song = getCurrentSong(),
+            isPlaying = isPlaying(),
+            positionMs = getCurrentPosition().toLong(),
+            durationMs = getDuration().toLong(),
+            mode = getPlaybackMode()
+        )
+    }
+
+    /**
+     * Empuja la posicion actual al widget solo cada ~15s mientras suena
+     * musica: la barra de progreso del widget no necesita fluidez de
+     * segundo a segundo (a diferencia del SeekBar dentro de la app), y
+     * cada updateAppWidget() es una llamada entre procesos (hacia el
+     * launcher) bastante mas cara que actualizar una View normal.
+     */
+    private fun maybeUpdateWidgetProgressThrottled(currentMs: Long, totalMs: Long) {
+        if (!isPlaying()) return
+        val now = System.nanoTime()
+        if (now - lastWidgetProgressPushNanos >= 15_000_000_000L) {
+            lastWidgetProgressPushNanos = now
+            updateWidgets()
+        }
     }
 
     /**

@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
@@ -44,6 +45,22 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
     private val rebindHandler = Handler(Looper.getMainLooper())
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { }
+
+    // Deduplicacion de notificaciones repetidas. WhatsApp reenvia/actualiza
+    // la misma notificacion varias veces seguidas para la misma
+    // conversacion (por ejemplo al reagrupar notificaciones o al recibir
+    // "recibos" de entrega), y cada una de esas reposiciones dispara
+    // onNotificationPosted() otra vez con el MISMO ultimo mensaje. Sin este
+    // control se leia el mismo mensaje 2-3 veces seguidas.
+    //
+    // Se guarda, por cada sbn.key (estable para una misma conversacion
+    // mientras la notificacion sigue viva), el ultimo contenido que se leyo
+    // y en que momento. Si vuelve a llegar EXACTAMENTE el mismo contenido
+    // para esa misma key dentro de la ventana DUPLICATE_MESSAGE_WINDOW_MS,
+    // se ignora. Pasada la ventana (o si el contenido cambio) se vuelve a
+    // leer normal, para no bloquear un mensaje identico legitimo mandado
+    // mas tarde (ej. "Ok" enviado dos veces en momentos distintos).
+    private val lastSpokenByKey = mutableMapOf<String, Pair<ExtractedContent, Long>>()
 
     override fun onCreate() {
         super.onCreate()
@@ -131,6 +148,22 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
         val (sender, message, isAttachment) = extracted
         Log.d(TAG, "Mensaje extraido - remitente=$sender texto='$message' adjunto=$isAttachment")
 
+        if (isDuplicateNotification(sbn.key, extracted)) {
+            Log.d(TAG, "Ignorada: es una repeticion/actualizacion de la misma notificacion (key=${sbn.key})")
+            return
+        }
+
+        // Se marca como "vista" aqui, antes de los filtros de abajo
+        // (interruptor apagado, TTS no listo, sin Bluetooth). Esto evita
+        // leer un reenvio duplicado del mismo mensaje aunque esta vez SI
+        // pasen todos los filtros (por ejemplo: llega el mensaje con el
+        // Bluetooth desconectado -no se lee, pero se registra igual-, y
+        // 1 segundo despues WhatsApp reenvia la misma notificacion ya con
+        // el Bluetooth conectado). Registrar por contenido/key, no por si
+        // efectivamente se hablo, es lo que corresponde a "es la misma
+        // notificacion", que es el problema que se esta resolviendo.
+        rememberSpokenNotification(sbn.key, extracted)
+
         // sanitizeForSpeech() ya le quito links/emojis a los mensajes de
         // texto; si un mensaje era SOLO un link o SOLO emojis, message
         // puede quedar en blanco aqui aunque no lo estuviera originalmente.
@@ -165,6 +198,29 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
         }
         Log.d(TAG, "Mandando a leer: '$finalText'")
         speak(finalText)
+    }
+
+    // Se llama cuando el sistema retira una notificacion (leida, deslizada,
+    // o reemplazada). Se limpia su entrada de lastSpokenByKey para no
+    // acumular memoria indefinidamente por cada conversacion que haya
+    // sonado alguna vez.
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        super.onNotificationRemoved(sbn)
+        lastSpokenByKey.remove(sbn.key)
+    }
+
+    // true si [content] es identico al ultimo contenido registrado para
+    // esta misma [key] Y ademas llego dentro de la ventana de
+    // DUPLICATE_MESSAGE_WINDOW_MS. Fuera de esa ventana (o si el contenido
+    // cambio) no cuenta como duplicado, aunque la key sea la misma.
+    private fun isDuplicateNotification(key: String, content: ExtractedContent): Boolean {
+        val (lastContent, lastAtMs) = lastSpokenByKey[key] ?: return false
+        val elapsed = SystemClock.elapsedRealtime() - lastAtMs
+        return lastContent == content && elapsed <= DUPLICATE_MESSAGE_WINDOW_MS
+    }
+
+    private fun rememberSpokenNotification(key: String, content: ExtractedContent) {
+        lastSpokenByKey[key] = content to SystemClock.elapsedRealtime()
     }
 
     /**
@@ -329,6 +385,14 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
         private const val PACKAGE_WHATSAPP = "com.whatsapp"
         private const val PACKAGE_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
         private const val REBIND_DELAY_MS = 3000L
+
+        // Ventana dentro de la cual el mismo contenido para la misma
+        // notificacion (sbn.key) se considera un reenvio duplicado y no un
+        // mensaje nuevo. WhatsApp reenvia/actualiza la notificacion casi de
+        // inmediato (tipicamente en menos de 1-2s), asi que 4s da margen de
+        // sobra sin arriesgarse a tragarse un mensaje identico legitimo
+        // mandado poco despues.
+        private const val DUPLICATE_MESSAGE_WINDOW_MS = 4000L
 
         // Usados por sanitizeForSpeech() para limpiar el texto antes de
         // mandarlo al TTS. EMOJI_REGEX cubre los rangos Unicode donde

@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Layout EXPANDIDO del widget: se usa cuando el usuario agranda el
+    widget en el launcher hasta pasar EXPANDED_MIN_HEIGHT_DP (ver
+    MusicWidgetProvider.isExpandedLayout). Tarjeta vertical con
+    caratula grande, titulo/artista, barra de progreso y una fila de
+    5 controles (shuffle, anterior, play/pause, siguiente, repeat).
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRootExp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_home_card"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <FrameLayout
+            android:id="@+id/widgetArtContainerExp"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:background="@drawable/bg_album_art_small">
+
+            <ImageView
+                android:id="@+id/widgetArtPlaceholderExp"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:padding="16dp"
+                android:src="@drawable/ic_music_note"
+                android:tint="@color/spotify_gray"
+                android:contentDescription="@string/app_name" />
+
+            <!-- Se muestra en lugar del placeholder en cuanto MusicWidgetProvider
+                 consigue la caratula real (via AlbumArtRepository); ya llega
+                 recortada con esquinas redondeadas desde el codigo, porque
+                 RemoteViews no soporta clipToOutline como el resto de la app. -->
+            <ImageView
+                android:id="@+id/widgetAlbumArtExp"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:visibility="gone"
+                android:contentDescription="Caratula del album" />
+
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widgetSongTitleExp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="MP_3"
+                android:textColor="@color/text_primary_light"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/widgetSongArtistExp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Abre la app para reproducir musica"
+                android:textColor="@color/text_secondary_light"
+                android:textSize="13sp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginTop="2dp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/widgetProgressExp"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:layout_marginTop="14dp"
+        android:max="100"
+        android:progress="0"
+        android:progressDrawable="@drawable/progress_mini_line" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageButton
+            android:id="@+id/widgetBtnModeExp"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            android:scaleType="fitCenter"
+            android:padding="8dp"
+            android:src="@drawable/ic_repeat"
+            android:contentDescription="Modo de reproduccion" />
+
+        <ImageButton
+            android:id="@+id/widgetBtnPreviousExp"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            android:scaleType="fitCenter"
+            android:padding="8dp"
+            android:src="@drawable/ic_skip_previous"
+            android:tint="@color/text_primary_light"
+            android:contentDescription="Anterior" />
+
+        <ImageButton
+            android:id="@+id/widgetBtnPlayPauseExp"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1.3"
+            android:background="@drawable/bg_icon_button_circle"
+            android:scaleType="fitCenter"
+            android:padding="12dp"
+            android:src="@drawable/ic_play_arrow"
+            android:tint="@color/spotify_green"
+            android:contentDescription="Reproducir o pausar" />
+
+        <ImageButton
+            android:id="@+id/widgetBtnNextExp"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            android:scaleType="fitCenter"
+            android:padding="8dp"
+            android:src="@drawable/ic_skip_next"
+            android:tint="@color/text_primary_light"
+            android:contentDescription="Siguiente" />
+
+        <!-- Espaciador simetrico: deja el boton de play-pause centrado
+             visualmente, ya que el otro lado tiene el boton de modo. -->
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+    </LinearLayout>
+
+</LinearLayout>

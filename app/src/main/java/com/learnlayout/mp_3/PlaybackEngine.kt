@@ -77,12 +77,44 @@ class PlaybackEngine(
     private var manualFadeOutRunnable: Runnable? = null
     private var manualFadeInRunnable: Runnable? = null
 
+    // Player que esta a mitad del fundido de salida disparado por
+    // manualFadeOutAndRelease(), si lo hay. Se necesita como campo de la
+    // clase (y no solo como variable capturada dentro del propio
+    // Runnable) porque cancelManualChangeFadesIfAny() necesita poder
+    // forzar su stop()+release() cuando ese Runnable se cancela A MEDIAS
+    // (saltando de cancion muy rapido varias veces seguidas): si solo se
+    // cancela el Runnable, el "else" que hacia stop()+release() nunca
+    // llega a ejecutarse y ese reproductor se queda sonando para
+    // siempre de fondo, superpuesto con las canciones siguientes. Eso es
+    // lo que provocaba escuchar varias canciones a la vez al usar
+    // "siguiente"/"anterior" repetidamente y rapido.
+    private var manualFadeOutPlayer: ExoPlayer? = null
+
     private var duckLevel: Float = 1f
     private var duckRunnable: Runnable? = null
 
     private var preparedNextPlayer: ExoPlayer? = null
     private var preparedNextIndex: Int = -1
-    private var prepareRequestedForIndex: Int = -1
+
+    // ID de la cancion para la que se preparo/quedo listo preparedNextPlayer.
+    // Se compara por ID (no solo por indice numerico de la cola) porque el
+    // indice puede seguir siendo el mismo despues de que el usuario
+    // reordene la cola a mano, aunque la CANCION que hay en ese indice ya
+    // sea otra.
+    private var preparedNextSongId: Long? = null
+    private var prepareRequestedForSongId: Long? = null
+
+    // Contador que se incrementa cada vez que se pide preparar un
+    // siguiente player (o se descarta uno en curso). El listener
+    // asincrono de preparado (createNextPlayerListener) solo acepta su
+    // resultado si el token que capturo al arrancar sigue siendo el mas
+    // reciente: asi, si mientras un player estaba bufferizando el
+    // usuario reordeno la cola (lo que descarta/reinicia la preparacion),
+    // el resultado tardio de ESE player viejo se ignora en vez de
+    // instalarse como si fuera el correcto. Sin esto, era posible que
+    // sonara la cancion que ANTES estaba en esa posicion de la cola en
+    // vez de la que el usuario acababa de mover ahi.
+    private var prepareRequestToken: Int = 0
 
     // Marca de tiempo del ultimo tick del progressRunnable (cada 500ms) y
     // del crossfadeRunnable (cada 100ms), para detectar jank del hilo
@@ -397,19 +429,33 @@ class PlaybackEngine(
 
         val upcomingIndex = callback.nextIndexFrom(loadedIndex)
         if (upcomingIndex < 0) return
+        // Se resuelve la CANCION (no solo el indice) que toca a
+        // continuacion en este instante. Si el usuario reordeno la cola a
+        // mano, esto ya refleja el cambio aunque el numero de indice sea
+        // el mismo de antes.
+        val upcomingSong = callback.songAt(upcomingIndex) ?: return
 
-        // Fase 1: preparar con anticipacion, en segundo plano.
+        // Fase 1: preparar con anticipacion, en segundo plano. Se compara
+        // por ID de cancion: si ya se pidio preparar esta MISMA cancion
+        // para esta posicion no hace falta repetirlo, pero si la cancion
+        // que hay ahora en upcomingIndex es DISTINTA de la que se pidio
+        // preparar la ultima vez (por ejemplo, el usuario acaba de mover
+        // otra cancion a esa posicion), se vuelve a pedir.
         if (remainingMs <= fadeMs + CROSSFADE_PREPARE_LEAD_MS &&
             preparedNextPlayer == null &&
-            prepareRequestedForIndex != upcomingIndex
+            prepareRequestedForSongId != upcomingSong.id
         ) {
-            prepareNextPlayerAsync(upcomingIndex)
+            prepareNextPlayerAsync(upcomingIndex, upcomingSong)
         }
 
         // Fase 2: si ya toca cruzar y el reproductor esta listo, arranca ya.
         if (remainingMs <= fadeMs) {
             val ready = preparedNextPlayer
-            if (ready != null && preparedNextIndex == upcomingIndex) {
+            // Se verifica indice Y cancion: entre que el player quedo
+            // listo y este momento, la cola pudo haberse reordenado. Sin
+            // esta doble verificacion se podia terminar cruzando hacia la
+            // cancion vieja que ya estaba precargada para ese indice.
+            if (ready != null && preparedNextIndex == upcomingIndex && preparedNextSongId == upcomingSong.id) {
                 beginCrossfade(upcomingIndex, ready, remainingMs.coerceAtMost(fadeMs))
             }
             // Si aun no esta listo (cancion muy corta, almacenamiento lento,
@@ -418,12 +464,17 @@ class PlaybackEngine(
         }
     }
 
-    private fun prepareNextPlayerAsync(index: Int) {
-        val song = callback.songAt(index) ?: return
-        prepareRequestedForIndex = index
+    private fun prepareNextPlayerAsync(index: Int, song: Song) {
+        prepareRequestedForSongId = song.id
+        // Cada solicitud de preparado se marca con un token propio y
+        // creciente. Es lo que permite distinguir, cuando el listener de
+        // abajo finalmente dispare STATE_READY, si sigue siendo la
+        // solicitud vigente o si ya quedo obsoleta (cola reordenada,
+        // cancion cambiada a mano, etc.) mientras bufferizaba.
+        val requestToken = ++prepareRequestToken
 
         val player = buildPlayer(startVolume = 0f)
-        player.addListener(createNextPlayerListener(index, player))
+        player.addListener(createNextPlayerListener(index, song.id, requestToken, player))
         attachAudioDiagnostics(player, "NEXT idx=$index")
         player.setMediaItem(MediaItem.fromUri(song.uri))
         player.prepare()
@@ -436,21 +487,32 @@ class PlaybackEngine(
     // Listener de preparado/error para el player que se esta precargando
     // para el crossfade. Equivalente a los antiguos
     // setOnPreparedListener/setOnErrorListener de MediaPlayer.
-    private fun createNextPlayerListener(index: Int, player: ExoPlayer): Player.Listener {
+    private fun createNextPlayerListener(index: Int, songId: Long, requestToken: Int, player: ExoPlayer): Player.Listener {
         return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
-                    if (prepareRequestedForIndex == index && preparedNextIndex != index) {
+                    // Solo se acepta si "requestToken" sigue siendo el mas
+                    // reciente (prepareRequestToken no avanzo desde que
+                    // arranco esta preparacion). Si ya avanzo -porque se
+                    // descarto esta preparacion o se pidio otra nueva para
+                    // la misma posicion mientras tanto- este resultado
+                    // llego tarde y se descarta en vez de instalarse como
+                    // "el siguiente" a sonar.
+                    if (requestToken == prepareRequestToken && preparedNextPlayer == null) {
                         preparedNextPlayer = player
                         preparedNextIndex = index
+                        preparedNextSongId = songId
+                    } else {
+                        runCatching { player.stop() }
+                        runCatching { player.release() }
                     }
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG_XFADE, "onError preparando indice=$index: ${error.message}")
-                if (prepareRequestedForIndex == index) {
-                    prepareRequestedForIndex = -1
+                if (requestToken == prepareRequestToken) {
+                    prepareRequestedForSongId = null
                 }
                 runCatching { player.release() }
             }
@@ -458,13 +520,20 @@ class PlaybackEngine(
     }
 
     private fun discardPreparedNextIfAny() {
+        // Invalida cualquier preparacion en curso, aunque todavia no haya
+        // llegado a STATE_READY: al subir este contador, si esa
+        // preparacion vieja termina de bufferear despues, su listener vera
+        // que su token ya no es el vigente y se descartara sola.
+        prepareRequestToken++
+
         preparedNextPlayer?.let {
             runCatching { it.stop() }
             runCatching { it.release() }
         }
         preparedNextPlayer = null
         preparedNextIndex = -1
-        prepareRequestedForIndex = -1
+        preparedNextSongId = null
+        prepareRequestedForSongId = null
     }
 
     private fun beginCrossfade(upcomingIndex: Int, readyPlayer: ExoPlayer, durationMs: Long) {
@@ -478,7 +547,8 @@ class PlaybackEngine(
         nextIndexDuringCrossfade = upcomingIndex
         preparedNextPlayer = null
         preparedNextIndex = -1
-        prepareRequestedForIndex = -1
+        preparedNextSongId = null
+        prepareRequestedForSongId = null
 
         isCrossfading = true
         crossfadeTotalMs = durationMs
@@ -621,6 +691,7 @@ class PlaybackEngine(
     // cancion), pero para archivos locales el prepare() es practicamente
     // instantaneo, asi que el resultado se escucha igual de suave.
     private fun manualFadeOutAndRelease(player: ExoPlayer) {
+        manualFadeOutPlayer = player
         val startVolume = player.volume.takeIf { it > 0f } ?: duckLevel
         var elapsed = 0L
         val runnable = object : Runnable {
@@ -634,6 +705,7 @@ class PlaybackEngine(
                     runCatching { player.stop() }
                     runCatching { player.release() }
                     if (manualFadeOutRunnable === this) manualFadeOutRunnable = null
+                    if (manualFadeOutPlayer === player) manualFadeOutPlayer = null
                 }
             }
         }
@@ -666,6 +738,20 @@ class PlaybackEngine(
         manualFadeInRunnable?.let { handler.removeCallbacks(it) }
         manualFadeOutRunnable = null
         manualFadeInRunnable = null
+
+        // Si habia un player saliente a mitad de su fundido de apagado
+        // (manualFadeOutAndRelease) y ese Runnable se acaba de cancelar
+        // arriba, su rama "else" -la que hacia stop()+release()- ya NUNCA
+        // se va a ejecutar sola. Sin este bloque, ese ExoPlayer se queda
+        // vivo y sonando en segundo plano indefinidamente: es exactamente
+        // lo que pasaba al tocar "siguiente"/"anterior" varias veces muy
+        // rapido, donde se llegaban a acumular varios players sonando a
+        // la vez (varias canciones traslapadas).
+        manualFadeOutPlayer?.let {
+            runCatching { it.stop() }
+            runCatching { it.release() }
+        }
+        manualFadeOutPlayer = null
     }
 
     // --- Ducking para lectura de mensajes de WhatsApp ---
