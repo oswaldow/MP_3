@@ -1,5 +1,7 @@
 package com.learnlayout.mp_3
 
+import android.util.Log
+
 /**
  * Dueño de la lista de reproducción.
  *
@@ -12,6 +14,10 @@ package com.learnlayout.mp_3
  * No conoce ExoPlayer, notificaciones ni MediaSession.
  */
 class QueueManager {
+
+    companion object {
+        private const val TAG_XFADE = "MP3_XFADE"
+    }
 
     private var originalList: List<Song> = emptyList()
 
@@ -301,6 +307,10 @@ class QueueManager {
             return false
         }
 
+        val previousCurrentIndex = currentIndex
+        val previousCurrentSong = songList.getOrNull(currentIndex)
+        val movedSongTitle = songList.getOrNull(fromIndex)?.title
+
         val mutableList =
             songList.toMutableList()
 
@@ -330,6 +340,21 @@ class QueueManager {
             else ->
                 currentIndex
         }
+
+        // DEBUG: confirma que, tras el reordenamiento, currentIndex sigue
+        // apuntando a la MISMA cancion que estaba sonando antes del move.
+        // Si "songList[currentIndex]" no coincide con previousCurrentSong,
+        // el bug esta aqui, en QueueManager. Si SI coincide (lo normal),
+        // el problema esta en que PlaybackEngine.loadedIndex no se
+        // sincronizo con este nuevo currentIndex (ver syncLoadedIndex()).
+        Log.d(
+            TAG_XFADE,
+            "moveQueueItem: '$movedSongTitle' from=$fromIndex to=$toIndex | " +
+                    "currentIndex $previousCurrentIndex -> $currentIndex | " +
+                    "cancion actual antes='${previousCurrentSong?.title}' " +
+                    "despues='${songList.getOrNull(currentIndex)?.title}' " +
+                    "(deben ser la misma cancion)"
+        )
 
         if (
             playbackMode !=
@@ -373,8 +398,20 @@ class QueueManager {
 
         songList = newQueue
 
+        val previousCurrentIndex = currentIndex
+
         if (index < currentIndex) {
             currentIndex--
+        }
+
+        // DEBUG: igual que en moveQueueItem, esto puede desincronizar a
+        // PlaybackEngine.loadedIndex si currentIndex cambio.
+        if (previousCurrentIndex != currentIndex) {
+            Log.d(
+                TAG_XFADE,
+                "removeQueueItem: se quito '${songToRemove.title}' (idx=$index) | " +
+                        "currentIndex $previousCurrentIndex -> $currentIndex"
+            )
         }
 
         originalList =

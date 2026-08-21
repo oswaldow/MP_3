@@ -1,10 +1,10 @@
 package com.learnlayout.mp_3
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.view.LayoutInflater
 import android.view.View
-import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -45,9 +45,6 @@ class HomeController(
     private val tvHeroArtist: TextView =
         root.findViewById(R.id.tvHomeHeroArtist)
 
-    private val btnHeroPlay: ImageButton =
-        root.findViewById(R.id.btnHomeHeroPlay)
-
     private val recentSection: View =
         root.findViewById(R.id.homeRecentSection)
 
@@ -81,6 +78,22 @@ class HomeController(
     // ============================================================
 
     private var heroSong: Song? = null
+
+
+    // ============================================================
+    // TEMA DINAMICO
+    // ============================================================
+
+    /**
+     * Llamado desde SongListActivity via AppAccentColor cada vez que
+     * cambia el color extraido de la caratula de la cancion actual (o
+     * vuelve al fallback morado si no hay caratula). Antes estos dos
+     * elementos se quedaban fijos en R.color.spotify_green sin importar
+     * la caratula.
+     */
+    fun applyAccentColor(color: Int) {
+        tvHeroEyebrow.setTextColor(color)
+    }
 
 
     // ============================================================
@@ -298,15 +311,7 @@ class HomeController(
                 dp(32)
             )
 
-            btnHeroPlay.setImageResource(
-                R.drawable.ic_queue_music
-            )
-
             heroContainer.setOnClickListener {
-                onOpenSongs()
-            }
-
-            btnHeroPlay.setOnClickListener {
                 onOpenSongs()
             }
 
@@ -329,23 +334,7 @@ class HomeController(
             song.artist
 
 
-        btnHeroPlay.setImageResource(
-            if (
-                getCurrentSong()?.id == song.id &&
-                isPlaying()
-            ) {
-                R.drawable.ic_pause
-            } else {
-                R.drawable.ic_play_arrow
-            }
-        )
-
-
         heroContainer.setOnClickListener {
-            onPlaySong(song)
-        }
-
-        btnHeroPlay.setOnClickListener {
             onPlaySong(song)
         }
 

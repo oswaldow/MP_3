@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
+    <!-- Fallback fijo de AppAccentColor: solo se usa cuando no hay
+         cancion con caratula (pantalla de Ajustes, cola vacia, etc).
+         Mientras haya una cancion sonando, el acento real viene de
+         PlayerPaletteTheme + AppAccentColor (ver PlayerPanelController). -->
     <color name="purple_primary">#9C27B0</color>
     <color name="purple_dark">#1C1C1C</color>
     <color name="purple_light">#669C27B0</color>

@@ -1,10 +1,11 @@
 package com.learnlayout.mp_3
 
 import android.content.Context
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Color
 import android.util.TypedValue
 import android.view.Gravity
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -26,10 +27,27 @@ class PlaylistDialogs(
     private val onDeleteSongFromDevice: (Song) -> Unit
 ) {
 
-    fun showCreatePlaylistDialog(songIdToAdd: Long?) {
-        val input = EditText(context)
+    /**
+     * Aplica el mismo look de "caja redondeada con borde morado" que
+     * ya usa el buscador (bg_search_box) a los EditText de estos
+     * dialogos. Antes se quedaban con el subrayado gris por defecto
+     * de Android, que no combina con el resto de la app.
+     */
+    private fun styleDialogInput(input: EditText) {
 
-        input.hint = "Nombre de la playlist"
+        val density = context.resources.displayMetrics.density
+
+        input.background = ContextCompat.getDrawable(
+            context,
+            R.drawable.bg_search_box
+        )
+
+        input.setPadding(
+            (16 * density).toInt(),
+            (12 * density).toInt(),
+            (16 * density).toInt(),
+            (12 * density).toInt()
+        )
 
         input.setTextColor(
             ContextCompat.getColor(
@@ -44,13 +62,37 @@ class PlaylistDialogs(
                 R.color.text_secondary_light
             )
         )
+    }
+
+
+    fun showCreatePlaylistDialog(songIdToAdd: Long?) {
+        val density = context.resources.displayMetrics.density
+
+        val input = EditText(context)
+
+        input.hint = "Nombre de la playlist"
+
+        styleDialogInput(input)
+
+        val container = LinearLayout(context)
+
+        container.orientation = LinearLayout.VERTICAL
+
+        container.setPadding(
+            (20 * density).toInt(),
+            (4 * density).toInt(),
+            (20 * density).toInt(),
+            0
+        )
+
+        container.addView(input)
 
         AlertDialog.Builder(
             context,
             R.style.RoundedAlertDialog
         )
             .setTitle("Nueva playlist")
-            .setView(input)
+            .setView(container)
             .setPositiveButton("Crear") { _, _ ->
 
                 val name = input.text.toString().trim()
@@ -98,47 +140,85 @@ class PlaylistDialogs(
     /**
      * Menu de opciones de una cancion.
      *
-     * Cada opcion tiene ahora:
-     * - Su propio borde morado.
-     * - Fondo oscuro.
-     * - Esquinas redondeadas.
-     * - Separacion entre opciones.
+     * Antes cada opcion era su propia caja individual con borde
+     * morado grueso, flotando separada de las demas: se veia como
+     * tres elementos sueltos en vez de un solo menu. Ahora es una
+     * unica tarjeta (el propio fondo redondeado del dialogo, igual
+     * que el resto de los AlertDialog de la app) con filas dentro,
+     * separadas por una linea delgada, cada una con su icono y
+     * ripple al tocar, igual que las filas de la lista de canciones.
      *
      * Opciones:
      * 1. Agregar a playlist
      * 2. Editar nombre y artista
-     * 3. Eliminar del dispositivo
+     * 3. Eliminar del dispositivo (destructiva, en rojo)
      */
     fun showSongItemMenu(song: Song) {
 
         val density = context.resources.displayMetrics.density
 
+        data class MenuOption(
+            val label: String,
+            val iconRes: Int,
+            val destructive: Boolean,
+            val action: () -> Unit
+        )
+
         val options = listOf(
-            "Agregar a playlist" to {
+            MenuOption(
+                "Agregar a playlist",
+                R.drawable.ic_add,
+                false
+            ) {
                 showAddToPlaylistDialog(song)
             },
 
-            "Editar nombre y artista" to {
+            MenuOption(
+                "Editar nombre y artista",
+                R.drawable.ic_edit,
+                false
+            ) {
                 showEditSongMetadataDialog(song)
             },
 
-            "Eliminar del dispositivo" to {
+            MenuOption(
+                "Eliminar del dispositivo",
+                R.drawable.ic_delete,
+                true
+            ) {
                 confirmDeleteSongFromDevice(song)
             }
         )
 
+        val destructiveColor = Color.parseColor("#F26161")
+
+        val primaryColor = ContextCompat.getColor(
+            context,
+            R.color.text_primary_light
+        )
+
+        val secondaryColor = ContextCompat.getColor(
+            context,
+            R.color.text_secondary_light
+        )
+
+        val dividerColor = Color.parseColor("#1FFFFFFF")
+
         /*
-         * Contenedor principal.
+         * Contenedor principal: sin fondo propio, usa el mismo
+         * bg_dialog_rounded que ya trae el AlertDialog por su tema
+         * (RoundedAlertDialog), para que se vea como una sola
+         * tarjeta consistente con el resto de dialogos de la app.
          */
         val container = LinearLayout(context)
 
         container.orientation = LinearLayout.VERTICAL
 
         container.setPadding(
-            (14 * density).toInt(),
-            (8 * density).toInt(),
-            (14 * density).toInt(),
-            (8 * density).toInt()
+            0,
+            (4 * density).toInt(),
+            0,
+            (4 * density).toInt()
         )
 
         /*
@@ -146,31 +226,6 @@ class PlaylistDialogs(
          * de cada opcion.
          */
         lateinit var dialog: AlertDialog
-
-        /*
-         * Color del borde.
-         */
-        val purpleColor = ContextCompat.getColor(
-            context,
-            R.color.purple_primary
-        )
-
-        /*
-         * Color de fondo de cada opcion.
-         *
-         * Se intenta utilizar el color existente de la aplicacion.
-         * Si no existe en tu proyecto, cambia esta parte por:
-         *
-         * android.graphics.Color.rgb(18, 18, 18)
-         */
-        val backgroundColor = try {
-            ContextCompat.getColor(
-                context,
-                R.color.spotify_black
-            )
-        } catch (e: Exception) {
-            android.graphics.Color.rgb(18, 18, 18)
-        }
 
         /*
          * Ripple nativo de Android.
@@ -183,111 +238,106 @@ class PlaylistDialogs(
             true
         )
 
-        /*
-         * Crear individualmente las tres opciones.
-         */
-        options.forEachIndexed { index, (label, action) ->
+        options.forEachIndexed { index, option ->
 
             /*
-             * TextView que funciona como boton.
+             * Separador delgado entre opciones (no antes de la
+             * primera).
              */
-            val row = TextView(context)
+            if (index > 0) {
 
-            row.text = label
+                val divider = TextView(context)
 
-            row.textSize = 16f
+                divider.setBackgroundColor(dividerColor)
 
-            row.setTextColor(
-                ContextCompat.getColor(
-                    context,
-                    R.color.text_primary_light
+                container.addView(
+                    divider,
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        (1 * density).toInt()
+                    ).apply {
+                        leftMargin = (20 * density).toInt()
+                        rightMargin = (20 * density).toInt()
+                    }
                 )
-            )
+            }
+
+            /*
+             * Fila: icono + texto.
+             */
+            val row = LinearLayout(context)
+
+            row.orientation = LinearLayout.HORIZONTAL
 
             row.gravity = Gravity.CENTER_VERTICAL
 
             row.setPadding(
                 (20 * density).toInt(),
-                (16 * density).toInt(),
+                (15 * density).toInt(),
                 (20 * density).toInt(),
-                (16 * density).toInt()
+                (15 * density).toInt()
             )
 
             row.isClickable = true
+
             row.isFocusable = true
 
-            /*
-             * Fondo personalizado.
-             *
-             * Cada opcion queda encerrada individualmente
-             * por un borde morado.
-             */
-            val optionBackground = GradientDrawable().apply {
-
-                shape = GradientDrawable.RECTANGLE
-
-                /*
-                 * Fondo oscuro.
-                 */
-                setColor(backgroundColor)
-
-                /*
-                 * Borde morado.
-                 */
-                setStroke(
-                    (1.5f * density).toInt(),
-                    purpleColor
-                )
-
-                /*
-                 * Esquinas redondeadas.
-                 */
-                cornerRadius = 12f * density
-            }
-
-            row.background = optionBackground
-
-            /*
-             * Ripple al presionar.
-             *
-             * No reemplazamos el fondo porque necesitamos
-             * conservar el borde morado.
-             */
             if (rippleBackground.resourceId != 0) {
-                row.foreground = ContextCompat.getDrawable(
+                row.background = ContextCompat.getDrawable(
                     context,
                     rippleBackground.resourceId
                 )
             }
 
-            /*
-             * Accion al pulsar.
-             */
+            val icon = ImageView(context)
+
+            icon.setImageResource(option.iconRes)
+
+            icon.imageTintList = android.content.res.ColorStateList.valueOf(
+                if (option.destructive) destructiveColor else secondaryColor
+            )
+
+            row.addView(
+                icon,
+                LinearLayout.LayoutParams(
+                    (20 * density).toInt(),
+                    (20 * density).toInt()
+                )
+            )
+
+            val label = TextView(context)
+
+            label.text = option.label
+
+            label.textSize = 15.5f
+
+            label.setTextColor(
+                if (option.destructive) destructiveColor else primaryColor
+            )
+
+            row.addView(
+                label,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    leftMargin = (16 * density).toInt()
+                }
+            )
+
             row.setOnClickListener {
 
                 dialog.dismiss()
 
-                action()
-            }
-
-            /*
-             * Parametros de cada opcion.
-             */
-            val rowParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-
-            /*
-             * Espacio entre cada cuadro.
-             */
-            if (index > 0) {
-                rowParams.topMargin = (8 * density).toInt()
+                option.action()
             }
 
             container.addView(
                 row,
-                rowParams
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
             )
         }
 
@@ -362,19 +412,7 @@ class PlaylistDialogs(
 
         titleInput.setText(song.title)
 
-        titleInput.setTextColor(
-            ContextCompat.getColor(
-                context,
-                R.color.text_primary_light
-            )
-        )
-
-        titleInput.setHintTextColor(
-            ContextCompat.getColor(
-                context,
-                R.color.text_secondary_light
-            )
-        )
+        styleDialogInput(titleInput)
 
         container.addView(titleInput)
 
@@ -387,19 +425,7 @@ class PlaylistDialogs(
 
         artistInput.setText(song.artist)
 
-        artistInput.setTextColor(
-            ContextCompat.getColor(
-                context,
-                R.color.text_primary_light
-            )
-        )
-
-        artistInput.setHintTextColor(
-            ContextCompat.getColor(
-                context,
-                R.color.text_secondary_light
-            )
-        )
+        styleDialogInput(artistInput)
 
         val artistParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,

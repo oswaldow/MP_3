@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="16dp"
+    android:layout_marginVertical="6dp"
+    android:background="@drawable/bg_item_song"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="16dp">
+
+    <ImageView
+        android:id="@+id/ivItemAlbumArt"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/bg_album_art_list"
+        android:clipToOutline="true"
+        android:contentDescription="Caratula del album"
+        android:foreground="@drawable/border_album_art_list"
+        android:padding="10dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_music_note"
+        android:tint="@color/spotify_gray" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvItemTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Titulo de la cancion"
+            android:textColor="@color/text_primary_light"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvItemArtist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Artista"
+            android:textColor="@color/text_secondary_light"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_marginStart="8dp">
+
+        <View
+            android:id="@+id/viewSelectionCircle"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="@drawable/bg_selection_circle_empty" />
+
+        <ImageView
+            android:id="@+id/ivSelectionCheck"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:layout_gravity="center"
+            android:contentDescription="Cancion seleccionada"
+            android:src="@drawable/ic_check"
+            android:visibility="gone" />
+
+    </FrameLayout>
+
+</LinearLayout>

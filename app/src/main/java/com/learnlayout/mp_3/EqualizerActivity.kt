@@ -50,6 +50,16 @@ class EqualizerActivity : AppCompatActivity() {
     private val bandSeekBars = mutableListOf<SeekBar>()
     private val bandValueLabels = mutableListOf<TextView>()
     private val presetChipViews = mutableListOf<TextView>()
+
+    // Tema dinamico: color de acento actual (de la caratula de la cancion
+    // en reproduccion, o el fallback morado si no hay ninguna). Se
+    // inicializa con el fallback y se actualiza via AppAccentColor.
+    private var chipAccentColor: Int = 0
+    private val accentColorListener: (Int?) -> Unit = { color ->
+        chipAccentColor = color ?: ContextCompat.getColor(this, R.color.purple_primary)
+        eqCurveView.setAccentColor(chipAccentColor)
+        presetChipViews.forEach { chip -> styleChip(chip, chip.tag == currentPresetLabel) }
+    }
     private val runningAnimators = mutableListOf<ValueAnimator>()
 
     // Label del preset actualmente resaltado (o null = ajuste personalizado).
@@ -149,7 +159,10 @@ class EqualizerActivity : AppCompatActivity() {
         EqualizerRepository.init(applicationContext)
 
         bindViews()
-        eqCurveView.setAccentColor(ContextCompat.getColor(this, R.color.spotify_green))
+        // Se registra despues de bindViews() porque el listener toca
+        // eqCurveView y presetChipViews en cuanto se suscribe (con el
+        // valor actual de AppAccentColor), y ambos deben existir ya.
+        AppAccentColor.addListener(accentColorListener)
 
         // Fondo neutro (igual al del Home sin cancion) mientras se conecta
         // el servicio; en cuanto llegue onServiceConnected se actualiza con
@@ -365,15 +378,14 @@ class EqualizerActivity : AppCompatActivity() {
         }
     }
 
-    // Estilo fijo de los chips de preset: no siguen la caratula, siempre
-    // son verde Spotify cuando estan seleccionados. Lo unico que ahora
-    // sigue a la cancion en pantalla es el fondo (ver ambientBackground).
+    // Los chips de preset seleccionados siguen chipAccentColor (caratula
+    // de la cancion actual, o el fallback morado si no hay ninguna). El
+    // fondo (ambientBackground) ya seguia la cancion; ahora tambien lo
+    // hacen estos chips, via accentColorListener.
     private fun styleChip(chip: TextView, selected: Boolean) {
         if (selected) {
             chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_selected)
-            chip.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.spotify_green)
-            )
+            chip.backgroundTintList = ColorStateList.valueOf(chipAccentColor)
             chip.setTextColor(ContextCompat.getColor(this, R.color.spotify_black))
         } else {
             chip.setBackgroundResource(R.drawable.bg_chip_eq_preset_unselected)
@@ -430,6 +442,7 @@ class EqualizerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        AppAccentColor.removeListener(accentColorListener)
         runningAnimators.forEach { it.cancel() }
         runningAnimators.clear()
         if (isBound) {

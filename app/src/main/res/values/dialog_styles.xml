@@ -157,6 +157,72 @@
             85%
         </item>
 
+        <!-- Antes el dialogo heredaba el azul por defecto de
+             AppCompat en el titulo, los botones y la lista de
+             opciones (setItems), lo que se veia fuera de lugar
+             junto al morado del resto de la app. -->
+
+        <item name="colorAccent">
+            @color/purple_primary
+        </item>
+
+        <item name="android:textColorPrimary">
+            @color/text_primary_light
+        </item>
+
+        <item name="android:textColorSecondary">
+            @color/text_secondary_light
+        </item>
+
+        <item name="android:textColorAlertDialogListItem">
+            @color/text_primary_light
+        </item>
+
+        <item name="buttonBarPositiveButtonStyle">
+            @style/DialogButtonPositive
+        </item>
+
+        <item name="buttonBarNegativeButtonStyle">
+            @style/DialogButtonNegative
+        </item>
+
+    </style>
+
+
+    <!-- ========================================================= -->
+    <!-- NUEVO: Botones del AlertDialog en el morado de la app      -->
+    <!-- ========================================================= -->
+
+    <style
+        name="DialogButtonPositive"
+        parent="Widget.AppCompat.Button.ButtonBar.AlertDialog">
+
+        <item name="android:textColor">
+            @color/purple_primary
+        </item>
+
+        <item name="android:textStyle">
+            bold
+        </item>
+
+        <item name="android:textAllCaps">
+            false
+        </item>
+
+    </style>
+
+    <style
+        name="DialogButtonNegative"
+        parent="Widget.AppCompat.Button.ButtonBar.AlertDialog">
+
+        <item name="android:textColor">
+            @color/text_secondary_light
+        </item>
+
+        <item name="android:textAllCaps">
+            false
+        </item>
+
     </style>
 
 </resources>

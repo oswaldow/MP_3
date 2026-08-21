@@ -43,6 +43,21 @@ class PlaybackEngine(
     }
 
     private var mediaPlayer: ExoPlayer? = null
+
+    // Indice, dentro de la cola, de la cancion que "mediaPlayer" tiene
+    // cargada ahora mismo. IMPORTANTE: esto es una copia local del
+    // indice, no una referencia viva a QueueManager.getCurrentIndex().
+    // Si la cola se reordena (arrastrar en la cola, swipe "sonara a
+    // continuacion", quitar una cancion, cambiar a shuffle/normal...)
+    // mientras esta cancion sigue sonando, QueueManager recalcula su
+    // propio currentIndex para seguir apuntando a la MISMA cancion, pero
+    // "loadedIndex" aqui NO se entera solo -hay que llamar a
+    // syncLoadedIndex() explicitamente (ver mas abajo)-. Si no se
+    // sincroniza, nextIndexFrom(loadedIndex) en handleCrossfadeTick()
+    // calcula la "siguiente cancion" a precargar/crossfade usando la
+    // posicion VIEJA, y termina preparando/cruzando hacia la cancion que
+    // ahora vive en esa posicion vieja en vez de la que el usuario
+    // realmente puso a continuacion.
     private var loadedIndex: Int = -1
 
     // Una sola sesion de audio para TODOS los ExoPlayer que crea este
@@ -54,6 +69,27 @@ class PlaybackEngine(
     private var sharedAudioSessionId: Int = AudioManager.ERROR
 
     private var progressRunnable: Runnable? = null
+
+    // --- Seek en curso ---
+    // Bandera que marca que hay un seekTo() del usuario todavia
+    // procesandose dentro de ExoPlayer (flush interno + reconexion de
+    // codecs). Mientras esto es true, isPlaying() del player puede dar
+    // false de forma TOTALMENTE transitoria aunque el usuario no haya
+    // pausado nada. Antes de este fix, si en ese instante exacto llegaba
+    // un STATE_ENDED tardio (por ejemplo al adelantar la cancion cerca
+    // del final, o por una notificacion asincrona retrasada de ExoPlayer)
+    // se disparaba onTrackEnded() -> playNext() -> playSongAt(), y
+    // playSongAt() decidia "hadOutgoing = false" por culpa de ese
+    // isPlaying() momentaneo y liberaba (release()) el MISMO player que
+    // seguia a mitad del seek del usuario. Eso mataba los codecs de audio
+    // y video sin que nadie se enterara (el listener ya se habia
+    // desenganchado justo antes de liberar), dejando "mediaPlayer"
+    // apuntando a un ExoPlayer muerto: play()/pausa seguian "funcionando"
+    // en apariencia (disparaban el fundido corto y el callback de UI)
+    // pero sin sonido real, para siempre. Ver TAG_XFADE en logcat:
+    // "STATE_ENDED ignorado por seek en curso".
+    private var isSeeking: Boolean = false
+    private var seekSafetyRunnable: Runnable? = null
 
     // --- Crossfade ---
     // Mientras se hace crossfade hay DOS ExoPlayer sonando a la vez:
@@ -96,6 +132,38 @@ class PlaybackEngine(
     private var preparedNextPlayer: ExoPlayer? = null
     private var preparedNextIndex: Int = -1
 
+    // *** FIX: referencia al listener de "preparado" para poder quitarlo ***
+    // createNextPlayerListener() se enganchaba a cada player candidato a
+    // "siguiente" (prepareNextPlayerAsync) y JAMAS se le quitaba, ni al
+    // promoverlo en beginCrossfade() ni al descartarlo en
+    // discardPreparedNextIfAny(). Ese listener revisa, cada vez que el
+    // player pasa a STATE_READY, si su "requestToken" sigue vigente; si no
+    // (porque ya se pidio preparar otra cancion mientras tanto), hace
+    // player.stop()+release().
+    //
+    // El problema: un ExoPlayer vuelve a pasar por STATE_READY no solo al
+    // terminar de bufferear la primera vez, sino CADA VEZ que sale de un
+    // STATE_BUFFERING -por ejemplo, al terminar un seekTo() del usuario-.
+    // Como el listener nunca se despegaba, seguia vivo colgado del player
+    // AUN DESPUES de que ese player se convirtiera en el "mediaPlayer"
+    // principal via finishCrossfade(). Entonces: cronologia real del bug
+    // -> termina el crossfade -> el motor empieza a preparar la SIGUIENTE
+    // cancion (prepareRequestToken avanza) -> el usuario adelanta la
+    // cancion actual con el dedo -> ExoPlayer pasa por BUFFERING y vuelve
+    // a READY al terminar el seek -> el listener viejo se dispara, ve su
+    // token obsoleto, y hace release() del reproductor que en ese momento
+    // es la musica sonando en vivo. "mediaPlayer" se queda apuntando para
+    // siempre a ese cadaver: play()/pausa()/seek() siguen "funcionando" en
+    // apariencia pero sin sonido, y en logcat solo se ve, sin ningun
+    // Log.d/e nuestro de por medio, una razaga de "ExoPlayerImplInternal:
+    // Ignoring messages sent after release." cada vez que se le manda algo.
+    //
+    // Se guarda la referencia al listener exacto de cada preparacion para
+    // poder desengancharlo con removeListener() en cuanto ese player deja
+    // de ser "candidato a precargado", ya sea porque se promueve
+    // (beginCrossfade) o porque se descarta (discardPreparedNextIfAny).
+    private var preparedNextListener: Player.Listener? = null
+
     // ID de la cancion para la que se preparo/quedo listo preparedNextPlayer.
     // Se compara por ID (no solo por indice numerico de la cola) porque el
     // indice puede seguir siendo el mismo despues de que el usuario
@@ -116,10 +184,6 @@ class PlaybackEngine(
     // vez de la que el usuario acababa de mover ahi.
     private var prepareRequestToken: Int = 0
 
-    // Marca de tiempo del ultimo tick del progressRunnable (cada 500ms) y
-    // del crossfadeRunnable (cada 100ms), para detectar jank del hilo
-    // principal.
-
     companion object {
         // Cada cuanto se revisa el progreso y se recalcula el volumen del
         // crossfade. 100ms da un fundido suave sin gastar mucha CPU.
@@ -139,6 +203,14 @@ class PlaybackEngine(
 
         private const val CROSSFADE_PREPARE_LEAD_MS = 4000L
 
+        // Tiempo maximo que se espera a que ExoPlayer confirme el fin de
+        // un seek (onPositionDiscontinuity con DISCONTINUITY_REASON_SEEK)
+        // antes de asumir por seguridad que ya termino. Es una red de
+        // seguridad: si por lo que sea ese callback nunca llega, sin este
+        // timeout "isSeeking" se quedaria en true para siempre y
+        // cualquier fin de cancion legitimo posterior se ignoraria.
+        private const val SEEK_SAFETY_TIMEOUT_MS = 1500L
+
         private const val TAG_XFADE = "MP3_XFADE"
 
         // AudioAttributes explicitos para todos los ExoPlayer de musica.
@@ -151,13 +223,73 @@ class PlaybackEngine(
     private val mainPlayerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                if (isSeeking) {
+                    // Fin de pista recibido mientras un seek del usuario
+                    // seguia en curso: es una notificacion espuria/tardia
+                    // de ExoPlayer, no un fin de cancion real. Dejarla
+                    // pasar es lo que provocaba liberar el player equivocado
+                    // en playSongAt() (ver comentario en el campo isSeeking).
+                    Log.w(TAG_XFADE, "onPlaybackStateChanged: STATE_ENDED ignorado por seek en curso")
+                    return
+                }
                 callback.onTrackEnded()
             }
         }
 
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int
+        ) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                clearSeekState()
+            }
+        }
+
         override fun onPlayerError(error: PlaybackException) {
+            // Si el player entra en error a mitad de un seek, tambien hay
+            // que soltar la bandera: de lo contrario un STATE_ENDED
+            // legitimo posterior (de OTRA cancion, con OTRO player) podria
+            // quedar bloqueado por error si por algun motivo isSeeking no
+            // se limpiara en otro lado.
+            clearSeekState()
             Log.e(TAG_XFADE, "onPlayerError en player principal: ${error.message}")
         }
+    }
+
+    /**
+     * Corrige "loadedIndex" cuando la cola cambia de forma que la
+     * cancion que sigue sonando pasa a vivir en OTRA posicion (reordenar,
+     * quitar una cancion antes de la actual, cambiar de modo de
+     * reproduccion...), sin recargar ni reiniciar nada en ExoPlayer: la
+     * cancion sigue siendo exactamente la misma, solo cambia el numero de
+     * indice con el que hay que ubicarla dentro de la cola.
+     *
+     * MusicService debe llamar a esto SIEMPRE despues de cualquier
+     * operacion sobre QueueManager que pueda mover el currentIndex
+     * mientras la reproduccion sigue con la misma cancion (moveQueueItem,
+     * removeQueueItem, setPlaybackMode/cyclePlaybackMode). Si no se
+     * llama, "loadedIndex" queda desfasado respecto al currentIndex real
+     * de QueueManager y el crossfade puede terminar preparando/cruzando
+     * hacia la cancion equivocada. Ver TAG_XFADE en logcat.
+     */
+    fun syncLoadedIndex(newIndex: Int) {
+        if (newIndex < 0 || newIndex == loadedIndex) return
+
+        Log.d(
+            TAG_XFADE,
+            "syncLoadedIndex: loadedIndex $loadedIndex -> $newIndex " +
+                    "(cola reordenada/modificada). Se descarta cualquier " +
+                    "'siguiente' precargado para el indice viejo."
+        )
+
+        loadedIndex = newIndex
+
+        // Cualquier player que ya se hubiera empezado a preparar (o que
+        // ya estuviera listo) para el "siguiente" calculado con el
+        // indice VIEJO ya no sirve: hay que recalcular con el indice
+        // correcto en el proximo tick de progreso.
+        discardPreparedNextIfAny()
     }
 
     fun getAudioSessionId(): Int = sharedAudioSessionId
@@ -177,6 +309,10 @@ class PlaybackEngine(
     fun playSongAt(index: Int) {
         val song = callback.songAt(index) ?: return
 
+        // Cualquier seek pendiente del player saliente deja de importar:
+        // estamos a punto de reemplazarlo (o liberarlo) de todas formas.
+        clearSeekState()
+
         // Si ya habia algo sonando, no se libera de inmediato: se deja
         // sonando un instante mas mientras se apaga con un fundido corto
         // (manualFadeOutAndRelease), al mismo tiempo que la cancion nueva
@@ -192,12 +328,33 @@ class PlaybackEngine(
         cancelManualChangeFadesIfAny()
         cancelPausePlayFadesIfAny()
 
+        Log.d(
+            TAG_XFADE,
+            "playSongAt(index=$index): outgoingPlayer=${outgoingPlayer?.let { System.identityHashCode(it) }} " +
+                    "hadOutgoing=$hadOutgoing"
+        )
+
         if (hadOutgoing && outgoingPlayer != null) {
-            outgoingPlayer.removeListener(mainPlayerListener)
+            runCatching { outgoingPlayer.removeListener(mainPlayerListener) }
+                .onFailure { Log.e(TAG_XFADE, "playSongAt: removeListener en outgoing fallo", it) }
         } else {
+            // *** FIX: proteger este release() con runCatching ***
+            // Antes, si outgoingPlayer.release() lanzaba una excepcion aqui
+            // (por ejemplo por un estado interno raro de ExoPlayer/MIUI),
+            // la funcion se cortaba ANTES de llegar a "mediaPlayer = null" y
+            // antes de construir el player nuevo: "mediaPlayer" se quedaba
+            // apuntando para siempre al player que se estaba intentando
+            // liberar, ya muerto/a medio morir, y ningun play()/pausa()
+            // posterior volvia a hacer nada (logcat: "Ignoring messages
+            // sent after release."). Ahora la excepcion se atrapa y se
+            // loguea, pero la funcion SIEMPRE sigue adelante y reasigna
+            // "mediaPlayer" a un player nuevo y funcional.
             outgoingPlayer?.let {
-                it.removeListener(mainPlayerListener)
-                it.release()
+                runCatching { it.removeListener(mainPlayerListener) }
+                    .onFailure { e -> Log.e(TAG_XFADE, "playSongAt: removeListener en outgoing fallo", e) }
+                runCatching { it.release() }
+                    .onFailure { e -> Log.e(TAG_XFADE, "playSongAt: release() del outgoing player fallo, " +
+                            "se continua igual reasignando mediaPlayer", e) }
             }
         }
         mediaPlayer = null
@@ -243,7 +400,9 @@ class PlaybackEngine(
 
     fun seekTo(positionMs: Int) {
         cancelCrossfadeIfAny()
-        mediaPlayer?.seekTo(positionMs.toLong())
+        val player = mediaPlayer ?: return
+        markSeekStarted()
+        player.seekTo(positionMs.toLong())
     }
 
     fun play() {
@@ -272,14 +431,51 @@ class PlaybackEngine(
 
     fun releasePlayer() {
         progressRunnable?.let { handler.removeCallbacks(it) }
+        clearSeekState()
         cancelCrossfadeIfAny()
         cancelPausePlayFadesIfAny()
         cancelManualChangeFadesIfAny()
+        // *** FIX: runCatching alrededor de release() ***
+        // Igual que en playSongAt()/finishCrossfade(): si release() lanza,
+        // "mediaPlayer = null" de abajo debe ejecutarse SIEMPRE.
         mediaPlayer?.let {
-            it.removeListener(mainPlayerListener)
-            it.release()
+            runCatching { it.removeListener(mainPlayerListener) }
+                .onFailure { e -> Log.e(TAG_XFADE, "releasePlayer: removeListener fallo", e) }
+            runCatching { it.release() }
+                .onFailure { e -> Log.e(TAG_XFADE, "releasePlayer: release() fallo, se limpia mediaPlayer igual", e) }
         }
         mediaPlayer = null
+    }
+
+    // --- Control de "hay un seek en curso" ---
+    //
+    // markSeekStarted() se llama al iniciar cada seekTo() del usuario.
+    // Mientras isSeeking es true, un STATE_ENDED que llegue al listener
+    // principal se trata como espurio y se ignora (ver mainPlayerListener
+    // arriba), en vez de disparar playNext()/playSongAt() sobre un player
+    // que ExoPlayer todavia esta terminando de flushear internamente.
+    //
+    // clearSeekState() se llama cuando el seek realmente termina
+    // (onPositionDiscontinuity con DISCONTINUITY_REASON_SEEK), o como red
+    // de seguridad tras SEEK_SAFETY_TIMEOUT_MS si ese callback no llega,
+    // o en cualquier punto donde el player actual va a ser reemplazado o
+    // liberado de todas formas (playSongAt, restoreSongAt via
+    // releasePlayer, finishCrossfade, releasePlayer).
+    private fun markSeekStarted() {
+        isSeeking = true
+        seekSafetyRunnable?.let { handler.removeCallbacks(it) }
+        val runnable = Runnable {
+            isSeeking = false
+            seekSafetyRunnable = null
+        }
+        seekSafetyRunnable = runnable
+        handler.postDelayed(runnable, SEEK_SAFETY_TIMEOUT_MS)
+    }
+
+    private fun clearSeekState() {
+        isSeeking = false
+        seekSafetyRunnable?.let { handler.removeCallbacks(it) }
+        seekSafetyRunnable = null
     }
 
     // DEBUG: engancha diagnostico profundo de audio a un player. Esto NO
@@ -435,6 +631,20 @@ class PlaybackEngine(
         // el mismo de antes.
         val upcomingSong = callback.songAt(upcomingIndex) ?: return
 
+        // DEBUG: si esto se dispara, "loadedIndex" (interno de
+        // PlaybackEngine) y el indice real de la cancion actual dentro de
+        // la cola YA NO COINCIDEN. Es la causa exacta del bug de "se
+        // reproduce la cancion equivocada tras reordenar la cola" -
+        // buscar TAG_XFADE en logcat.
+        if (remainingMs <= fadeMs + CROSSFADE_PREPARE_LEAD_MS) {
+            Log.d(
+                TAG_XFADE,
+                "handleCrossfadeTick: loadedIndex=$loadedIndex upcomingIndex=$upcomingIndex " +
+                        "upcomingSong='${upcomingSong.title}' (id=${upcomingSong.id}) remainingMs=$remainingMs " +
+                        "isSeeking=$isSeeking"
+            )
+        }
+
         // Fase 1: preparar con anticipacion, en segundo plano. Se compara
         // por ID de cancion: si ya se pidio preparar esta MISMA cancion
         // para esta posicion no hace falta repetirlo, pero si la cancion
@@ -449,7 +659,26 @@ class PlaybackEngine(
         }
 
         // Fase 2: si ya toca cruzar y el reproductor esta listo, arranca ya.
-        if (remainingMs <= fadeMs) {
+        //
+        // *** FIX: no cruzar mientras hay un seekTo() del usuario en curso ***
+        // isSeeking == true significa que ExoPlayer todavia esta procesando
+        // un seek sobre el player ACTUAL (el que esta a punto de convertirse
+        // en "saliente" si se cruza ahora mismo). beginCrossfade() le quita
+        // el listener a ese player y finishCrossfade() lo libera muy poco
+        // despues -a veces casi al instante, porque remainingMs puede quedar
+        // chico justo por culpa del propio seek que el usuario acaba de
+        // hacer (adelantar la cancion la deja cerca del final)-. Si eso pasa
+        // a mitad del seek, los mensajes internos que ExoPlayer todavia
+        // tiene en vuelo para ese seek llegan DESPUES del release() y se
+        // descartan silenciosamente ("Ignoring messages sent after
+        // release." en logcat). El resultado que ve el usuario es que la
+        // reproduccion se queda pegada (a veces sobre un player ya muerto)
+        // y tocar play/pausa ya no hace nada. Se espera a que el seek
+        // termine (isSeeking vuelve a false via onPositionDiscontinuity con
+        // DISCONTINUITY_REASON_SEEK, o por el timeout de seguridad de
+        // SEEK_SAFETY_TIMEOUT_MS) antes de permitir el cruce: el crossfade
+        // se retrasa como mucho ese timeout, nunca se pierde.
+        if (remainingMs <= fadeMs && !isSeeking) {
             val ready = preparedNextPlayer
             // Se verifica indice Y cancion: entre que el player quedo
             // listo y este momento, la cola pudo haberse reordenado. Sin
@@ -474,7 +703,9 @@ class PlaybackEngine(
         val requestToken = ++prepareRequestToken
 
         val player = buildPlayer(startVolume = 0f)
-        player.addListener(createNextPlayerListener(index, song.id, requestToken, player))
+        val listener = createNextPlayerListener(index, song.id, requestToken, player)
+        preparedNextListener = listener
+        player.addListener(listener)
         attachAudioDiagnostics(player, "NEXT idx=$index")
         player.setMediaItem(MediaItem.fromUri(song.uri))
         player.prepare()
@@ -526,14 +757,16 @@ class PlaybackEngine(
         // que su token ya no es el vigente y se descartara sola.
         prepareRequestToken++
 
-        preparedNextPlayer?.let {
-            runCatching { it.stop() }
-            runCatching { it.release() }
+        preparedNextPlayer?.let { player ->
+            preparedNextListener?.let { runCatching { player.removeListener(it) } }
+            runCatching { player.stop() }
+            runCatching { player.release() }
         }
         preparedNextPlayer = null
         preparedNextIndex = -1
         preparedNextSongId = null
         prepareRequestedForSongId = null
+        preparedNextListener = null
     }
 
     private fun beginCrossfade(upcomingIndex: Int, readyPlayer: ExoPlayer, durationMs: Long) {
@@ -542,6 +775,19 @@ class PlaybackEngine(
             discardPreparedNextIfAny()
             return
         }
+
+        // *** FIX: desenganchar el listener de "preparado" ANTES de que ***
+        // *** este player pase a vivir como nextMediaPlayer/mediaPlayer ***
+        // Sin esto, createNextPlayerListener() se queda pegado para
+        // siempre: la proxima vez que ExoPlayer vuelva a pasar por
+        // STATE_READY (por ejemplo, al terminar un seekTo() del usuario ya
+        // reproduciendo esta cancion como principal), ese listener viejo
+        // ve su requestToken ya obsoleto y hace stop()+release() sobre el
+        // reproductor que en ese momento es la musica sonando en vivo, sin
+        // que "mediaPlayer" se entere ni se ponga en null. Ver comentario
+        // largo en el campo "preparedNextListener".
+        preparedNextListener?.let { runCatching { readyPlayer.removeListener(it) } }
+        preparedNextListener = null
 
         nextMediaPlayer = readyPlayer
         nextIndexDuringCrossfade = upcomingIndex
@@ -611,8 +857,37 @@ class PlaybackEngine(
             return
         }
 
-        mediaPlayer?.removeListener(mainPlayerListener)
-        mediaPlayer?.release()
+        // El player entrante pasa a ser el principal: cualquier seek que
+        // estuviera pendiente sobre el player SALIENTE (que esta a punto
+        // de liberarse justo debajo) deja de tener sentido.
+        clearSeekState()
+
+        Log.d(
+            TAG_XFADE,
+            "finishCrossfade(): outgoing(mediaPlayer)=${mediaPlayer?.let { System.identityHashCode(it) }} " +
+                    "-> incoming=${System.identityHashCode(incomingPlayer)} finishedIndex=$finishedIndex"
+        )
+
+        // *** FIX CRITICO ***
+        // Antes, "mediaPlayer?.release()" iba SIN runCatching. Si lanzaba
+        // una excepcion (estado interno raro de ExoPlayer, mas facil de
+        // ver en MIUI que a veces se traga excepciones del hilo principal
+        // sin mostrar el dialogo de crash), la funcion se cortaba EN ESTE
+        // PUNTO: la reasignacion "mediaPlayer = incomingPlayer" de abajo
+        // nunca llegaba a ejecutarse. Resultado: "mediaPlayer" se quedaba
+        // apuntando para siempre al player SALIENTE (el que se estaba
+        // intentando liberar, ya muerto o a medio morir), justo en el
+        // instante en que el crossfade "termina" y arranca la cancion
+        // nueva. Cualquier play()/pausa() posterior actuaba sobre ese
+        // player muerto y no volvia a sonar nada (logcat: "Ignoring
+        // messages sent after release."). Con el runCatching de abajo, la
+        // excepcion se loguea pero la reasignacion a "incomingPlayer"
+        // ocurre SIEMPRE.
+        runCatching { mediaPlayer?.removeListener(mainPlayerListener) }
+            .onFailure { e -> Log.e(TAG_XFADE, "finishCrossfade: removeListener del outgoing fallo", e) }
+        runCatching { mediaPlayer?.release() }
+            .onFailure { e -> Log.e(TAG_XFADE, "finishCrossfade: release() del outgoing fallo, " +
+                    "se reasigna mediaPlayer al incoming igual", e) }
 
         val song = callback.songAt(finishedIndex)
         mediaPlayer = incomingPlayer.apply {
@@ -623,6 +898,8 @@ class PlaybackEngine(
         nextMediaPlayer = null
         nextIndexDuringCrossfade = -1
         isCrossfading = false
+
+        Log.d(TAG_XFADE, "finishCrossfade(): mediaPlayer ahora es ${System.identityHashCode(mediaPlayer)}")
 
         if (song != null) {
             callback.onSongStarted(song, finishedIndex, SongStartReason.CROSSFADE)

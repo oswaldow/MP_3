@@ -218,11 +218,11 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="5dp"
                             android:ellipsize="end"
+                            android:fontFamily="@font/poppins_semibold"
                             android:maxLines="2"
                             android:text="Empieza a escuchar"
                             android:textColor="@color/text_primary_light"
-                            android:textSize="18sp"
-                            android:textStyle="bold" />
+                            android:textSize="18sp" />
 
                         <TextView
                             android:id="@+id/tvHomeHeroArtist"
@@ -236,15 +236,6 @@
                             android:textSize="13sp" />
 
                     </LinearLayout>
-
-                    <ImageButton
-                        android:id="@+id/btnHomeHeroPlay"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:background="@drawable/btn_primary_round"
-                        android:contentDescription="Reproducir"
-                        android:padding="12dp"
-                        android:src="@drawable/ic_play_arrow" />
 
                 </LinearLayout>
 
@@ -780,11 +771,11 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:ellipsize="end"
+                        android:fontFamily="@font/poppins_bold"
                         android:maxLines="1"
                         android:text="Cancion actual"
                         android:textColor="@color/text_primary_light"
-                        android:textSize="26sp"
-                        android:textStyle="bold" />
+                        android:textSize="26sp" />
 
                     <TextView
                         android:id="@+id/tvPanelArtist"
@@ -897,7 +888,6 @@
                     android:layout_width="0dp"
                     android:layout_height="56dp"
                     android:layout_weight="1">
-
                     <ImageButton
                         android:id="@+id/btnPanelPrevious"
                         android:layout_width="56dp"

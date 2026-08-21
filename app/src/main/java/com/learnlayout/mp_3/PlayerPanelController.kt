@@ -469,6 +469,7 @@ class PlayerPanelController(
                 ) { color ->
                     currentAccentColor = color
                     applyControlsAccent(color)
+                    AppAccentColor.update(color)
                 }
             }
         }
@@ -508,6 +509,7 @@ class PlayerPanelController(
         ) { color ->
             currentAccentColor = color
             applyControlsAccent(color)
+            AppAccentColor.update(color)
         }
     }
 
@@ -527,6 +529,11 @@ class PlayerPanelController(
             currentAccentColor = color
             applyControlsAccent(color)
         }
+        // Sin caratula no hay color que extraer: el resto de la app (tab
+        // activo, botones de Home, chips del ecualizador) debe volver a su
+        // fallback morado fijo, no quedarse pegado al ultimo color de la
+        // ultima cancion con caratula.
+        AppAccentColor.reset()
     }
 
     private fun applyControlsAccent(color: Int) {

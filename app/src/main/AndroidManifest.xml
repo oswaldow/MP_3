@@ -69,6 +69,12 @@
             android:label="@string/app_name"
             android:theme="@style/Theme.MP_3" />
 
+        <activity
+            android:name=".AddSongsToPlaylistActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MP_3" />
+
         <service
             android:name=".MusicService"
             android:exported="false"

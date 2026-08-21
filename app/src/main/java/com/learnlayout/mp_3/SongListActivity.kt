@@ -273,6 +273,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         )
     }
 
+    // Tema dinamico: null significa "sin cancion con caratula" -> usar el
+    // fallback morado fijo (R.color.purple_primary). No purple_primary
+    // como tal: cada consumidor decide su propio matiz de fallback si lo
+    // necesita, pero por ahora todos comparten el mismo.
+    private val accentColorListener: (Int?) -> Unit = { color ->
+        val resolved = color ?: ContextCompat.getColor(this, R.color.purple_primary)
+        topBarController.applyAccentColor(resolved)
+        if (::homeController.isInitialized) homeController.applyAccentColor(resolved)
+    }
+
     private val topBarController by lazy {
         TopBarController(
             activity = this,
@@ -385,6 +395,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         setupLyricsPanel()
         setupEdgeToEdge()
         setupBackPress()
+
+        // Tema dinamico: tab activo (TopBarController) y botones de Home
+        // (HomeController) siguen el color de la caratula de la cancion
+        // actual. Se suscriben aqui (y se desuscriben en onDestroy) en vez
+        // de en su propio setup() porque AppAccentColor es un singleton que
+        // vive mas alla del ciclo de vida de esta Activity.
+        AppAccentColor.addListener(accentColorListener)
 
         currentSort = PlaybackStateRepository.getSortType(this)
         isReverseOrder = PlaybackStateRepository.getSortReversed(this)
@@ -981,6 +998,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        AppAccentColor.removeListener(accentColorListener)
         stopMiniProgressPolling()
         queueSheet.dismiss()
         lyricsPanelController.cancelAnimations()

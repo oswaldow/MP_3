@@ -158,7 +158,13 @@ class TopBarController(
 
         activeTab.setBackgroundResource(R.drawable.bg_tab_selected)
         activeTab.backgroundTintList = ColorStateList.valueOf(currentAccentColor)
-        activeTab.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
+        // Antes esto era siempre text_primary_light (blanco fijo). Si el
+        // acento extraido de la caratula sale claro (casi blanco), el
+        // fondo de la pestaña activa y su texto quedaban del mismo tono y
+        // la palabra "Canciones"/"Playlists" desaparecia. onColorFor()
+        // calcula blanco o negro segun el contraste real del fondo, igual
+        // que ya se hizo para el boton de play del Home (HomeController).
+        activeTab.setTextColor(PlayerPaletteTheme.onColorFor(currentAccentColor))
 
         inactiveTab.background = null
         inactiveTab.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
@@ -435,8 +441,11 @@ class TopBarController(
     // Cierra la barra de busqueda inline si estaba abierta, dejando los
     // botones/textos del encabezado en su estado normal. Se usa al entrar
     // a Playlists (desde Home o desde Canciones), donde la busqueda no
-    // aplica.
-    private fun closeSearchIfVisible() {
+    // aplica, y tambien al volver a Home (ver HomeNavigationController.
+    // showHome()): antes solo se ocultaba btnSearch, pero llInlineSearch
+    // se quedaba visible y "flotando" sobre Home si el usuario presionaba
+    // Atras mientras tenia la busqueda abierta en Canciones.
+    fun closeSearchIfVisible() {
         if (!isSearchVisible) return
         isSearchVisible = false
         llInlineSearch.visibility = View.GONE

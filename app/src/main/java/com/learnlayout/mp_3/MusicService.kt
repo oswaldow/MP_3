@@ -7,6 +7,7 @@ import android.os.Binder
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 
 
 class MusicService : Service() {
@@ -47,6 +48,10 @@ class MusicService : Service() {
     }
 
     companion object {
+        // Mismo tag que usa PlaybackEngine/QueueManager para el debug del
+        // crossfade y la cola: buscar "MP3_XFADE" en logcat.
+        private const val TAG_XFADE = "MP3_XFADE"
+
         const val ACTION_PLAY_PAUSE = "com.learnlayout.mp_3.action.PLAY_PAUSE"
         const val ACTION_NEXT = "com.learnlayout.mp_3.action.NEXT"
         const val ACTION_PREVIOUS = "com.learnlayout.mp_3.action.PREVIOUS"
@@ -249,6 +254,11 @@ class MusicService : Service() {
     fun cyclePlaybackMode(): PlaybackMode {
         playbackEngine.cancelCrossfadeIfAny()
         val mode = queueManager.cyclePlaybackMode()
+        // El modo NORMAL/SHUFFLE puede reubicar la cancion actual dentro
+        // de songList (en SHUFFLE, por ejemplo, siempre pasa a index 0).
+        // Sin esto, PlaybackEngine sigue creyendo que esta en el indice
+        // viejo. Ver PlaybackEngine.syncLoadedIndex().
+        playbackEngine.syncLoadedIndex(queueManager.getCurrentIndex())
         persistQueueState()
         updateWidgets()
         return mode
@@ -257,6 +267,7 @@ class MusicService : Service() {
     fun setPlaybackMode(mode: PlaybackMode) {
         playbackEngine.cancelCrossfadeIfAny()
         queueManager.setPlaybackMode(mode)
+        playbackEngine.syncLoadedIndex(queueManager.getCurrentIndex())
         persistQueueState()
     }
 
@@ -270,6 +281,26 @@ class MusicService : Service() {
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {
         playbackEngine.cancelCrossfadeIfAny()
         queueManager.moveQueueItem(fromIndex, toIndex)
+        // *** FIX del bug de "reordenar la cola no respeta la cancion que
+        // puse a continuacion" ***
+        // moveQueueItem() de arriba puede desplazar el currentIndex de
+        // QueueManager (por ejemplo, al mover una cancion que estaba
+        // ANTES de la actual hacia una posicion DESPUES de ella). Cuando
+        // eso pasa, PlaybackEngine.loadedIndex se queda apuntando a la
+        // posicion vieja, y el calculo de "siguiente cancion para
+        // crossfade" (nextIndexFrom(loadedIndex) en handleCrossfadeTick)
+        // usa esa posicion vieja: termina precargando/cruzando hacia la
+        // cancion que quedo en esa posicion despues del reordenamiento,
+        // no hacia la que el usuario realmente puso a continuacion.
+        // syncLoadedIndex() corrige el indice y descarta cualquier
+        // "siguiente" que ya se hubiera precargado con el indice viejo.
+        playbackEngine.syncLoadedIndex(queueManager.getCurrentIndex())
+        Log.d(
+            TAG_XFADE,
+            "MusicService.moveQueueItem($fromIndex, $toIndex) -> " +
+                    "queueManager.currentIndex=${queueManager.getCurrentIndex()} " +
+                    "cancion actual='${queueManager.getCurrentSong()?.title}'"
+        )
         persistQueueState()
     }
 
@@ -278,6 +309,9 @@ class MusicService : Service() {
         playbackEngine.cancelCrossfadeIfAny()
         val removed = queueManager.removeQueueItem(index)
         if (removed) {
+            // Mismo motivo que en moveQueueItem(): quitar una cancion
+            // ANTES de la actual desplaza currentIndex hacia atras.
+            playbackEngine.syncLoadedIndex(queueManager.getCurrentIndex())
             persistQueueState()
         }
         return removed

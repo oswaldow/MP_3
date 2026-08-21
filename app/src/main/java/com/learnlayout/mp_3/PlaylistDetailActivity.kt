@@ -87,6 +87,15 @@ class PlaylistDetailActivity : AppCompatActivity() {
             }
         }
 
+        // Recientes y Mas escuchadas se arman solas con el historial: no
+        // tiene caso ofrecer "agregar canciones" a mano ahi.
+        binding.btnAddSongs.visibility = if (isAutoPlaylist()) View.GONE else View.VISIBLE
+        binding.btnAddSongs.setOnClickListener {
+            val intent = Intent(this, AddSongsToPlaylistActivity::class.java)
+            intent.putExtra(AddSongsToPlaylistActivity.EXTRA_PLAYLIST_ID, playlistId)
+            startActivity(intent)
+        }
+
         binding.rvPlaylistSongs.layoutManager = LinearLayoutManager(this)
         songAdapter = SongAdapter(
             emptyList(),

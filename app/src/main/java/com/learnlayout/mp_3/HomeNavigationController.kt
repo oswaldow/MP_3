@@ -33,6 +33,13 @@ class HomeNavigationController(
         rvPlaylists.visibility = View.GONE
         emptyState.visibility = View.GONE
 
+        // Si el usuario venia de Canciones con la busqueda abierta (por
+        // ejemplo, presiono Atras a mitad de una busqueda), la cerramos
+        // aqui. Antes solo se ocultaba btnSearch mas abajo, pero la caja
+        // de busqueda (llInlineSearch) en si no se escondia, asi que se
+        // quedaba flotando encima de Home.
+        topBarController.closeSearchIfVisible()
+
         topBarController.setHomeActive(true)
 
         homeView.visibility = View.VISIBLE
