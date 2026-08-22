@@ -116,4 +116,20 @@ object PlaylistRepository {
         val entity = dao.getPlaylistEntity(playlistId) ?: return
         dao.updatePlaylist(entity.copy(coverImageUri = uri))
     }
+
+    /**
+     * Guarda el nuevo orden de [orderedSongIds] dentro de la playlist,
+     * despues de que el usuario arrastra una cancion en
+     * PlaylistDetailActivity. insertPlaylistSong ya usa REPLACE ante
+     * conflicto de la llave primaria (playlistId, songId), asi que
+     * reinsertar con la posicion nueva sobreescribe la vieja sin duplicar
+     * filas.
+     */
+    fun reorderPlaylistSongs(context: Context, playlistId: String, orderedSongIds: List<Long>) {
+        val dao = dao(context)
+        val refs = orderedSongIds.mapIndexed { index, songId ->
+            PlaylistSongCrossRef(playlistId, songId, index)
+        }
+        dao.insertPlaylistSongs(refs)
+    }
 }

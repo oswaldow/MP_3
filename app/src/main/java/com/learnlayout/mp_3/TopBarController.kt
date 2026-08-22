@@ -54,6 +54,16 @@ class TopBarController(
     private var swipeDownY = 0f
     private var swipeTracking = false
 
+    // true si el ACTION_DOWN de este gesto cayo sobre rvSongs. La lista
+    // de canciones ya tiene su propio swipe a la derecha (SongSwipeToQueueCallback,
+    // "sonará a continuación") manejado por su ItemTouchHelper; si este
+    // detector global de swipe (para navegar Canciones -> Home) tambien
+    // procesa ese mismo gesto, un swipe sobre una fila termina agregando
+    // la cancion a la cola Y ademas regresando a Home. Por eso, cuando el
+    // gesto empieza sobre la lista, se deja que sea unicamente el
+    // ItemTouchHelper quien lo interprete.
+    private var downOverSongsList = false
+
     // ---------- Tema dinamico ----------
 
     private var currentAccentColor: Int = ContextCompat.getColor(activity, R.color.spotify_green)
@@ -259,11 +269,17 @@ class TopBarController(
                 swipeDownX = ev.rawX
                 swipeDownY = ev.rawY
                 swipeTracking = true
+                downOverSongsList = isPointOverView(rvSongs, ev.rawX, ev.rawY)
             }
 
             MotionEvent.ACTION_UP -> {
                 if (!swipeTracking) return
                 swipeTracking = false
+
+                if (downOverSongsList) {
+                    downOverSongsList = false
+                    return
+                }
 
                 val diffX = ev.rawX - swipeDownX
                 val diffY = ev.rawY - swipeDownY
@@ -324,8 +340,26 @@ class TopBarController(
 
             MotionEvent.ACTION_CANCEL -> {
                 swipeTracking = false
+                downOverSongsList = false
             }
         }
+    }
+
+    // true si el punto (rawX, rawY) en coordenadas de pantalla cae dentro
+    // de los limites actuales de [view]. Si la vista esta oculta (por
+    // ejemplo rvSongs mientras se muestra Playlists) devuelve false, que
+    // es lo correcto: en ese caso el gesto no puede haber empezado ahi.
+    private fun isPointOverView(view: View, rawX: Float, rawY: Float): Boolean {
+        if (view.visibility != View.VISIBLE) return false
+
+        val location = IntArray(2)
+        view.getLocationOnScreen(location)
+        val left = location[0]
+        val top = location[1]
+        val right = left + view.width
+        val bottom = top + view.height
+
+        return rawX >= left && rawX <= right && rawY >= top && rawY <= bottom
     }
 
     // ============================================================

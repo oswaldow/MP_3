@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.learnlayout.mp_3.databinding.ActivityPlaylistDetailBinding
 
@@ -21,6 +22,7 @@ class PlaylistDetailActivity : AppCompatActivity() {
     private lateinit var playlistId: String
     private var playlistSongs: MutableList<Song> = mutableListOf()
     private lateinit var songAdapter: SongAdapter
+    private var touchHelper: ItemTouchHelper? = null
 
     // ---------- Fondo dinamico (Material You + destellos, igual al Home) ----------
     // Preferimos la cancion que esta sonando ahora mismo (mismo criterio
@@ -97,12 +99,27 @@ class PlaylistDetailActivity : AppCompatActivity() {
         }
 
         binding.rvPlaylistSongs.layoutManager = LinearLayoutManager(this)
+
+        // Reordenar a mano solo tiene sentido en playlists propias: las
+        // automaticas (Recientes/Mas escuchadas) recalculan su propio orden
+        // solas y no aceptarian un orden manual persistente.
+        val canReorder = !isAutoPlaylist()
         songAdapter = SongAdapter(
             emptyList(),
             onItemClick = { position -> openPlayer(position) },
-            onMenuClick = { position -> confirmRemoveSong(position) }
+            onMenuClick = { position -> confirmRemoveSong(position) },
+            reorderable = canReorder,
+            onMoveFinished = { _, _ -> persistCurrentOrder() }
         )
         binding.rvPlaylistSongs.adapter = songAdapter
+
+        if (canReorder) {
+            val callback = PlaylistSongTouchHelperCallback(songAdapter)
+            val helper = ItemTouchHelper(callback)
+            helper.attachToRecyclerView(binding.rvPlaylistSongs)
+            touchHelper = helper
+            songAdapter.dragStartListener = { viewHolder -> helper.startDrag(viewHolder) }
+        }
 
         loadPlaylistSongs()
 
@@ -154,6 +171,13 @@ class PlaylistDetailActivity : AppCompatActivity() {
         binding.rvPlaylistSongs.visibility = if (hasSongs) View.VISIBLE else View.GONE
 
         updateAmbientBackground()
+    }
+
+    /** Se llama cuando el usuario suelta una cancion arrastrada: guarda el orden que quedo en el adapter. */
+    private fun persistCurrentOrder() {
+        val newOrder = songAdapter.getCurrentList()
+        playlistSongs = newOrder.toMutableList()
+        PlaylistRepository.reorderPlaylistSongs(this, playlistId, newOrder.map { it.id })
     }
 
     private fun confirmRemoveSong(position: Int) {

@@ -9,6 +9,15 @@ import androidx.recyclerview.widget.RecyclerView
 
 class QueueTouchHelperCallback(
     private val adapter: QueueAdapter,
+    // Arrastrar (reordenar) solo tiene sentido sobre la cola completa: en
+    // modo busqueda las posiciones mostradas no son continuas respecto a
+    // la cola real. El swipe (agregar a continuacion / quitar) SI tiene
+    // sentido en ambos casos, porque quien llama a este callback ya
+    // traduce la posicion mostrada al indice real antes de actuar (ver
+    // QueueSheetController.refreshList()). Antes, todo el ItemTouchHelper
+    // se dejaba de conectar durante la busqueda, lo que tambien
+    // desactivaba el swipe sin necesidad.
+    private val dragEnabled: Boolean = true,
     private val onSwipeToPlayNext: (Int) -> Unit,
     private val onSwipeToRemove: (Int) -> Unit
 ) : ItemTouchHelper.Callback() {
@@ -27,8 +36,12 @@ class QueueTouchHelperCallback(
     ): Int {
 
         val dragFlags =
-            ItemTouchHelper.UP or
-                    ItemTouchHelper.DOWN
+            if (dragEnabled) {
+                ItemTouchHelper.UP or
+                        ItemTouchHelper.DOWN
+            } else {
+                0
+            }
 
         val swipeFlags =
             ItemTouchHelper.RIGHT or

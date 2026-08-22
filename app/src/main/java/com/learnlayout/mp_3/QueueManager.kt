@@ -2,17 +2,7 @@ package com.learnlayout.mp_3
 
 import android.util.Log
 
-/**
- * Dueño de la lista de reproducción.
- *
- * Mantiene:
- * - la lista original
- * - la lista actualmente utilizada
- * - el índice de la canción actual
- * - el modo de reproducción
- *
- * No conoce ExoPlayer, notificaciones ni MediaSession.
- */
+
 class QueueManager {
 
     companion object {
@@ -493,6 +483,12 @@ class QueueManager {
     /**
      * Inserta una canción inmediatamente
      * después de la canción actual.
+     *
+     * Si la canción ya estaba en la parte "por venir" de la cola (por
+     * ejemplo, por un swipe anterior sobre la misma canción), esa copia
+     * se quita primero. Sin esto, deslizar la misma canción varias veces
+     * dejaba una copia duplicada por cada swipe en vez de solo mover la
+     * canción al frente de "a continuación".
      */
     fun addToPlayNext(
         song: Song
@@ -502,11 +498,24 @@ class QueueManager {
             return false
         }
 
-        val insertAt =
-            currentIndex + 1
-
         val mutableList =
             songList.toMutableList()
+
+        val existingUpcomingIndex =
+            mutableList
+                .withIndex()
+                .drop(currentIndex + 1)
+                .firstOrNull { (_, existingSong) ->
+                    existingSong.id == song.id
+                }
+                ?.index
+
+        if (existingUpcomingIndex != null) {
+            mutableList.removeAt(existingUpcomingIndex)
+        }
+
+        val insertAt =
+            currentIndex + 1
 
         mutableList.add(
             insertAt,

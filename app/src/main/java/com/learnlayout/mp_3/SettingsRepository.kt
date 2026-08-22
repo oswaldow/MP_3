@@ -3,9 +3,9 @@ package com.learnlayout.mp_3
 import android.content.Context
 
 // Guarda las preferencias de configuracion de la app (crossfade, lectura de
-// WhatsApp, voz de lectura). Se usa tanto desde SettingsActivity (para
-// escribir) como desde MusicService/WhatsAppNotificationReaderService (para
-// leer).
+// WhatsApp, voz de lectura, normalizacion de volumen). Se usa tanto desde
+// SettingsActivity (para escribir) como desde MusicService/PlaybackEngine/
+// WhatsAppNotificationReaderService (para leer).
 object SettingsRepository {
 
     private const val PREFS_NAME = "mp3_settings"
@@ -13,6 +13,7 @@ object SettingsRepository {
     private const val KEY_CROSSFADE_SECONDS = "crossfade_seconds"
     private const val KEY_WHATSAPP_READING_ENABLED = "whatsapp_reading_enabled"
     private const val KEY_TTS_VOICE_NAME = "tts_voice_name"
+    private const val KEY_VOLUME_NORMALIZATION_ENABLED = "volume_normalization_enabled"
 
     const val MIN_CROSSFADE_SECONDS = 5
     const val MAX_CROSSFADE_SECONDS = 20
@@ -55,5 +56,13 @@ object SettingsRepository {
 
     fun setTtsVoiceName(context: Context, voiceName: String?) {
         prefs(context).edit().putString(KEY_TTS_VOICE_NAME, voiceName).apply()
+    }
+
+    fun isVolumeNormalizationEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_VOLUME_NORMALIZATION_ENABLED, false)
+    }
+
+    fun setVolumeNormalizationEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_VOLUME_NORMALIZATION_ENABLED, enabled).apply()
     }
 }

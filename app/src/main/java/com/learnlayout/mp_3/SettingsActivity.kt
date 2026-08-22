@@ -104,6 +104,7 @@ class SettingsActivity : AppCompatActivity() {
         updateDurationGroupEnabled(enabled)
 
         binding.switchWhatsappReading.isChecked = SettingsRepository.isWhatsAppReadingEnabled(this)
+        binding.switchVolumeNormalization.isChecked = SettingsRepository.isVolumeNormalizationEnabled(this)
         updateNotificationAccessStatus()
         updateVoiceSummary()
     }
@@ -135,6 +136,13 @@ class SettingsActivity : AppCompatActivity() {
 
         binding.rowEqualizer.setOnClickListener {
             startActivity(Intent(this, EqualizerActivity::class.java))
+        }
+
+        binding.switchVolumeNormalization.setOnCheckedChangeListener { _, isChecked ->
+            SettingsRepository.setVolumeNormalizationEnabled(this, isChecked)
+            // Efecto inmediato: no hace falta esperar a la siguiente
+            // cancion para que se note el cambio.
+            ReplayGainAudioProcessor.setEnabled(isChecked)
         }
 
         binding.rowDownloadLyrics.setOnClickListener {

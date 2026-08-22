@@ -3,6 +3,7 @@ package com.learnlayout.mp_3
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
@@ -13,12 +14,25 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 
 class SongAdapter(
-    private var songs: List<Song>,
+    initialSongs: List<Song>,
     private val onItemClick: (Int) -> Unit,
-    private val onMenuClick: ((Int) -> Unit)? = null
+    private val onMenuClick: ((Int) -> Unit)? = null,
+    // Solo PlaylistDetailActivity (en playlists propias, no en las
+    // automaticas de historial) activa esto: muestra el handle de arrastre
+    // y permite reordenar a mano.
+    private val reorderable: Boolean = false,
+    // Se llama cuando el usuario suelta una cancion en una posicion nueva,
+    // para que quien use este adapter persista el nuevo orden.
+    private val onMoveFinished: ((fromPosition: Int, toPosition: Int) -> Unit)? = null
 ) : RecyclerView.Adapter<SongAdapter.SongViewHolder>() {
 
+    private var songs: MutableList<Song> = initialSongs.toMutableList()
+
     private var currentPlayingId: Long? = null
+
+    // Lo conecta quien use el adapter con un ItemTouchHelper.startDrag(...),
+    // igual que ya hace QueueAdapter con la cola de reproduccion.
+    var dragStartListener: ((RecyclerView.ViewHolder) -> Unit)? = null
 
     // Duracion del fade entre el placeholder (ic_music_note) y la caratula
     // real cuando llega de red/disco. Mismo criterio de suavidad que ya usa
@@ -32,6 +46,7 @@ class SongAdapter(
         val tvTitle: TextView = itemView.findViewById(R.id.tvItemTitle)
         val tvArtist: TextView = itemView.findViewById(R.id.tvItemArtist)
         val btnMenu: ImageButton = itemView.findViewById(R.id.btnItemMenu)
+        val ivDragHandle: ImageView = itemView.findViewById(R.id.ivDragHandle)
 
         // Padding original del placeholder (ic_music_note), para poder
         // restaurarlo cuando la caratula real no aplica o cambia el item.
@@ -66,6 +81,19 @@ class SongAdapter(
             holder.btnMenu.setOnClickListener { onMenuClick.invoke(position) }
         } else {
             holder.btnMenu.visibility = View.GONE
+        }
+
+        if (reorderable) {
+            holder.ivDragHandle.visibility = View.VISIBLE
+            holder.ivDragHandle.setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    dragStartListener?.invoke(holder)
+                }
+                false
+            }
+        } else {
+            holder.ivDragHandle.visibility = View.GONE
+            holder.ivDragHandle.setOnTouchListener(null)
         }
 
         bindAlbumArt(holder, song)
@@ -161,7 +189,7 @@ class SongAdapter(
     override fun getItemCount(): Int = songs.size
 
     fun updateData(newSongs: List<Song>) {
-        songs = newSongs
+        songs = newSongs.toMutableList()
         notifyDataSetChanged()
     }
 
@@ -173,4 +201,19 @@ class SongAdapter(
     fun getSongAt(position: Int): Song = songs[position]
 
     fun getCurrentList(): List<Song> = songs
+
+    /** Mueve visualmente una cancion mientras se arrastra (llamado desde el ItemTouchHelper.Callback en cada onMove). */
+    fun onItemMove(fromPosition: Int, toPosition: Int) {
+        if (fromPosition !in songs.indices || toPosition !in songs.indices) return
+        val item = songs.removeAt(fromPosition)
+        songs.add(toPosition, item)
+        notifyItemMoved(fromPosition, toPosition)
+    }
+
+    /** Se llama cuando el usuario suelta el dedo tras arrastrar: aqui se dispara la persistencia del nuevo orden. */
+    fun onDragFinished(fromPosition: Int, toPosition: Int) {
+        if (fromPosition != toPosition) {
+            onMoveFinished?.invoke(fromPosition, toPosition)
+        }
+    }
 }

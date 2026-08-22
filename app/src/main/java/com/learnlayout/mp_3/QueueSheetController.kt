@@ -307,39 +307,60 @@ class QueueSheetController(
             }
         }
 
-        // Arrastrar para reordenar y deslizar para quitar/reproducir a
-        // continuacion solo tienen sentido sobre la cola completa: en modo
-        // busqueda las posiciones mostradas no son continuas respecto a la
-        // cola real, asi que ni siquiera se conecta el ItemTouchHelper
-        // (ademas de que QueueAdapter ya oculta el handle de arrastre via
-        // searchMode).
-        if (!isSearching) {
-            val newTouchHelper = ItemTouchHelper(
-                QueueTouchHelperCallback(
-                    adapter = adapter,
-                    onSwipeToPlayNext = { position ->
+        // *** FIX del bug "buscar en la cola + deslizar no pone la
+        // cancion a continuacion" ***
+        // refreshList() se llama en CADA tecla que se escribe en el
+        // buscador de la cola (ver TextWatcher en show()). Antes de este
+        // fix, cada llamada creaba un ItemTouchHelper nuevo y lo pegaba
+        // al RecyclerView con attachToRecyclerView() SIN desconectar el
+        // anterior. RecyclerView permite varios OnItemTouchListener a la
+        // vez y los revisa en el orden en que se agregaron, asi que el
+        // PRIMER ItemTouchHelper (el mas viejo) seguia siendo el que
+        // interceptaba el gesto de swipe -nunca el que se acababa de
+        // construir con el texto de busqueda actual-.
+        // Ese helper viejo tiene, en sus lambdas (onSwipeToPlayNext /
+        // onSwipeToRemove), los valores de "indices" e "isSearching"
+        // capturados de un estado de busqueda desactualizado. Al
+        // traducir la posicion mostrada al indice real de la cola con
+        // esos datos viejos, el resultado no correspondia a la cancion
+        // que el usuario realmente estaba viendo y deslizando.
+        // Desconectar el touchHelper anterior antes de pegar el nuevo
+        // asegura que solo hay UN ItemTouchHelper vivo a la vez, siempre
+        // el mas reciente, con los indices correctos.
+        touchHelper?.attachToRecyclerView(null)
+
+        val newTouchHelper = ItemTouchHelper(
+            QueueTouchHelperCallback(
+                adapter = adapter,
+                dragEnabled = !isSearching,
+                onSwipeToPlayNext = { position ->
+                    val realIndex = if (isSearching) indices.getOrNull(position) else position
+                    if (realIndex != null) {
                         val current = service.getCurrentIndex()
                         // La canción deslizada se mueve inmediatamente
                         // después de la actual.
-                        val target = if (position > current) current + 1 else current
-                        getMusicService()?.moveQueueItem(position, target)
+                        val target = if (realIndex > current) current + 1 else current
+                        getMusicService()?.moveQueueItem(realIndex, target)
                         Toast.makeText(activity, "Sonará a continuación", Toast.LENGTH_SHORT).show()
                         refreshList()
-                    },
-                    onSwipeToRemove = { position ->
-                        val removed = getMusicService()?.removeQueueItem(position) == true
+                    }
+                },
+                onSwipeToRemove = { position ->
+                    val realIndex = if (isSearching) indices.getOrNull(position) else position
+                    if (realIndex != null) {
+                        val removed = getMusicService()?.removeQueueItem(realIndex) == true
                         if (removed) {
                             Toast.makeText(activity, "Quitada de la cola", Toast.LENGTH_SHORT).show()
                         }
                         refreshList()
                     }
-                )
+                }
             )
-            newTouchHelper.attachToRecyclerView(recyclerView)
-            touchHelper = newTouchHelper
+        )
+        newTouchHelper.attachToRecyclerView(recyclerView)
+        touchHelper = newTouchHelper
+        if (!isSearching) {
             adapter.dragStartListener = { viewHolder -> newTouchHelper.startDrag(viewHolder) }
-        } else {
-            touchHelper = null
         }
 
         updateQueueCount()

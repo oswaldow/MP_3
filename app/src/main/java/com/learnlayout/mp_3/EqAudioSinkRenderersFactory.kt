@@ -17,6 +17,7 @@ class EqAudioSinkRenderersFactory(context: Context) : DefaultRenderersFactory(co
         return DefaultAudioSink.Builder(context)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
+                    ReplayGainAudioProcessor(),
                     SoftwareEqualizerProcessor(),
                     SpectrumAudioProcessor()
                 )

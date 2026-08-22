@@ -63,4 +63,15 @@
         android:padding="6dp"
         android:src="@drawable/ic_more_vert" />
 
+    <ImageView
+        android:id="@+id/ivDragHandle"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_marginStart="4dp"
+        android:contentDescription="Arrastrar para reordenar"
+        android:padding="4dp"
+        android:src="@drawable/ic_drag_handle"
+        android:tint="@color/spotify_gray"
+        android:visibility="gone" />
+
 </LinearLayout>
