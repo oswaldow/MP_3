@@ -14,6 +14,7 @@ object SettingsRepository {
     private const val KEY_WHATSAPP_READING_ENABLED = "whatsapp_reading_enabled"
     private const val KEY_TTS_VOICE_NAME = "tts_voice_name"
     private const val KEY_VOLUME_NORMALIZATION_ENABLED = "volume_normalization_enabled"
+    private const val KEY_ONBOARDING_COMPLETED = "onboarding_completed"
 
     const val MIN_CROSSFADE_SECONDS = 5
     const val MAX_CROSSFADE_SECONDS = 20
@@ -64,5 +65,14 @@ object SettingsRepository {
 
     fun setVolumeNormalizationEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_VOLUME_NORMALIZATION_ENABLED, enabled).apply()
+    }
+
+    /** true si la persona ya vio (o salto) las pantallas de bienvenida. */
+    fun isOnboardingCompleted(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_ONBOARDING_COMPLETED, false)
+    }
+
+    fun setOnboardingCompleted(context: Context, completed: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ONBOARDING_COMPLETED, completed).apply()
     }
 }

@@ -17,7 +17,16 @@ import java.util.concurrent.Executors
 
 object AlbumArtRepository {
 
-    private const val CACHE_DIR_NAME = "album_art_cache"
+    // Antes las caratulas se guardaban en context.cacheDir: esa carpeta la
+    // puede borrar Android en cualquier momento (poco espacio, limpieza del
+    // sistema, etc.) SIN que el usuario desinstale nada, lo que causaba que
+    // a veces "desaparecieran" caratulas ya descargadas incluso sin
+    // conexion. Ahora se guardan en context.filesDir, que solo se borra si
+    // se desinstala la app o se limpia el almacenamiento a mano.
+    private const val STORE_DIR_NAME = "album_art_store"
+    // Carpeta vieja (dentro de cacheDir), solo para migrar una vez lo que
+    // ya se hubiera descargado antes de este cambio.
+    private const val LEGACY_CACHE_DIR_NAME = "album_art_cache"
     private const val MEMORY_CACHE_SIZE = 100
     private const val CANDIDATES_LIMIT_PER_SOURCE = 6
 
@@ -71,6 +80,22 @@ object AlbumArtRepository {
      * la app, scrollear la lista, o volver a una cancion ya vista.
      */
     fun getCachedCover(song: Song): Bitmap? = memoryCache.get(song.id)
+
+    /**
+     * Version sincrona (sin red, sin decodificar el bitmap completo) para
+     * saber si la caratula de [song] ya esta disponible localmente
+     * (memoria o disco). Se usa para calcular el estado "descargada /
+     * pendiente" de cada cancion en Ajustes (ver
+     * LyricsArtStatusRepository), donde hace falta revisar cientos de
+     * canciones rapido sin bloquear la UI ni decodificar bitmaps que no
+     * se van a mostrar.
+     */
+    fun hasCachedCoverOnDisk(context: Context, song: Song): Boolean {
+        if (memoryCache.get(song.id) != null) return true
+        val cacheKey = cacheKeyFor(song)
+        val diskFile = File(cacheDir(context.applicationContext), "$cacheKey.jpg")
+        return diskFile.exists()
+    }
 
     /**
      * Pide la caratula de [song]. Llama a [callback] en el hilo principal
@@ -302,6 +327,49 @@ object AlbumArtRepository {
         }
     }
 
+    /**
+     * Quita la caratula de [songId] de la cache de MEMORIA (no toca disco).
+     * Se usa cuando el titulo/artista de la cancion cambia (ver
+     * PlaylistDialogs.showEditSongMetadataDialog): la caratula en disco
+     * queda asociada al nombre anterior (la clave se calcula con
+     * artista+titulo, ver [cacheKeyFor]), asi que si no se limpia tambien
+     * la de memoria, la app seguiria mostrando la caratula vieja hasta
+     * reiniciarse aunque en disco ya no corresponda a nada.
+     */
+    fun invalidateMemory(songId: Long) {
+        memoryCache.remove(songId)
+    }
+
+    /**
+     * Igual que [prefetchCover], pero SIEMPRE vuelve a buscar en red y
+     * sobreescribe lo que hubiera en disco, incluso si ya habia una
+     * caratula guardada. La usa el boton "Redescargar y sobreescribir" de
+     * LyricsArtStatusActivity para cuando el usuario ya edito el
+     * titulo/artista (o simplemente quiere forzar una busqueda de nuevo)
+     * sin tener que desinstalar la app.
+     */
+    fun forceRefreshCover(context: Context, song: Song, onComplete: (found: Boolean) -> Unit) {
+        val appContext = context.applicationContext
+        executor.execute {
+            var found = false
+            try {
+                val bitmap = fetchFromNetwork(song)
+                if (bitmap != null) {
+                    val cacheKey = cacheKeyFor(song)
+                    val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
+                    saveToDisk(diskFile, bitmap)
+                    memoryCache.put(song.id, bitmap)
+                    found = true
+                }
+            } catch (e: Exception) {
+                // found se queda en false: no se encontro nada nuevo.
+            } finally {
+                val result = found
+                mainHandler.post { onComplete(result) }
+            }
+        }
+    }
+
     private fun fetchItunesCandidates(query: String): List<AlbumArtCandidate> {
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
@@ -451,7 +519,48 @@ object AlbumArtRepository {
         }
     }
 
-    private fun cacheDir(context: Context): File = File(context.cacheDir, CACHE_DIR_NAME)
+    @Volatile private var legacyMigrationDone = false
+
+    private fun cacheDir(context: Context): File {
+        val dir = File(context.filesDir, STORE_DIR_NAME)
+        migrateLegacyCacheIfNeeded(context, dir)
+        return dir
+    }
+
+    /**
+     * Copia (una sola vez por proceso) las caratulas que ya estuvieran
+     * guardadas en la carpeta vieja (context.cacheDir) a la nueva carpeta
+     * persistente, para no perder las que el usuario ya tenia descargadas
+     * antes de este cambio. Si el sistema ya habia borrado esa carpeta
+     * vieja, simplemente no hay nada que migrar.
+     */
+    private fun migrateLegacyCacheIfNeeded(context: Context, newDir: File) {
+        if (legacyMigrationDone) return
+        synchronized(this) {
+            if (legacyMigrationDone) return
+            legacyMigrationDone = true
+            try {
+                val legacyDir = File(context.cacheDir, LEGACY_CACHE_DIR_NAME)
+                val legacyFiles = legacyDir.listFiles() ?: return
+                if (legacyFiles.isEmpty()) return
+                newDir.mkdirs()
+                legacyFiles.forEach { legacyFile ->
+                    val target = File(newDir, legacyFile.name)
+                    if (!target.exists()) {
+                        try {
+                            legacyFile.copyTo(target, overwrite = false)
+                        } catch (e: Exception) {
+                            // Si una caratula puntual no se pudo copiar, se
+                            // vuelve a descargar sola la proxima vez.
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // No habia carpeta vieja o no se pudo leer: no es grave,
+                // las caratulas se volveran a descargar cuando hagan falta.
+            }
+        }
+    }
 
     private fun cacheKeyFor(song: Song): String {
         val raw = "${song.artist}|${song.title}".lowercase()

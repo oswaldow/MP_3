@@ -1,0 +1,115 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="16dp"
+    android:layout_marginVertical="6dp"
+    android:background="@drawable/bg_item_song"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvStatusItemTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:text="Titulo de la cancion"
+            android:textColor="@color/text_primary_light"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvStatusItemArtist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:text="Artista"
+            android:textColor="@color/text_secondary_light"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Portada"
+            android:textColor="@color/text_secondary_light"
+            android:textSize="10sp" />
+
+        <ImageView
+            android:id="@+id/ivArtStatus"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_marginTop="4dp"
+            android:contentDescription="Estado de la caratula"
+            android:src="@drawable/ic_check" />
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Letra"
+            android:textColor="@color/text_secondary_light"
+            android:textSize="10sp" />
+
+        <ImageView
+            android:id="@+id/ivLyricsStatus"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_marginTop="4dp"
+            android:contentDescription="Estado de la letra"
+            android:src="@drawable/ic_check" />
+
+    </LinearLayout>
+
+    <!-- Unico boton tocable de acciones por cancion. Antes habia dos
+         iconos de 20dp casi pegados (editar y redescargar) que eran
+         faciles de confundir al tocar. Ahora un solo boton con area
+         de toque real de 40dp (el icono visual sigue midiendo 20dp,
+         el resto es padding) abre un menu con ambas opciones, usando
+         el mismo patron de PopupWindow que TopBarController
+         .showSortPopup() / popup_sort_menu.xml. -->
+    <ImageView
+        android:id="@+id/ivStatusItemMenu"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="14dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Mas opciones para esta cancion"
+        android:padding="10dp"
+        android:src="@drawable/ic_more_vert"
+        android:tint="@color/text_secondary_light" />
+
+    <ImageView
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_marginStart="2dp"
+        android:contentDescription="Elegir caratula y letra"
+        android:src="@drawable/ic_chevron_right"
+        android:tint="@color/text_secondary_light" />
+
+</LinearLayout>

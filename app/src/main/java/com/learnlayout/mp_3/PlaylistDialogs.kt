@@ -483,6 +483,12 @@ class PlaylistDialogs(
                     newArtist
                 )
 
+                // La caratula en disco quedo asociada al nombre anterior
+                // (ver AlbumArtRepository.cacheKeyFor); si no se invalida la
+                // de memoria tambien, la app seguiria mostrando la vieja
+                // hasta reiniciarse.
+                AlbumArtRepository.invalidateMemory(song.id)
+
                 onSongMetadataChanged()
 
                 Toast.makeText(

@@ -35,4 +35,11 @@
     <!-- Marco blanco fijo del panel de letra deslizable (no cambia con Material You) -->
     <color name="lyrics_banner_border">#FFFFFF</color>
 
+    <!-- Indicadores de estado de descarga (letras/caratulas, ver
+         LyricsArtStatusActivity y la fila de descarga masiva en
+         Ajustes). Fijos, no cambian con Material You: necesitan leerse
+         como "si"/"no" de un vistazo sin importar el acento del momento. -->
+    <color name="status_ok_green">#4CAF50</color>
+    <color name="status_missing_gray">#5C5C5C</color>
+
 </resources>

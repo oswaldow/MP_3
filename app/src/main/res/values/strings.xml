@@ -1,3 +1,28 @@
 <resources>
     <string name="app_name">MP_3</string>
+
+    <string name="onboarding_skip">Omitir</string>
+    <string name="onboarding_next">Siguiente</string>
+    <string name="onboarding_start">Empezar</string>
+
+    <string name="onboarding_title_welcome">Bienvenido a MP_3</string>
+    <string name="onboarding_desc_welcome">Tu reproductor de música local. Encuentra tus canciones y disfrútalas con carátulas de álbum descargadas automáticamente.</string>
+
+    <string name="onboarding_title_equalizer">Ecualizador integrado</string>
+    <string name="onboarding_desc_equalizer">Ajusta graves, medios y agudos a tu gusto, o elige uno de los presets ya armados desde el botón de ecualizador.</string>
+
+    <string name="onboarding_title_lyrics">Letras en tiempo real</string>
+    <string name="onboarding_desc_lyrics">Mantén presionada la carátula para buscar la letra de la canción. Luego desliza el banner de letra hacia arriba para verla completa.</string>
+
+    <string name="onboarding_title_queue">Controla el orden</string>
+    <string name="onboarding_desc_queue">Desliza una canción hacia la derecha para que suene a continuación, o mantenla presionada para arrastrarla y reordenar la cola.</string>
+
+    <string name="onboarding_title_playlists">Crea tus playlists</string>
+    <string name="onboarding_desc_playlists">Organiza tus canciones favoritas en listas propias desde la pestaña Playlists, en la parte de arriba.</string>
+
+    <string name="onboarding_title_widget">Widget de inicio</string>
+    <string name="onboarding_desc_widget">Agrega el widget del reproductor a tu pantalla de inicio para controlar la música sin abrir la app.</string>
+
+    <string name="onboarding_title_whatsapp">Lee tus mensajes por audífonos</string>
+    <string name="onboarding_desc_whatsapp">Activa esta opción en Ajustes para que se lean en voz alta tus mensajes de WhatsApp mientras usas audífonos o bocina Bluetooth.</string>
 </resources>

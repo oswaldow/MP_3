@@ -32,6 +32,12 @@ import android.widget.Toast
 
 class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
+    // true si este onCreate() redirigio a OnboardingActivity y no llego a
+    // llamar setContentView(): en ese caso, onStart/onStop/onDestroy no
+    // deben tocar ninguna vista (todas las propiedades "by lazy" de mas
+    // abajo dependen de findViewById y truenan si la vista no existe).
+    private var isRedirectingToOnboarding = false
+
     // Las vistas se resuelven con findViewById() al primer acceso (by lazy)
     // en lugar de lateinit + asignacion manual en bindViews(): mismo
     // resultado, menos codigo repetido. Como el primer acceso siempre
@@ -384,6 +390,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Primer arranque: mostramos el onboarding antes que nada y no
+        // seguimos inicializando esta pantalla (se relanza al terminarlo).
+        if (!SettingsRepository.isOnboardingCompleted(this)) {
+            isRedirectingToOnboarding = true
+            startActivity(Intent(this, OnboardingActivity::class.java))
+            finish()
+            return
+        }
+
         setContentView(R.layout.activity_song_list)
 
         PlaylistRepository.ensureFavoritesPlaylist(this)
@@ -971,6 +987,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     override fun onStart() {
         super.onStart()
+        if (isRedirectingToOnboarding) return
         musicService?.setListener(this)
         musicService?.getCurrentSong()?.let {
             showMiniPlayer(it, musicService?.isPlaying() == true)
@@ -992,12 +1009,14 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     override fun onStop() {
         super.onStop()
+        if (isRedirectingToOnboarding) return
         stopMiniProgressPolling()
         musicService?.setListener(null)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        if (isRedirectingToOnboarding) return
         AppAccentColor.removeListener(accentColorListener)
         stopMiniProgressPolling()
         queueSheet.dismiss()
