@@ -21,6 +21,21 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Necesario para escribir la caratula/letra directamente dentro del
+         archivo de audio (SongFileTagWriter), ya que esos archivos no los
+         creo la app y estan en almacenamiento compartido. Solo aplica en
+         Android 11+ (API 30+); el usuario debe activarlo a mano en
+         Ajustes, no se puede pedir con un dialogo normal de permisos.
+         NOTA: como targetSdk es 36, en Android 10 (API 29) no hay forma
+         de cubrir esto (ni con este permiso, que no existe ahi, ni con
+         requestLegacyExternalStorage, que se ignora si targetSdk >= 30):
+         en esos telefonos la escritura al archivo fallara y solo quedara
+         el guardado privado de siempre. En Android 9 y anteriores
+         funciona directo, sin pedir nada especial. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
     <application
         android:name=".App"
         android:allowBackup="true"

@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 class HomeController(
     private val context: Context,
     private val root: View,
+    private val backgroundTarget: View,
     private val getAllSongs: () -> List<Song>,
     private val getCurrentSong: () -> Song?,
     private val isPlaying: () -> Boolean,
@@ -107,15 +108,20 @@ class HomeController(
      * duplicada aqui mismo; ahora el Home es simplemente el primer
      * consumidor de un controlador reutilizable.
      *
-     * "root" es homeView, que vive dentro de rootSongListLayout.
-     * Por eso usamos su padre: asi el fondo cubre TODA la pantalla
-     * de la actividad (Home, Canciones y Playlists comparten el
-     * mismo contenedor), no solo la porcion del Home.
+     * [backgroundTarget] se recibe explicito desde SongListActivity (en
+     * vez de inferirlo caminando el arbol de vistas con root.parent, como
+     * antes) para que el fondo siga cubriendo TODA la pantalla de la
+     * actividad (Home, Canciones y Playlists comparten el mismo
+     * contenedor) sin importar cuantos niveles de layout intermedios
+     * (por ejemplo el SwipeRefreshLayout del gesto de "tirar para
+     * abajo") terminen quedando entre homeView y la raiz. Depender del
+     * padre inmediato era fragil: cualquier envoltorio nuevo alrededor
+     * de homeView rompia el fondo sin avisar.
      */
     private val ambientBackground: AmbientBackgroundController by lazy {
         AmbientBackgroundController(
             context = context,
-            targetView = (root.parent as? View) ?: root
+            targetView = backgroundTarget
         )
     }
 

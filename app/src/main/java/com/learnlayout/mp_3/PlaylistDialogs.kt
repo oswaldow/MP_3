@@ -489,6 +489,27 @@ class PlaylistDialogs(
                 // hasta reiniciarse.
                 AlbumArtRepository.invalidateMemory(song.id)
 
+                // Ademas del override (que es lo que la UI usa al
+                // instante), intentamos escribir titulo/artista dentro
+                // del archivo de audio real, para que el cambio
+                // sobreviva a una desinstalacion. Esto requiere el
+                // permiso de "Todos los archivos"; si no esta concedido
+                // simplemente se omite en silencio y el override sigue
+                // funcionando como hasta ahora (solo que no persiste
+                // si se desinstala la app). No se muestra un segundo
+                // Toast para no duplicar el "Cancion actualizada" de
+                // abajo, que ya cubre la experiencia del usuario.
+                if (SongFileTagWriter.hasManageStoragePermission(context)) {
+                    AppExecutors.runInBackground {
+                        SongFileTagWriter.writeToFile(
+                            context = context,
+                            song = song,
+                            title = newTitle,
+                            artist = newArtist
+                        )
+                    }
+                }
+
                 onSongMetadataChanged()
 
                 Toast.makeText(

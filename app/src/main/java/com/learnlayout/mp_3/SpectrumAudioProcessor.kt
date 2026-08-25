@@ -7,6 +7,7 @@ import androidx.media3.common.audio.AudioProcessor.UnhandledAudioFormatException
 import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ArrayBlockingQueue
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -34,11 +35,28 @@ import kotlin.math.sqrt
  * canales). El resultado se normaliza y se suaviza con ataque rapido /
  * caida lenta para que las barras del visualizador no "tiemblen".
  *
- * El estado publicado (magnitudes) vive en el companion object, igual
- * que bandGainsMillibel en SoftwareEqualizerProcessor: se escribe desde
+ * IMPORTANTE (fix bug "barras se ven a los tirones con archivos
+ * hi-res/FLAC"): el decoder no entrega el PCM en trozos parejos. Un
+ * archivo MP3/AAC normal llega en paquetes chicos y frecuentes (~24ms
+ * cada uno a 44.1kHz), pero un FLAC hi-res puede llegar en paquetes
+ * ~4 veces mas grandes y ~4 veces menos frecuentes (un bloque FLAC
+ * tipico son 4096 muestras). Antes, cada paquete grande disparaba
+ * varios computeSpectrum() seguidos que se pisaban entre si en una
+ * sola referencia @Volatile: la vista solo veia el ultimo, así que
+ * las barras se quedaban clavadas ~100ms y despues saltaban de golpe.
+ * Ahora cada computeSpectrum() se publica en una cola
+ * (snapshotQueue) en vez de pisar un valor unico, y se expone
+ * getUpdateIntervalMs() para que quien consuma (AudioSpectrumView)
+ * saque un snapshot de la cola a ritmo parejo -uno cada ~23ms a
+ * 44.1kHz- sin importar si llegaron todos juntos o de a uno.
+ *
+ * El estado publicado vive en el companion object, igual que
+ * bandGainsMillibel en SoftwareEqualizerProcessor: se escribe desde
  * el hilo de audio (queueInput) y se lee desde el hilo de UI
- * (AudioSpectrumView), por eso es @Volatile y se publica reemplazando
- * la referencia completa del array (nunca mutando in-place).
+ * (AudioSpectrumView). La cola es thread-safe (ArrayBlockingQueue) y
+ * el productor nunca bloquea: si se llena (no deberia pasar en uso
+ * normal), descarta el snapshot mas viejo en vez de esperar, para no
+ * frenar el hilo de audio.
  */
 @UnstableApi
 class SpectrumAudioProcessor : AudioProcessor {
@@ -65,11 +83,43 @@ class SpectrumAudioProcessor : AudioProcessor {
         // todo el tiempo en el maximo.
         private const val NORMALIZATION_DIVISOR = 4500.0
 
+        // Cuantos snapshots calculados-pero-no-consumidos-todavia se
+        // permiten acumular. Con paquetes de PCM grandes (FLAC hi-res)
+        // pueden llegar varios computeSpectrum() casi seguidos; esta cola
+        // los retiene para que se consuman de a uno, a ritmo parejo, en
+        // vez de perderse. 16 da margen holgado (un paquete tipico genera
+        // como maximo 4-5 snapshots de una).
+        private const val SNAPSHOT_QUEUE_CAPACITY = 16
+
         @Volatile
         private var magnitudes = FloatArray(NUM_BANDS)
 
-        /** Ultimo snapshot de energia por banda, normalizado en [0, 1]. */
+        private val snapshotQueue = ArrayBlockingQueue<FloatArray>(SNAPSHOT_QUEUE_CAPACITY)
+
+        // Intervalo "natural" entre actualizaciones, segun WINDOW_SIZE y el
+        // sample rate de la pista actual (recalculado en configure()).
+        // Quien consuma la cola deberia sacar un snapshot nuevo cada tantos
+        // ms, no uno por frame de UI, para no vaciar de golpe un paquete
+        // grande que trajo varios snapshots juntos.
+        @Volatile
+        private var updateIntervalMs: Long = 23L
+
+        /**
+         * Ultimo snapshot calculado, para compatibilidad con quien
+         * necesite "el valor actual" sin importarle el ritmo de consumo
+         * parejo (por ejemplo un uso puntual, no animado).
+         */
         fun getMagnitudes(): FloatArray = magnitudes
+
+        /**
+         * Saca el proximo snapshot pendiente de la cola, o null si no hay
+         * ninguno todavia. No bloquea. Pensado para llamarse a ritmo
+         * pautado por getUpdateIntervalMs(), no una vez por frame de UI.
+         */
+        fun pollNextSnapshot(): FloatArray? = snapshotQueue.poll()
+
+        /** Cada cuantos ms conviene sacar un snapshot nuevo de la cola. */
+        fun getUpdateIntervalMs(): Long = updateIntervalMs
 
         fun bandCount(): Int = NUM_BANDS
 
@@ -104,6 +154,13 @@ class SpectrumAudioProcessor : AudioProcessor {
         this.inputAudioFormat = inputAudioFormat
         this.outputAudioFormat = inputAudioFormat
         windowPos = 0
+
+        // Pista nueva: recalcular el ritmo "natural" de actualizacion y
+        // vaciar la cola para no arrastrar snapshots de la pista anterior.
+        updateIntervalMs = ((WINDOW_SIZE.toLong() * 1000L) / inputAudioFormat.sampleRate)
+            .coerceAtLeast(1L)
+        snapshotQueue.clear()
+
         return outputAudioFormat
     }
 
@@ -171,9 +228,15 @@ class SpectrumAudioProcessor : AudioProcessor {
             next[band] = prevValue + (target - prevValue) * rate
         }
 
-        // Publicacion atomica: reemplaza la referencia completa, nunca
-        // muta el array que el hilo de UI puede estar leyendo.
+        // Publicacion atomica del "valor actual" para compatibilidad, y
+        // ademas se encola para consumo pautado (ver getUpdateIntervalMs).
+        // El productor (hilo de audio) nunca debe bloquearse: si la cola
+        // esta llena, se descarta el snapshot mas viejo en vez de esperar.
         magnitudes = next
+        if (!snapshotQueue.offer(next)) {
+            snapshotQueue.poll()
+            snapshotQueue.offer(next)
+        }
     }
 
     private fun replaceOutputBuffer(size: Int): ByteBuffer {
@@ -203,6 +266,7 @@ class SpectrumAudioProcessor : AudioProcessor {
         inputEnded = false
         windowPos = 0
         magnitudes = FloatArray(NUM_BANDS)
+        snapshotQueue.clear()
     }
 
     override fun reset() {

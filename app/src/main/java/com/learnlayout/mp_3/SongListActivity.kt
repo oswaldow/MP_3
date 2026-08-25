@@ -23,6 +23,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -47,6 +48,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private val rootLayout: ConstraintLayout by lazy { findViewById(R.id.rootSongListLayout) }
     private val rvSongs: RecyclerView by lazy { findViewById(R.id.rvSongs) }
     private val rvPlaylists: RecyclerView by lazy { findViewById(R.id.rvPlaylists) }
+    private val swipeRefreshSongList: SwipeRefreshLayout by lazy { findViewById(R.id.swipeRefreshSongList) }
     private val tvEmptyState: TextView by lazy { findViewById(R.id.tvEmptyState) }
     private val tvAppName: TextView by lazy { findViewById(R.id.tvAppName) }
     private val ivMascot: ImageView by lazy { findViewById(R.id.ivMascot) }
@@ -407,6 +409,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         bindViews()
         topBarController.setup()
         setupHome()
+        setupSwipeToRefresh()
         setupPlayerPanel()
         setupLyricsPanel()
         setupEdgeToEdge()
@@ -562,6 +565,15 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         homeController = HomeController(
             context = this,
             root = homeView,
+            // El fondo animado debe cubrir TODA la pantalla (Home,
+            // Canciones y Playlists comparten el mismo contenedor), asi
+            // que se lo pasamos explicito en vez de dejar que
+            // HomeController lo infiera con homeView.parent: desde que
+            // homeView quedo envuelto en swipeRefreshSongList (ver
+            // setupSwipeToRefresh), su padre inmediato ya no es
+            // rootLayout, sino el ConstraintLayout interno del
+            // SwipeRefreshLayout.
+            backgroundTarget = rootLayout,
             getAllSongs = { allSongs },
             getCurrentSong = { musicService?.getCurrentSong() },
             isPlaying = { musicService?.isPlaying() == true },
@@ -622,6 +634,37 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private fun showHome() {
         homeNavigationController.showHome()
+    }
+
+    /**
+     * "Tirar para abajo" sobre Home, Canciones o Playlists (la que este
+     * visible en ese momento) muestra el icono circular estandar de
+     * actualizando y refresca esa seccion al instante: relee las
+     * canciones (incluye ediciones de titulo/artista y las auto-playlists
+     * de Mas escuchadas/Recientes) y las playlists manuales.
+     *
+     * El callback de scroll evita que el gesto dispare un refresh cuando
+     * la lista visible no esta arriba del todo (por ejemplo, a mitad de
+     * un scroll en Home): sin esto, arrastrar hacia abajo en pleno scroll
+     * podria confundirse con el gesto de refrescar.
+     */
+    private fun setupSwipeToRefresh() {
+        swipeRefreshSongList.setColorSchemeResources(R.color.spotify_green)
+        swipeRefreshSongList.setProgressBackgroundColorSchemeResource(R.color.spotify_card)
+
+        swipeRefreshSongList.setOnChildScrollUpCallback { _, _ ->
+            when {
+                homeView.visibility == View.VISIBLE -> homeView.canScrollVertically(-1)
+                topBarController.isPlaylistsTabActive -> rvPlaylists.canScrollVertically(-1)
+                else -> rvSongs.canScrollVertically(-1)
+            }
+        }
+
+        swipeRefreshSongList.setOnRefreshListener {
+            loadSongs()
+            loadPlaylists()
+            swipeRefreshSongList.isRefreshing = false
+        }
     }
 
     private fun setupEdgeToEdge() {

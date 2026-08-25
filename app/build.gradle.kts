@@ -50,6 +50,9 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.recyclerview)
     implementation(libs.androidx.media)
+    // Gesto de "tirar para abajo" para refrescar (lista de canciones/
+    // playlists y pantalla de letras y caratulas).
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -58,4 +61,12 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    // Lee/escribe caratula y letra directamente en el archivo de audio
+    // (MP3, M4A/AAC, FLAC). Fork de jaudiotagger compatible con Android
+    // (la version original usa javax.imageio y java.awt, que no existen
+    // en Android). Se usa esta version (2.2.3, con release etiquetado en
+    // GitHub) en vez de un branch en master-SNAPSHOT porque JitPack ya la
+    // tiene compilada de antemano; los SNAPSHOT a veces fallan al
+    // compilarse al vuelo.
+    implementation("com.github.AdrienPoupa:jaudiotagger:2.2.3")
 }

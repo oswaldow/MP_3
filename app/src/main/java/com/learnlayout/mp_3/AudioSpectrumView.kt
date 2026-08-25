@@ -36,6 +36,19 @@ import android.view.View
  *    gastar CPU) y se reenciende solo, sin intervencion externa,
  *    apenas la vista vuelve a ser visible, siempre que wantsToRun
  *    siga en true.
+ *
+ * IMPORTANTE (fix bug "barras se ven a los tirones con archivos
+ * hi-res/FLAC"): antes se leia "el ultimo valor calculado" en
+ * SpectrumAudioProcessor una vez por frame de UI. El problema es que
+ * el decoder no entrega el PCM parejo: un paquete grande (tipico de
+ * FLAC hi-res) puede disparar 3-4 calculos nuevos casi de una, y como
+ * antes solo existia "el ultimo valor", los primeros 3 se perdian y
+ * las barras se quedaban clavadas ~100ms para despues saltar de golpe.
+ * Ahora se consume la cola de snapshots de SpectrumAudioProcessor a un
+ * ritmo pautado (SpectrumAudioProcessor.getUpdateIntervalMs(), tipico
+ * ~23ms), sacando un snapshot nuevo por tick en vez de vaciar la cola
+ * entera de una, sin importar si el frame de UI corre mas rapido (60,
+ * 90 o 120fps) que la llegada de datos nuevos.
  */
 class AudioSpectrumView @JvmOverloads constructor(
     context: Context,
@@ -58,10 +71,16 @@ class AudioSpectrumView @JvmOverloads constructor(
 
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    // Copia local de trabajo: se rellena desde SpectrumAudioProcessor en
-    // cada frame y es lo unico que onDraw lee, para no tener que
-    // sincronizar con el hilo de audio en medio del dibujo.
+    // Copia local de trabajo: se actualiza a ritmo pautado desde la cola
+    // de SpectrumAudioProcessor (ver pullPacedSnapshot) y es lo unico
+    // que onDraw lee, para no tener que sincronizar con el hilo de audio
+    // en medio del dibujo.
     private var levels = FloatArray(SpectrumAudioProcessor.bandCount())
+
+    // Marca de tiempo (nanos de Choreographer) del ultimo snapshot
+    // efectivamente consumido de la cola. 0L significa "todavia no se
+    // consumio ninguno desde el ultimo start()/resume".
+    private var lastSnapshotPullNs = 0L
 
     // Estado deseado: lo fija start()/stop(), llamados desde
     // PlayerPanelController al expandir/colapsar el panel. Sobrevive a
@@ -73,9 +92,9 @@ class AudioSpectrumView @JvmOverloads constructor(
     // efectivamente encolado?).
     private var running = false
 
-    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback {
+    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback { frameTimeNs ->
         if (!running) return@FrameCallback
-        pullLatestData()
+        pullPacedSnapshot(frameTimeNs)
         invalidate()
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
@@ -150,6 +169,9 @@ class AudioSpectrumView @JvmOverloads constructor(
     private fun resumeIfPossible() {
         if (!wantsToRun || running) return
         running = true
+        // Arranca el pauteo de cero: el primer tick despues de reanudar
+        // consume un snapshot apenas haya uno disponible.
+        lastSnapshotPullNs = 0L
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
@@ -164,12 +186,25 @@ class AudioSpectrumView @JvmOverloads constructor(
         }
     }
 
-    private fun pullLatestData() {
-        val source = SpectrumAudioProcessor.getMagnitudes()
-        if (levels.size != source.size) {
-            levels = FloatArray(source.size)
+    /**
+     * Saca como maximo un snapshot nuevo de la cola de
+     * SpectrumAudioProcessor por cada intervalo "natural" de actualizacion
+     * (getUpdateIntervalMs()), sin importar cuantos frames de UI pasen
+     * mientras tanto. Asi, si llegaron varios snapshots juntos (paquete
+     * grande de PCM, tipico de FLAC hi-res), se van consumiendo de a uno
+     * a ritmo parejo en vez de perderse todos menos el ultimo.
+     */
+    private fun pullPacedSnapshot(frameTimeNs: Long) {
+        val intervalNs = SpectrumAudioProcessor.getUpdateIntervalMs().coerceAtLeast(1L) * 1_000_000L
+        if (lastSnapshotPullNs != 0L && frameTimeNs - lastSnapshotPullNs < intervalNs) {
+            return
         }
-        System.arraycopy(source, 0, levels, 0, source.size)
+        val snapshot = SpectrumAudioProcessor.pollNextSnapshot() ?: return
+        if (levels.size != snapshot.size) {
+            levels = FloatArray(snapshot.size)
+        }
+        System.arraycopy(snapshot, 0, levels, 0, snapshot.size)
+        lastSnapshotPullNs = frameTimeNs
     }
 
     private fun applyGradientIfPossible() {

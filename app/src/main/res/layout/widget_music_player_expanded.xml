@@ -4,7 +4,7 @@
     widget en el launcher hasta pasar EXPANDED_MIN_HEIGHT_DP (ver
     MusicWidgetProvider.isExpandedLayout). Tarjeta vertical con
     caratula grande, titulo/artista, barra de progreso y una fila de
-    5 controles (shuffle, anterior, play/pause, siguiente, repeat).
+    controles (modo de reproduccion, anterior, play/pause, siguiente).
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widgetRootExp"
@@ -12,7 +12,7 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_home_card"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="18dp">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -22,15 +22,15 @@
 
         <FrameLayout
             android:id="@+id/widgetArtContainerExp"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:background="@drawable/bg_album_art_small">
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:background="@drawable/bg_widget_album_art_expanded">
 
             <ImageView
                 android:id="@+id/widgetArtPlaceholderExp"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:padding="16dp"
+                android:padding="18dp"
                 android:src="@drawable/ic_music_note"
                 android:tint="@color/spotify_gray"
                 android:contentDescription="@string/app_name" />
@@ -53,7 +53,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="12dp"
+            android:layout_marginStart="14dp"
             android:orientation="vertical">
 
             <TextView
@@ -76,82 +76,105 @@
                 android:textSize="13sp"
                 android:maxLines="1"
                 android:ellipsize="end"
-                android:layout_marginTop="2dp" />
+                android:layout_marginTop="3dp" />
 
         </LinearLayout>
 
     </LinearLayout>
 
+    <!--
+        style explicito Widget.ProgressBar.Horizontal (no el atributo
+        de tema ?android:attr/progressBarStyleHorizontal): asi el
+        ProgressBar no hereda el padding/alto extra que el tema
+        Material del launcher (HyperOS/MIUI) le agrega a la version
+        con tema, que era la causa de que el track se viera mucho mas
+        grueso que la linea de progreso. minHeight/maxHeight fijan el
+        grosor real para que ningun OEM lo estire.
+    -->
     <ProgressBar
         android:id="@+id/widgetProgressExp"
-        style="?android:attr/progressBarStyleHorizontal"
+        style="@android:style/Widget.ProgressBar.Horizontal"
         android:layout_width="match_parent"
-        android:layout_height="4dp"
-        android:layout_marginTop="14dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:minHeight="6dp"
+        android:maxHeight="6dp"
         android:max="100"
         android:progress="0"
-        android:progressDrawable="@drawable/progress_mini_line" />
+        android:progressDrawable="@drawable/progress_widget_expanded" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="18dp"
         android:orientation="horizontal"
         android:gravity="center_vertical">
 
         <ImageButton
             android:id="@+id/widgetBtnModeExp"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
             android:background="@android:color/transparent"
             android:scaleType="fitCenter"
-            android:padding="8dp"
+            android:padding="9dp"
             android:src="@drawable/ic_repeat"
             android:contentDescription="Modo de reproduccion" />
 
         <ImageButton
             android:id="@+id/widgetBtnPreviousExp"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
             android:background="@android:color/transparent"
             android:scaleType="fitCenter"
-            android:padding="8dp"
+            android:padding="9dp"
             android:src="@drawable/ic_skip_previous"
             android:tint="@color/text_primary_light"
             android:contentDescription="Anterior" />
 
-        <ImageButton
-            android:id="@+id/widgetBtnPlayPauseExp"
+        <!--
+            El boton de play/pause va dentro de una celda FrameLayout
+            con el mismo weight="1" que mode/previous/next, para que
+            la fila se siga repartiendo pareja entre los 4 controles
+            (boton centrado, no desplazado hacia un lado). Pero el
+            ImageButton de adentro tiene ancho y alto FIJOS (60x60dp):
+            si en cambio el propio ImageButton fuera 0dp+weight, su
+            ancho variaria segun el espacio disponible en el widget
+            del usuario y el fondo ovalado se estiraria en una pildora
+            horizontal en vez de verse como un circulo.
+        -->
+        <FrameLayout
             android:layout_width="0dp"
-            android:layout_height="52dp"
-            android:layout_weight="1.3"
-            android:background="@drawable/bg_icon_button_circle"
-            android:scaleType="fitCenter"
-            android:padding="12dp"
-            android:src="@drawable/ic_play_arrow"
-            android:tint="@color/spotify_green"
-            android:contentDescription="Reproducir o pausar" />
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_gravity="center">
+
+            <ImageButton
+                android:id="@+id/widgetBtnPlayPauseExp"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:layout_gravity="center"
+                android:background="@drawable/bg_widget_play_button_expanded"
+                android:scaleType="fitCenter"
+                android:padding="15dp"
+                android:src="@drawable/ic_play_arrow"
+                android:tint="@color/white"
+                android:contentDescription="Reproducir o pausar" />
+
+        </FrameLayout>
 
         <ImageButton
             android:id="@+id/widgetBtnNextExp"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
             android:background="@android:color/transparent"
             android:scaleType="fitCenter"
-            android:padding="8dp"
+            android:padding="9dp"
             android:src="@drawable/ic_skip_next"
             android:tint="@color/text_primary_light"
             android:contentDescription="Siguiente" />
-
-        <!-- Espaciador simetrico: deja el boton de play-pause centrado
-             visualmente, ya que el otro lado tiene el boton de modo. -->
-        <View
-            android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="1" />
 
     </LinearLayout>
 

@@ -82,12 +82,30 @@ class PlaybackNotifier(
             .build()
     }
 
-    fun buildNotification(song: Song, playing: Boolean): Notification {
+    fun buildNotification(song: Song, playing: Boolean, playbackMode: MusicService.PlaybackMode): Notification {
         val playPauseIcon = if (playing) R.drawable.ic_pause else R.drawable.ic_play_arrow
+
+        // Mismo mapeo de icono que PlayerPanelController.updateModeButtonIcon
+        // y el widget expandido: el modo de reproduccion de esta app es un
+        // solo boton de 3 estados (normal -> repetir cancion -> aleatorio),
+        // no shuffle y repeat por separado, asi que la notificacion agrega
+        // UN boton extra que va ciclando entre los tres, en vez de dos
+        // botones independientes.
+        val modeIcon = when (playbackMode) {
+            MusicService.PlaybackMode.NORMAL -> R.drawable.ic_repeat
+            MusicService.PlaybackMode.REPEAT_ONE -> R.drawable.ic_repeat_one
+            MusicService.PlaybackMode.SHUFFLE -> R.drawable.ic_shuffle
+        }
+        val modeLabel = when (playbackMode) {
+            MusicService.PlaybackMode.NORMAL -> "Modo normal (tocar para repetir cancion)"
+            MusicService.PlaybackMode.REPEAT_ONE -> "Repitiendo cancion (tocar para aleatorio)"
+            MusicService.PlaybackMode.SHUFFLE -> "Aleatorio (tocar para modo normal)"
+        }
 
         val previousPendingIntent = servicePendingIntent(MusicService.ACTION_PREVIOUS)
         val playPausePendingIntent = servicePendingIntent(MusicService.ACTION_PLAY_PAUSE)
         val nextPendingIntent = servicePendingIntent(MusicService.ACTION_NEXT)
+        val modePendingIntent = servicePendingIntent(MusicService.ACTION_CYCLE_PLAYBACK_MODE)
         val deletePendingIntent = servicePendingIntent(MusicService.ACTION_STOP)
 
         return NotificationCompat.Builder(context, channelId)
@@ -107,6 +125,13 @@ class PlaybackNotifier(
             .addAction(R.drawable.ic_skip_previous, "Anterior", previousPendingIntent)
             .addAction(playPauseIcon, "Reproducir/Pausar", playPausePendingIntent)
             .addAction(R.drawable.ic_skip_next, "Siguiente", nextPendingIntent)
+            // Cuarta accion: boton de modo de reproduccion. No se agrega a
+            // setShowActionsInCompactView para no tocar como se ve la
+            // notificacion colapsada (que sigue mostrando exactamente
+            // anterior/reproducir-pausar/siguiente, igual que antes); solo
+            // aparece al expandirla y en el control multimedia enriquecido
+            // de la pantalla de bloqueo/quick settings en Android 13+.
+            .addAction(modeIcon, modeLabel, modePendingIntent)
             .setStyle(
                 MediaStyle()
                     .setMediaSession(mediaSession.sessionToken)

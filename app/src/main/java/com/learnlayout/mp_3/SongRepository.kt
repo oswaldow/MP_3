@@ -16,7 +16,8 @@ object SongRepository {
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.DATE_ADDED
+            MediaStore.Audio.Media.DATE_ADDED,
+            MediaStore.Audio.Media.DATE_MODIFIED
         )
 
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0" +
@@ -58,6 +59,7 @@ object SongRepository {
             val artistColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val durationColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             val dateAddedColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+            val dateModifiedColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_MODIFIED)
 
             while (it.moveToNext()) {
                 val id = it.getLong(idColumn)
@@ -65,12 +67,25 @@ object SongRepository {
                 val artist = it.getString(artistColumn) ?: "Desconocido"
                 val duration = it.getLong(durationColumn)
                 val dateAdded = it.getLong(dateAddedColumn)
+                val dateModified = it.getLong(dateModifiedColumn)
+
+                // DATE_ADDED no siempre refleja cuando el archivo llego de
+                // verdad al telefono: muchas apps (WhatsApp, Telegram,
+                // navegadores) y sobre todo MIUI/HyperOS preservan la fecha
+                // de origen del archivo en esa columna, asi que una cancion
+                // descargada hoy puede aparecer con una fecha de hace
+                // semanas. DATE_MODIFIED si se actualiza al momento real en
+                // que el archivo se escribio en el almacenamiento del
+                // dispositivo, asi que usamos la mas reciente de las dos
+                // como "fecha de agregado" real para ordenar.
+                val effectiveDateAdded = maxOf(dateAdded, dateModified)
+
                 val contentUri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                     id
                 )
 
-                songs.add(Song(id, title, artist, duration, contentUri, dateAdded))
+                songs.add(Song(id, title, artist, duration, contentUri, effectiveDateAdded))
             }
         }
 

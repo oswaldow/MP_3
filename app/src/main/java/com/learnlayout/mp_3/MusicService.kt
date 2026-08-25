@@ -243,7 +243,7 @@ class MusicService : Service() {
 
         listener?.onSongChanged(updated, queueManager.getCurrentIndex())
         notifier.updatePlaybackState(isPlaying(), playbackEngine.getCurrentPosition().toLong())
-        startForeground(NOTIFICATION_ID, notifier.buildNotification(updated, isPlaying()))
+        startForeground(NOTIFICATION_ID, notifier.buildNotification(updated, isPlaying(), getPlaybackMode()))
         updateWidgets()
     }
 
@@ -260,6 +260,17 @@ class MusicService : Service() {
         // viejo. Ver PlaybackEngine.syncLoadedIndex().
         playbackEngine.syncLoadedIndex(queueManager.getCurrentIndex())
         persistQueueState()
+        // La notificacion ahora tiene su propio boton de modo (ver
+        // PlaybackNotifier.buildNotification), asi que si el modo cambio
+        // desde el panel o el widget hay que repintar la notificacion
+        // tambien, no solo el widget. Se hace aqui en vez de con
+        // refreshNotification() para no depender de que haya cancion
+        // actual: updateWidgets() debe correr siempre, tenga o no
+        // cancion cargada.
+        getCurrentSong()?.let { song ->
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID, notifier.buildNotification(song, isPlaying(), mode))
+        }
         updateWidgets()
         return mode
     }
@@ -433,7 +444,7 @@ class MusicService : Service() {
         listener?.onPlaybackStateChanged(isPlayingNow)
         notifier.updatePlaybackState(isPlayingNow, playbackEngine.getCurrentPosition().toLong())
 
-        startForeground(NOTIFICATION_ID, notifier.buildNotification(song, isPlayingNow))
+        startForeground(NOTIFICATION_ID, notifier.buildNotification(song, isPlayingNow, getPlaybackMode()))
         updateWidgets()
 
         // La cancion (y por tanto el indice actual dentro de la cola)
@@ -481,7 +492,7 @@ class MusicService : Service() {
     private fun refreshNotification() {
         val song = getCurrentSong() ?: return
         val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, notifier.buildNotification(song, isPlaying()))
+        manager.notify(NOTIFICATION_ID, notifier.buildNotification(song, isPlaying(), getPlaybackMode()))
         updateWidgets()
     }
 

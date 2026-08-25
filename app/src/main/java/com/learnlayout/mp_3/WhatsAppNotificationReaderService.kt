@@ -9,6 +9,8 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
@@ -29,6 +31,18 @@ import java.util.UUID
 // VERSION CON LOGGING PARA DIAGNOSTICO. Todas las lineas Log.d/Log.w/
 // Log.e usan el tag TAG ("MP3_WhatsAppReader") para poder filtrarlas
 // facil en Logcat con: tag:MP3_WhatsAppReader
+//
+// Se agrego ademas el PID del proceso y el uptime del sistema en
+// onCreate() y en cada onNotificationPosted(). Sirve para distinguir,
+// cuando falle un mensaje, entre dos causas muy distintas:
+//   a) el listener se desvinculo pero el PROCESO sigue vivo (mismo PID
+//      en el log de antes y despues de la falla) -> problema de bind,
+//      deberia arreglarse solo con requestRebindSafely().
+//   b) HyperOS mato el proceso completo (PID distinto al de la ultima
+//      vez, y "onCreate()" vuelve a aparecer justo antes del mensaje
+//      perdido) -> problema de que el sistema esta matando la app en
+//      background, se resuelve por el lado de optimizacion de bateria/
+//      autoarranque, no con mas reintentos de bind.
 //
 // Deja el telefono conectado por USB, activa "Depuracion por USB", y
 // mientras corre el logcat manda un WhatsApp de prueba. Copia todo lo
@@ -68,7 +82,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate() - el servicio se esta creando")
+        Log.d(TAG, "onCreate() - el servicio se esta creando. pid=${Process.myPid()} uptimeMs=${SystemClock.elapsedRealtime()}")
         audioManager = getSystemService(AudioManager::class.java)
         tts = TextToSpeech(applicationContext, this)
     }
@@ -77,7 +91,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
     // arrancar, o despues de una reconexion pedida con requestRebind).
     override fun onListenerConnected() {
         super.onListenerConnected()
-        Log.d(TAG, "onListenerConnected() - el listener quedo enlazado y activo")
+        Log.d(TAG, "onListenerConnected() - el listener quedo enlazado y activo. pid=${Process.myPid()} uptimeMs=${SystemClock.elapsedRealtime()}")
         rebindHandler.removeCallbacksAndMessages(null)
     }
 
@@ -86,7 +100,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
     // tarda minutos u horas), se pide la reconexion de inmediato.
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
-        Log.w(TAG, "onListenerDisconnected() - el sistema desvinculo el listener, pidiendo rebind")
+        Log.w(TAG, "onListenerDisconnected() - el sistema desvinculo el listener, pidiendo rebind. pid=${Process.myPid()} uptimeMs=${SystemClock.elapsedRealtime()}")
         requestRebindSafely()
     }
 
@@ -94,7 +108,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
         rebindHandler.removeCallbacksAndMessages(null)
         rebindHandler.postDelayed({
             try {
-                Log.d(TAG, "Pidiendo requestRebind() ahora")
+                Log.d(TAG, "Pidiendo requestRebind() ahora. pid=${Process.myPid()}")
                 requestRebind(ComponentName(applicationContext, WhatsAppNotificationReaderService::class.java))
             } catch (e: Exception) {
                 Log.e(TAG, "requestRebind() fallo: ${e.message}", e)
@@ -104,7 +118,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
 
     override fun onInit(status: Int) {
         ttsReady = status == TextToSpeech.SUCCESS
-        Log.d(TAG, "onInit() - TTS listo=$ttsReady (status=$status)")
+        Log.d(TAG, "onInit() - TTS listo=$ttsReady (status=$status). pid=${Process.myPid()}")
         if (!ttsReady) return
 
         tts?.language = Locale("es")
@@ -132,7 +146,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        Log.d(TAG, "onNotificationPosted() paquete=${sbn.packageName}")
+        Log.d(TAG, "onNotificationPosted() paquete=${sbn.packageName} pid=${Process.myPid()} uptimeMs=${SystemClock.elapsedRealtime()}")
 
         if (sbn.packageName != PACKAGE_WHATSAPP && sbn.packageName != PACKAGE_WHATSAPP_BUSINESS) {
             Log.d(TAG, "Ignorada: no es WhatsApp (paquete=${sbn.packageName})")
@@ -367,7 +381,7 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
     }
 
     override fun onDestroy() {
-        Log.w(TAG, "onDestroy() - el servicio se esta destruyendo")
+        Log.w(TAG, "onDestroy() - el servicio se esta destruyendo. pid=${Process.myPid()} uptimeMs=${SystemClock.elapsedRealtime()}")
         super.onDestroy()
         rebindHandler.removeCallbacksAndMessages(null)
         releaseAudioFocus()
@@ -399,5 +413,3 @@ class WhatsAppNotificationReaderService : NotificationListenerService(), TextToS
         private val WHITESPACE_REGEX = Regex("\\s+")
     }
 }
-
-
