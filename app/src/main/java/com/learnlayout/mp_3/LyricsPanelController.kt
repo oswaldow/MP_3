@@ -1,3 +1,4 @@
+
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
@@ -440,6 +441,11 @@ class LyricsPanelController(
      * SavedLyricsRepository contiene las letras descargadas
      * previamente desde Configuracion o seleccionadas
      * manualmente desde el selector de caratula.
+     *
+     * Si todavia no hay nada guardado, antes de rendirse revisa si el
+     * propio archivo de audio ya trae letra embebida (ver
+     * [loadEmbeddedLyrics] / EmbeddedMetadataReader) y le da prioridad a
+     * eso sobre mostrar "sin letra".
      */
     fun loadForSong(song: Song) {
 
@@ -470,8 +476,57 @@ class LyricsPanelController(
                 View.GONE
 
             showLyricsMessage(
-                "Sin letra guardada. Manten presionada la caratula para buscarla"
+                "Buscando letra en el archivo..."
             )
+
+            loadEmbeddedLyrics(song)
+        }
+    }
+
+    /**
+     * Revisa si [song] ya trae letra embebida en el archivo de audio (ver
+     * EmbeddedMetadataReader). Se llama solo cuando SavedLyricsRepository
+     * no tenia nada guardado para esta cancion (ver [loadForSong]).
+     *
+     * Si la encuentra, se le da prioridad sobre salir a buscar en red: se
+     * guarda en SavedLyricsRepository como si se hubiera descargado, asi
+     * que una sobreescritura posterior desde el selector de la caratula
+     * (mantener presionada) o desde Ajustes > Letras y Caratulas funciona
+     * exactamente igual que con cualquier otra letra guardada.
+     */
+    private fun loadEmbeddedLyrics(song: Song) {
+
+        val requestId = lyricsRequestId
+
+        AppExecutors.runInBackground {
+
+            val embedded = EmbeddedMetadataReader.readLyrics(activity, song)
+
+            AppExecutors.runOnMain {
+
+                // La cancion pudo haber cambiado, o la letra ya pudo
+                // haberse guardado por otro camino (selector manual),
+                // mientras se leia el archivo en el hilo de fondo.
+                if (requestId != lyricsRequestId || lyricsSongId != song.id) {
+                    return@runOnMain
+                }
+
+                if (embedded != null) {
+
+                    SavedLyricsRepository.save(activity, song.id, embedded)
+
+                    showLyricsResult(embedded, song.id)
+
+                } else {
+
+                    btnPanelLyricsSync.visibility =
+                        View.GONE
+
+                    showLyricsMessage(
+                        "Sin letra guardada. Manten presionada la caratula para buscarla"
+                    )
+                }
+            }
         }
     }
 

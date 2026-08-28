@@ -221,6 +221,18 @@ class LyricsActivity : AppCompatActivity() {
         val durationSeconds = song.duration / 1000
         LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
             override fun onSuccess(result: LyricsResult) {
+                val hasContent = !result.isInstrumental &&
+                        (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
+                if (hasContent) {
+                    // Antes esta letra recien encontrada solo se mostraba en
+                    // pantalla y nunca se guardaba: cada vez que se volvia a
+                    // abrir esta cancion se volvia a pedir a LRCLIB desde
+                    // cero. Ahora se guarda igual que cualquier otra letra
+                    // (cache de la app + archivo real, ver
+                    // persistLyricsToAudioFileIfPossible).
+                    SavedLyricsRepository.save(this@LyricsActivity, song.id, result)
+                    persistLyricsToAudioFileIfPossible(song, result)
+                }
                 applyLoadedResult(result)
             }
 
@@ -228,6 +240,23 @@ class LyricsActivity : AppCompatActivity() {
                 showMessage(message)
             }
         })
+    }
+
+    /**
+     * Si la app ya tiene el permiso de "Todos los archivos", graba [result]
+     * directo dentro del archivo de audio de [song], ademas del guardado
+     * normal en SavedLyricsRepository, para que la letra sobreviva a una
+     * desinstalacion sin que el usuario tenga que entrar a Ajustes >
+     * Letras y Caratulas a forzar la actualizacion. Se hace en un hilo de
+     * fondo (jaudiotagger hace I/O bloqueante) y nunca muestra ningun
+     * error: es un guardado de "mejor esfuerzo".
+     */
+    private fun persistLyricsToAudioFileIfPossible(song: Song, result: LyricsResult) {
+        if (!SongFileTagWriter.hasManageStoragePermission(this)) return
+        val appContext = applicationContext
+        AppExecutors.runInBackground {
+            SongFileTagWriter.writeToFile(appContext, song, lyricsResult = result)
+        }
     }
 
     private fun applyLoadedResult(result: LyricsResult) {
@@ -309,103 +338,46 @@ class LyricsActivity : AppCompatActivity() {
         val adapter = LyricsLineAdapter(adapterLines) { tappedIndex -> onLineTapped(tappedIndex) }
         lyricsAdapter = adapter
         rvLyrics.adapter = adapter
-
         progressBar.visibility = View.GONE
         tvMessage.visibility = View.GONE
         rvLyrics.visibility = View.VISIBLE
+
         tvSyncHint.visibility = View.VISIBLE
         llSyncControls.visibility = View.VISIBLE
         btnLyricsSyncToggle.setImageResource(R.drawable.ic_close)
-
-        val density = resources.displayMetrics.density
-        val extraBottomPaddingPx = (90 * density).toInt()
-        // Padding inferior fijo para que los controles de abajo (play/progreso/guardar)
-        // no tapen las ultimas lineas.
-        rvLyrics.setPadding(
-            rvLyrics.paddingLeft,
-            rvLyrics.paddingTop,
-            rvLyrics.paddingRight,
-            originalRvLyricsPaddingBottom + extraBottomPaddingPx
-        )
-
-        // El banner "Toca la linea cuando empiece a sonar" flota encima del
-        // RecyclerView. Le damos padding superior igual a su altura real
-        // (medida despues del layout) + un margen, para que la primera
-        // linea de la letra nunca quede tapada por el banner.
-        tvSyncHint.post {
-            val hintExtraPx = (12 * density).toInt()
-            val topPadding = originalRvLyricsPaddingTop + tvSyncHint.height + hintExtraPx
-            rvLyrics.setPadding(
-                rvLyrics.paddingLeft,
-                topPadding,
-                rvLyrics.paddingRight,
-                rvLyrics.paddingBottom
-            )
-        }
-
-        adapter.setActiveIndexDirect(0)
-        updateSyncProgressUI()
-        musicService?.let { updateSyncPlayPauseIcon(it.isPlaying()) }
+        updateSyncProgressLabel()
     }
 
     private fun onLineTapped(index: Int) {
-        val service = musicService ?: run {
-            Toast.makeText(this, "Reproductor no disponible", Toast.LENGTH_SHORT).show()
-            return
-        }
+        val service = musicService ?: return
         manualTimes[index] = service.getCurrentPosition().toLong()
-        val adapter = lyricsAdapter ?: return
-        adapter.markTagged(index)
+        // El metodo del adapter se llama "markTagged" (le pone el check a
+        // la linea), no "markLineSynced".
+        (lyricsAdapter as? LyricsLineAdapter)?.markTagged(index)
+        updateSyncProgressLabel()
 
-        // La siguiente linea "activa" es la primera pendiente (permite
-        // corregir lineas anteriores sin perder el hilo de las que faltan).
-        val nextPending = manualTimes.indexOfFirst { it == null }
-        adapter.setActiveIndexDirect(if (nextPending == -1) -1 else nextPending)
-
-        // Solo hacemos scroll automatico hacia ABAJO, cuando la siguiente
-        // linea pendiente esta fuera de la vista actual. Nunca hacia arriba:
-        // si tocaste una linea mas adelante sin marcar una anterior, esa
-        // anterior ya esta visible (arriba de donde estas), asi que no hay
-        // que saltar hacia ella.
-        if (nextPending != -1) {
-            val layoutManager = rvLyrics.layoutManager as? LinearLayoutManager
-            val lastVisible = layoutManager?.findLastCompletelyVisibleItemPosition() ?: -1
-            if (nextPending > lastVisible) {
-                scrollToLine(nextPending)
-            }
+        val nextIndex = index + 1
+        if (nextIndex < currentLines.size) {
+            scrollToLine(nextIndex)
         }
-
-        updateSyncProgressUI()
     }
 
-    private fun updateSyncProgressUI() {
-        val total = currentLines.size
-        val tagged = manualTimes.count { it != null }
-        tvSyncProgress.text = "$tagged/$total lineas"
-        val allTagged = total > 0 && tagged == total
-        btnSaveSync.isEnabled = allTagged
-        btnSaveSync.alpha = if (allTagged) 1f else 0.5f
-    }
-
-    private fun updateManualSyncButtonsVisibility() {
-        if (isSyncMode) {
-            // Mientras se esta sincronizando, el boton de mira se necesita
-            // para poder cancelar (queda como "X").
-            btnLyricsSyncToggle.visibility = View.VISIBLE
-            btnLyricsEdit.visibility = View.GONE
-            return
-        }
-        val hasOwnTimer = lastLoadedSyncedLines != null
-        // El boton de sincronizar (mira) solo tiene sentido si NO hay timestamps
-        // propios todavia. El boton de editar, en cambio, siempre debe estar
-        // disponible: el usuario puede querer corregir la letra aunque ya
-        // tenga tiempos sincronizados.
-        btnLyricsSyncToggle.visibility = if (hasOwnTimer) View.GONE else View.VISIBLE
-        btnLyricsEdit.visibility = View.VISIBLE
+    private fun updateSyncProgressLabel() {
+        val done = manualTimes.count { it != null }
+        tvSyncProgress.text = "$done/${currentLines.size}"
     }
 
     private fun updateSyncPlayPauseIcon(isPlaying: Boolean) {
-        btnSyncPlayPause.setImageResource(if (isPlaying) R.drawable.ic_pause_small else R.drawable.ic_play_small)
+        btnSyncPlayPause.setImageResource(
+            // No existe R.drawable.ic_play entre tus drawables; el que
+            // tienes es ic_play_arrow (el mismo que usa el reproductor).
+            if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
+        )
+    }
+
+    private fun updateManualSyncButtonsVisibility() {
+        val hasContent = lastLoadedSyncedLines != null || !lastLoadedPlainText.isNullOrBlank()
+        btnLyricsSyncToggle.visibility = if (isSyncMode || hasContent) View.VISIBLE else View.GONE
     }
 
     private fun resetRvLyricsPadding() {
@@ -446,6 +418,7 @@ class LyricsActivity : AppCompatActivity() {
             isInstrumental = false
         )
         SavedLyricsRepository.save(this, currentSong.id, result)
+        persistLyricsToAudioFileIfPossible(currentSong, result)
         Toast.makeText(this, "Sincronizacion guardada", Toast.LENGTH_SHORT).show()
         setResult(RESULT_OK)
 

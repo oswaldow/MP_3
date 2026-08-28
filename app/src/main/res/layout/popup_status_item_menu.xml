@@ -16,14 +16,4 @@
         android:textColor="@color/text_primary_light"
         android:textSize="14sp" />
 
-    <TextView
-        android:id="@+id/tvStatusItemMenuRefresh"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="?attr/selectableItemBackground"
-        android:padding="14dp"
-        android:text="Redescargar y sobreescribir"
-        android:textColor="@color/text_primary_light"
-        android:textSize="14sp" />
-
 </LinearLayout>

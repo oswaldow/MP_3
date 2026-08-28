@@ -1,3 +1,4 @@
+
 package com.learnlayout.mp_3
 
 import android.os.Handler
@@ -238,6 +239,23 @@ object LyricsRepository {
     private fun optNullableString(json: JSONObject, key: String): String? {
         if (!json.has(key) || json.isNull(key)) return null
         return json.optString(key, "").ifBlank { null }
+    }
+
+    /**
+     * Interpreta el texto plano guardado en el campo LYRICS embebido de un
+     * archivo de audio (ver EmbeddedMetadataReader). Muchos editores de
+     * tags (incluida esta misma app, ver SongFileTagWriter) guardan ahi la
+     * letra ya en formato LRC ("[mm:ss.xx] texto"), en cuyo caso se
+     * reconoce como sincronizada igual que si viniera de LRCLIB. Si no
+     * tiene ese formato, se trata como letra plana sin sincronizar.
+     */
+    fun parseEmbeddedText(raw: String): LyricsResult {
+        val synced = parseLrc(raw)
+        return if (synced.isNotEmpty()) {
+            LyricsResult(plainLyrics = null, syncedLines = synced, isInstrumental = false)
+        } else {
+            LyricsResult(plainLyrics = raw, syncedLines = null, isInstrumental = false)
+        }
     }
 
     private fun parseLrc(raw: String): List<LyricsLine> {

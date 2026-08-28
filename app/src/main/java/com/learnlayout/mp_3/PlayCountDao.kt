@@ -25,4 +25,13 @@ interface PlayCountDao {
 
     @Query("SELECT songId FROM play_counts WHERE lastPlayedAt > 0 ORDER BY lastPlayedAt DESC LIMIT :limit")
     fun getRecentlyPlayedSongIds(limit: Int): List<Long>
+
+    // Si ya existia un registro para newId, choca con la primary key
+    // (songId) y lanza SQLiteConstraintException; SongIdMigrator la
+    // captura y sigue con las demas tablas sin problema.
+    @Query("UPDATE play_counts SET songId = :newId WHERE songId = :oldId")
+    fun remapSongId(oldId: Long, newId: Long)
+
+    @Query("DELETE FROM play_counts WHERE songId = :songId")
+    fun deleteEntity(songId: Long)
 }

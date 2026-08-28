@@ -1,3 +1,4 @@
+
 package com.learnlayout.mp_3
 
 import android.content.Context
@@ -98,6 +99,21 @@ object AlbumArtRepository {
     }
 
     /**
+     * Si la app ya tiene el permiso de "Todos los archivos", graba [bitmap]
+     * directo en el tag del archivo de audio de [song] ademas del cache
+     * normal (memoria/disco), para que la caratula sobreviva a una
+     * desinstalacion sin que el usuario tenga que entrar a Ajustes > Letras
+     * y Caratulas a forzar la actualizacion. Se llama siempre desde un hilo
+     * de fondo (aqui ya lo estamos: dentro del executor propio de este
+     * repositorio). Si falla o no hay permiso, no pasa nada: la caratula se
+     * queda igual disponible en el cache normal de la app.
+     */
+    private fun persistCoverToAudioFileIfPossible(context: Context, song: Song, bitmap: Bitmap) {
+        if (!SongFileTagWriter.hasManageStoragePermission(context)) return
+        SongFileTagWriter.writeToFile(context, song, coverBitmap = bitmap)
+    }
+
+    /**
      * Pide la caratula de [song]. Llama a [callback] en el hilo principal
      * SOLO si la encuentra (memoria, disco o red) y sigue siendo necesaria.
      * Si no hay caratula disponible, no llama a [callback]: quien la pidio
@@ -152,7 +168,14 @@ object AlbumArtRepository {
                         pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
                     }
                     if (needsNetwork) {
-                        fetchFromNetwork(song)?.also { bmp -> saveToDisk(diskFile, bmp) }
+                        fetchFromNetwork(song)?.also { bmp ->
+                            saveToDisk(diskFile, bmp)
+                            // Descarga automatica desde red (lista, cola,
+                            // notificacion, widget, etc.): se graba tambien
+                            // en el archivo real para que sobreviva a una
+                            // desinstalacion.
+                            persistCoverToAudioFileIfPossible(appContext, song, bmp)
+                        }
                     } else null
                 }
 
@@ -170,10 +193,17 @@ object AlbumArtRepository {
      * y disco. La usa el reproductor (mini player y panel expandido) para
      * que escuchar musica no dispare busquedas de caratula por wifi/datos
      * cada vez que cambia la cancion. La busqueda en red solo se dispara
-     * ahora al mantener presionada la caratula (ver AlbumArtPickerDialog)
-     * o desde la descarga masiva en Configuracion (ver [prefetchCover]),
-     * que es la que deja la caratula ya guardada en disco para que esta
-     * funcion la encuentre despues sin tocar la red.
+     * al mantener presionada la caratula (ver AlbumArtPickerDialog) o
+     * desde Ajustes > Letras y Caratulas.
+     *
+     * Antes de rendirse (memoria y disco sin nada), revisa si el propio
+     * archivo de audio ya trae una caratula embebida (ver
+     * EmbeddedMetadataReader): si la tiene, se le da prioridad sobre salir
+     * a buscar en red y se guarda en este mismo cache de disco, para que
+     * las siguientes veces se lea de ahi directo. Una sobreescritura
+     * manual posterior (long-press o Ajustes) simplemente pisa ese mismo
+     * archivo de cache, exactamente igual que con una caratula bajada de
+     * red.
      */
     fun loadCoverCacheOnly(
         context: Context,
@@ -211,9 +241,17 @@ object AlbumArtRepository {
 
                 val cacheKey = cacheKeyFor(song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
-                if (!diskFile.exists()) return@execute
 
-                bitmap = decodeSampledBitmapFromFile(diskFile)
+                bitmap = if (diskFile.exists()) {
+                    decodeSampledBitmapFromFile(diskFile)
+                } else {
+                    val embedded = EmbeddedMetadataReader.readArtwork(appContext, song)
+                    if (embedded != null) {
+                        saveToDisk(diskFile, embedded)
+                    }
+                    embedded
+                }
+
                 if (bitmap != null) {
                     memoryCache.put(song.id, bitmap)
                 }
@@ -276,6 +314,7 @@ object AlbumArtRepository {
                     val bitmap = fetchFromNetwork(song)
                     if (bitmap != null) {
                         saveToDisk(diskFile, bitmap)
+                        persistCoverToAudioFileIfPossible(appContext, song, bitmap)
                         found = true
                     }
                 }
@@ -323,8 +362,27 @@ object AlbumArtRepository {
             val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
             saveToDisk(diskFile, bitmap)
             memoryCache.put(song.id, bitmap)
+            // Eleccion manual de caratula (picker de iTunes/Deezer): tambien
+            // se graba en el archivo real, igual que una descarga automatica.
+            persistCoverToAudioFileIfPossible(appContext, song, bitmap)
             mainHandler.post { callback.onCoverReady(bitmap) }
         }
+    }
+
+    /**
+     * Igual que [applyOverride] pero SIN callback ni pasar por el executor:
+     * pensada para cuando quien llama (ver
+     * LyricsArtStatusRepository.computeStatus) ya esta corriendo en un
+     * hilo de fondo y ya leyo [bitmap] de las etiquetas embebidas del
+     * archivo (ver EmbeddedMetadataReader), asi que solo hace falta
+     * guardarlo en el mismo cache de disco/memoria que usa el resto de la
+     * app. Debe llamarse desde un hilo de fondo.
+     */
+    fun cacheEmbeddedArtwork(context: Context, song: Song, bitmap: Bitmap) {
+        val appContext = context.applicationContext
+        val diskFile = File(cacheDir(appContext), "${cacheKeyFor(song)}.jpg")
+        saveToDisk(diskFile, bitmap)
+        memoryCache.put(song.id, bitmap)
     }
 
     /**

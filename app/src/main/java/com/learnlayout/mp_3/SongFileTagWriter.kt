@@ -1,6 +1,7 @@
 package com.learnlayout.mp_3
 
 import android.app.Activity
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -213,6 +214,32 @@ object SongFileTagWriter {
                 val finalUri = scannedUri ?: song.uri
                 restoreDate(context, finalUri, MediaStore.Audio.Media.DATE_ADDED, originalDateAdded)
                 restoreDate(context, finalUri, MediaStore.Audio.Media.DATE_MODIFIED, originalDateModified)
+
+                // En algunos fabricantes (sobre todo MIUI/HyperOS), reescribir
+                // el archivo completo aqui arriba hace que MediaStore le
+                // asigne un _ID nuevo a la misma cancion en vez de solo
+                // actualizar la fila existente. Sin este chequeo, esa
+                // cancion queda "huerfana": sigue en el archivo, pero
+                // playlists/favoritos/contadores de reproduccion siguen
+                // apuntando al _ID viejo, que ya no existe. Ver
+                // SongIdMigrator para el detalle de que se remapea.
+                if (scannedUri != null) {
+                    try {
+                        val newId = ContentUris.parseId(scannedUri)
+                        if (newId != song.id) {
+                            Log.w(
+                                TAG,
+                                "writeToFile(): el _ID de MediaStore cambio para " +
+                                        "songId=${song.id} -> $newId; remapeando referencias"
+                            )
+                            AppExecutors.runInBackground {
+                                SongIdMigrator.remapSongId(context.applicationContext, song.id, newId)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "No se pudo verificar si el _ID cambio tras el rescan: ${e.message}")
+                    }
+                }
             }
 
             Log.d(TAG, "writeToFile(): OK songId=${song.id} archivo=$path")

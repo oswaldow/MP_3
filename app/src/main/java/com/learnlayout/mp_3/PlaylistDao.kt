@@ -47,4 +47,10 @@ interface PlaylistDao {
 
     @Query("DELETE FROM playlist_songs WHERE songId = :songId")
     fun removeSongFromAllPlaylists(songId: Long)
+
+    // Si la playlist ya tenia newId agregado, esta fila choca con la
+    // primary key (playlistId, songId) y lanza SQLiteConstraintException;
+    // SongIdMigrator la captura y sigue con las demas tablas sin problema.
+    @Query("UPDATE playlist_songs SET songId = :newId WHERE songId = :oldId")
+    fun remapSongId(oldId: Long, newId: Long)
 }

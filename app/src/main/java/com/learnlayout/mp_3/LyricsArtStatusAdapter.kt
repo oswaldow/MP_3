@@ -13,8 +13,7 @@ import androidx.recyclerview.widget.RecyclerView
 class LyricsArtStatusAdapter(
     private var items: List<SongDownloadStatus>,
     private val onItemClick: (SongDownloadStatus) -> Unit,
-    private val onEditClick: (SongDownloadStatus) -> Unit,
-    private val onForceRefreshClick: (SongDownloadStatus) -> Unit
+    private val onEditClick: (SongDownloadStatus) -> Unit
 ) : RecyclerView.Adapter<LyricsArtStatusAdapter.StatusViewHolder>() {
 
     inner class StatusViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -63,12 +62,9 @@ class LyricsArtStatusAdapter(
     }
 
     /**
-     * Reemplaza los dos iconos sueltos que habia antes (editar y
-     * redescargar) por un solo boton de "mas opciones" que abre este
-     * menu, siguiendo el mismo patron de PopupWindow que
-     * TopBarController.showSortPopup() / popup_sort_menu.xml. Al tener
-     * un unico boton grande en vez de dos pegados, ya no hay forma de
-     * tocar uno por accidente en lugar del otro.
+     * Menu de acciones por cancion. Solo tiene "Editar titulo y artista":
+     * la opcion de "Redescargar y sobreescribir" se elimino por completo
+     * junto con su fila superior en la Activity.
      */
     private fun showItemMenu(anchor: View, item: SongDownloadStatus) {
         val popupView = LayoutInflater.from(anchor.context)
@@ -85,10 +81,6 @@ class LyricsArtStatusAdapter(
 
         popupView.findViewById<TextView>(R.id.tvStatusItemMenuEdit).setOnClickListener {
             onEditClick(item)
-            popupWindow.dismiss()
-        }
-        popupView.findViewById<TextView>(R.id.tvStatusItemMenuRefresh).setOnClickListener {
-            onForceRefreshClick(item)
             popupWindow.dismiss()
         }
 

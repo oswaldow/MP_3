@@ -250,6 +250,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     },
                     onLyricsChosen = { chosenSong, result ->
                         SavedLyricsRepository.save(this, chosenSong.id, result)
+                        persistLyricsToAudioFileIfPossible(chosenSong, result)
                         lyricsPanelController.reloadSavedLyrics(chosenSong)
                         Toast.makeText(this, "Letra guardada", Toast.LENGTH_SHORT).show()
                     }
@@ -1001,6 +1002,14 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         val updated = SongMetadataRepository.apply(this, current)
         if (updated.title == current.title && updated.artist == current.artist) return
         service.updateSongMetadata(updated.id, updated.title, updated.artist)
+    }
+
+    private fun persistLyricsToAudioFileIfPossible(song: Song, result: LyricsResult) {
+        if (!SongFileTagWriter.hasManageStoragePermission(this)) return
+        val appContext = applicationContext
+        AppExecutors.runInBackground {
+            SongFileTagWriter.writeToFile(appContext, song, lyricsResult = result)
+        }
     }
 
     private fun showMiniPlayer(song: Song, playing: Boolean) {

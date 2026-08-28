@@ -18,11 +18,6 @@ class LyricsArtStatusActivity : AppCompatActivity() {
     private var allItems: List<SongDownloadStatus> = emptyList()
     private var showMissingOnly = false
 
-    // Evita lanzar dos redescargas masivas al mismo tiempo, y evita que un
-    // toque de redescarga individual se mezcle con una masiva en curso.
-    private var isForceRedownloading = false
-    private val itemsRefreshingIndividually = mutableSetOf<Long>()
-
     private val playlistDialogs: PlaylistDialogs by lazy {
         PlaylistDialogs(
             context = this,
@@ -44,12 +39,9 @@ class LyricsArtStatusActivity : AppCompatActivity() {
         statusAdapter = LyricsArtStatusAdapter(
             items = emptyList(),
             onItemClick = { item -> openPickerFor(item) },
-            onEditClick = { item -> playlistDialogs.showEditSongMetadataDialog(item.song) },
-            onForceRefreshClick = { item -> forceRefreshSingleSong(item) }
+            onEditClick = { item -> playlistDialogs.showEditSongMetadataDialog(item.song) }
         )
         binding.rvStatusList.adapter = statusAdapter
-
-        binding.btnForceRedownloadAll.setOnClickListener { forceRedownloadAll() }
 
         setupSearch()
         setupMissingOnlyToggle()
@@ -60,19 +52,11 @@ class LyricsArtStatusActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (allItems.isNotEmpty() && !isForceRedownloading) {
+        if (allItems.isNotEmpty()) {
             loadStatus()
         }
     }
 
-    /**
-     * "Tirar para abajo" sobre la lista vuelve a calcular el estado de
-     * letras/caratulas al instante, igual que el boton "Actualizar" de
-     * arriba pero con el gesto e icono estandar. A diferencia de la carga
-     * inicial, esta no tapa la lista con el ProgressBar grande (silently =
-     * true): la lista actual se queda visible mientras se recalcula, y solo
-     * se ve el icono circular de "actualizando" hasta que termine.
-     */
     private fun setupSwipeToRefresh() {
         binding.swipeRefreshStatusList.setColorSchemeResources(R.color.spotify_green)
         binding.swipeRefreshStatusList.setProgressBackgroundColorSchemeResource(R.color.spotify_card)
@@ -103,12 +87,6 @@ class LyricsArtStatusActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * [silently] evita el ProgressBar grande de pantalla completa (que
-     * ademas esconde la lista mientras carga): se usa cuando el refresh
-     * viene del gesto de "tirar para abajo" (ver setupSwipeToRefresh), que
-     * ya muestra su propio icono de actualizando sin tapar la lista actual.
-     */
     private fun loadStatus(silently: Boolean = false) {
         if (!silently) {
             binding.progressLoadingStatus.visibility = View.VISIBLE
@@ -138,6 +116,8 @@ class LyricsArtStatusActivity : AppCompatActivity() {
             context = this,
             song = item.song,
             onCoverChosen = { chosenSong, bitmap ->
+                // applyOverride ya se encarga de embeber la caratula en el
+                // archivo real internamente (persistCoverToAudioFileIfPossible).
                 AlbumArtRepository.applyOverride(
                     this, chosenSong, bitmap,
                     object : AlbumArtRepository.Callback {
@@ -150,6 +130,11 @@ class LyricsArtStatusActivity : AppCompatActivity() {
             },
             onLyricsChosen = { chosenSong, result ->
                 SavedLyricsRepository.save(this, chosenSong.id, result)
+                // A diferencia de la caratula, guardar la letra aqui no
+                // la embebia en el archivo real (a diferencia de
+                // SongListActivity y LyricsActivity, que si lo hacen).
+                // Se agrega el mismo paso para que quede consistente.
+                persistLyricsToAudioFileIfPossible(chosenSong, result)
                 markItemUpdated(chosenSong.id, hasLyrics = true)
                 Toast.makeText(this, "Letra guardada", Toast.LENGTH_SHORT).show()
             }
@@ -157,226 +142,18 @@ class LyricsArtStatusActivity : AppCompatActivity() {
     }
 
     /**
-     * Antes de "Actualizar" (individual o masivo) hace falta el permiso de
-     * "Todos los archivos" para poder escribir en las canciones reales.
-     * Si no esta concedido, se explica por que y se manda a la pantalla del
-     * sistema para activarlo; la accion de actualizar se cancela para que
-     * el usuario la vuelva a tocar despues de conceder el permiso.
+     * Si la app ya tiene el permiso de "Todos los archivos", graba
+     * [result] directo dentro del archivo de audio de [song], ademas del
+     * guardado normal en SavedLyricsRepository. Mismo patron que usan
+     * SongListActivity y LyricsActivity. Si falla o no hay permiso, no
+     * pasa nada: la letra se queda igual disponible en el cache normal
+     * de la app (y la palomita en esta pantalla sigue reflejando eso).
      */
-    private fun ensureFileWritePermission(onGranted: () -> Unit) {
-        if (SongFileTagWriter.hasManageStoragePermission(this)) {
-            onGranted()
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Permiso necesario")
-            .setMessage(
-                "Para guardar la caratula y la letra dentro del archivo de la " +
-                        "cancion (y que no se pierdan si reinstalas la app), " +
-                        "MP_3 necesita el permiso \"Acceso a todos los archivos\". " +
-                        "Actívalo y vuelve a tocar Actualizar."
-            )
-            .setPositiveButton("Ir a Ajustes") { _, _ ->
-                SongFileTagWriter.requestManageStoragePermission(this)
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    /**
-     * Vuelve a buscar en red la caratula y la letra de UNA sola cancion
-     * (usando su titulo/artista actual, ya con overrides aplicados) y
-     * sobreescribe lo que hubiera guardado, sin importar si ya estaba
-     * "completa". Pensado para usarse justo despues de editar el
-     * nombre/artista de la cancion o de elegir una caratula que no quedo
-     * bien: en vez de tener que desinstalar la app o esperar a la
-     * descarga masiva, un solo toque fuerza la actualizacion de esa
-     * cancion.
-     *
-     * Ademas de guardar en el almacenamiento privado de la app (como
-     * antes), esta version escribe la caratula y la letra directamente
-     * dentro del archivo de audio (ver SongFileTagWriter), para que
-     * sobrevivan a una desinstalacion.
-     */
-    private fun forceRefreshSingleSong(item: SongDownloadStatus) {
-        ensureFileWritePermission {
-            doForceRefreshSingleSong(item)
-        }
-    }
-
-    private fun doForceRefreshSingleSong(item: SongDownloadStatus) {
-        val songId = item.song.id
-        if (!itemsRefreshingIndividually.add(songId)) return
-
-        Toast.makeText(this, "Actualizando \"${item.song.title}\"...", Toast.LENGTH_SHORT).show()
-
-        var artUpdated = false
-        var lyricsUpdated = false
-
-        fun finishIfReady() {
-            // Se espera a que terminen tanto la caratula como la letra
-            // antes de refrescar la fila, para no repintar dos veces.
-            itemsRefreshingIndividually.remove(songId)
-            markItemUpdated(songId, hasLyrics = lyricsUpdated, hasArt = artUpdated)
-
-            writeUpdatedTagsToFile(item.song) {
-                Toast.makeText(
-                    this,
-                    "\"${item.song.title}\" actualizada",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
-
-        AlbumArtRepository.forceRefreshCover(this, item.song) { found ->
-            artUpdated = found || item.hasArt
-
-            val durationSeconds = item.song.duration / 1000
-            LyricsRepository.fetch(
-                item.song.title,
-                item.song.artist,
-                durationSeconds,
-                object : LyricsRepository.LyricsCallback {
-                    override fun onSuccess(result: LyricsResult) {
-                        val hasLyrics = !result.isInstrumental &&
-                                (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
-                        if (hasLyrics) {
-                            SavedLyricsRepository.save(this@LyricsArtStatusActivity, songId, result)
-                        }
-                        lyricsUpdated = hasLyrics || item.hasLyrics
-                        finishIfReady()
-                    }
-
-                    override fun onError(message: String) {
-                        lyricsUpdated = item.hasLyrics
-                        finishIfReady()
-                    }
-                }
-            )
-        }
-    }
-
-    /**
-     * Version masiva de [forceRefreshSingleSong]: recorre TODAS las
-     * canciones (no solo las filtradas en pantalla) y sobreescribe la
-     * caratula y la letra de cada una segun su titulo/artista actual, sin
-     * saltarse las que ya estuvieran "completas" (a diferencia del boton
-     * de descarga de Ajustes, que si se las salta). Sirve para aplicar de
-     * una sola vez varias ediciones de nombre/caratula que se hayan hecho
-     * antes. Tambien escribe cada resultado dentro del archivo de audio
-     * correspondiente (ver SongFileTagWriter).
-     */
-    private fun forceRedownloadAll() {
-        ensureFileWritePermission {
-            doForceRedownloadAll()
-        }
-    }
-
-    private fun doForceRedownloadAll() {
-        if (isForceRedownloading) return
-        if (allItems.isEmpty()) {
-            Toast.makeText(this, "No se encontraron canciones", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        isForceRedownloading = true
-        binding.btnForceRedownloadAll.isEnabled = false
-        binding.progressForceRedownloadAll.visibility = View.VISIBLE
-
-        val songs = allItems.map { it.song }
-        var index = 0
-        var lyricsUpdatedCount = 0
-        var artUpdatedCount = 0
-
-        fun finishAll() {
-            isForceRedownloading = false
-            binding.btnForceRedownloadAll.isEnabled = true
-            binding.progressForceRedownloadAll.visibility = View.GONE
-            binding.tvForceRedownloadSummary.text =
-                "Vuelve a buscar letra y caratula con el nombre actual de cada cancion"
-            Toast.makeText(
-                this,
-                "Listo: $lyricsUpdatedCount letras y $artUpdatedCount caratulas actualizadas de ${songs.size}",
-                Toast.LENGTH_LONG
-            ).show()
-            loadStatus()
-        }
-
-        lateinit var processNext: () -> Unit
-
-        fun fetchLyricsForCurrentSong(song: Song) {
-            val durationSeconds = song.duration / 1000
-            LyricsRepository.fetch(song.title, song.artist, durationSeconds, object : LyricsRepository.LyricsCallback {
-                override fun onSuccess(result: LyricsResult) {
-                    val hasLyrics = !result.isInstrumental &&
-                            (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
-                    if (hasLyrics) {
-                        SavedLyricsRepository.save(this@LyricsArtStatusActivity, song.id, result)
-                        lyricsUpdatedCount++
-                    }
-                    writeUpdatedTagsToFile(song) {
-                        index++
-                        processNext()
-                    }
-                }
-
-                override fun onError(message: String) {
-                    writeUpdatedTagsToFile(song) {
-                        index++
-                        processNext()
-                    }
-                }
-            })
-        }
-
-        processNext = {
-            if (index >= songs.size) {
-                finishAll()
-            } else {
-                val song = songs[index]
-                binding.tvForceRedownloadSummary.text = "Actualizando ${index + 1}/${songs.size}: ${song.title}"
-
-                AlbumArtRepository.forceRefreshCover(this, song) { found ->
-                    if (found) artUpdatedCount++
-                    fetchLyricsForCurrentSong(song)
-                }
-            }
-        }
-
-        processNext()
-    }
-
-    /**
-     * Toma lo que haya quedado guardado en el almacenamiento privado
-     * (caratula en memoria/disco via AlbumArtRepository, letra en
-     * SavedLyricsRepository -sea que se acaba de actualizar o ya estuviera
-     * de antes-) y lo escribe tambien dentro del archivo de audio real.
-     * Se hace en el hilo de fondo compartido porque jaudiotagger hace I/O
-     * bloqueante. [onDone] siempre se llama al final, en el hilo principal,
-     * haya o no haya logrado escribir algo (por ejemplo si el permiso de
-     * Todos los archivos se revoco justo despues del chequeo inicial).
-     */
-    private fun writeUpdatedTagsToFile(song: Song, onDone: () -> Unit) {
-        val cover = AlbumArtRepository.getCachedCover(song)
-        val lyrics = SavedLyricsRepository.getSavedLyrics(this, song.id)
-
-        if (cover == null && lyrics == null) {
-            onDone()
-            return
-        }
-
+    private fun persistLyricsToAudioFileIfPossible(song: Song, result: LyricsResult) {
+        if (!SongFileTagWriter.hasManageStoragePermission(this)) return
+        val appContext = applicationContext
         AppExecutors.runInBackground {
-            val wrote = SongFileTagWriter.writeToFile(this, song, cover, lyrics)
-            AppExecutors.runOnMain {
-                if (!wrote) {
-                    Toast.makeText(
-                        this,
-                        "No se pudo guardar en el archivo de \"${song.title}\" (revisa el permiso de Todos los archivos)",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-                onDone()
-            }
+            SongFileTagWriter.writeToFile(appContext, song, lyricsResult = result)
         }
     }
 

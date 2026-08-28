@@ -86,13 +86,10 @@
 
     </LinearLayout>
 
-    <!-- Unico boton tocable de acciones por cancion. Antes habia dos
-         iconos de 20dp casi pegados (editar y redescargar) que eran
-         faciles de confundir al tocar. Ahora un solo boton con area
-         de toque real de 40dp (el icono visual sigue midiendo 20dp,
-         el resto es padding) abre un menu con ambas opciones, usando
-         el mismo patron de PopupWindow que TopBarController
-         .showSortPopup() / popup_sort_menu.xml. -->
+    <!-- Unico boton tocable de acciones por cancion. El menu solo tiene
+         "Editar titulo y artista": la opcion de "Redescargar y
+         sobreescribir" se elimino por completo junto con su fila superior
+         en la Activity. -->
     <ImageView
         android:id="@+id/ivStatusItemMenu"
         android:layout_width="40dp"

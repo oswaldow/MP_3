@@ -54,6 +54,20 @@ object SavedLyricsRepository {
         prefs(context).edit().putString(keyFor(songId), toJson(result).toString()).apply()
     }
 
+    /**
+     * Mueve la letra guardada de [oldId] a [newId] (mismo contenido, nueva
+     * clave). Si [oldId] no tenia letra guardada, no hace nada. Si [newId]
+     * ya tenia una letra guardada propia, esa se sobreescribe con la de
+     * [oldId] (se asume que es la misma cancion bajo un _ID nuevo).
+     */
+    fun renameKey(context: Context, oldId: Long, newId: Long) {
+        val json = prefs(context).getString(keyFor(oldId), null) ?: return
+        prefs(context).edit()
+            .putString(keyFor(newId), json)
+            .remove(keyFor(oldId))
+            .apply()
+    }
+
     private fun toJson(result: LyricsResult): JSONObject {
         val obj = JSONObject()
         obj.put("plainLyrics", result.plainLyrics ?: JSONObject.NULL)
@@ -69,7 +83,7 @@ object SavedLyricsRepository {
         return obj
     }
 
-    private fun parse(obj: JSONObject): LyricsResult {
+     private fun parse(obj: JSONObject): LyricsResult {
         val plain = obj.optString("plainLyrics", "").ifBlank { null }
         val isInstrumental = obj.optBoolean("isInstrumental", false)
         val linesArray = obj.optJSONArray("syncedLines")
