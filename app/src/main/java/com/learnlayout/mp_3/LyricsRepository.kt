@@ -1,4 +1,3 @@
-
 package com.learnlayout.mp_3
 
 import android.os.Handler
@@ -74,10 +73,97 @@ object LyricsRepository {
         fun onCandidatesReady(candidates: List<LyricsCandidate>)
     }
 
+    /**
+     * Descarga automatica de letra para [title]/[artist]/[durationSeconds]
+     * (la duracion real, en segundos, del archivo de audio ya descargado).
+     *
+     * FIX: antes esta funcion probaba primero /get (que en LRCLIB devuelve
+     * UN solo resultado elegido por el servidor) y solo si fallaba caia a
+     * /search tomando a ciegas el primer resultado del array, sin mirar si
+     * ese resultado tenia letra SINCRONIZADA ni que tan cerca estaba su
+     * duracion de la real. Eso podia traer una letra plana (sin sincronizar)
+     * cuando SI existia una version sincronizada para la misma cancion, o
+     * una version de duracion muy distinta (ej. version de radio vs. version
+     * de album) en vez de la que mejor coincide con el archivo real.
+     *
+     * Ahora se consulta siempre /search (que trae varias versiones
+     * candidatas para el mismo title/artist) y se elige la mejor segun dos
+     * filtros, en este orden de prioridad (ver [pickBestResult]):
+     *   1) preferencia por letra sincronizada sobre letra plana.
+     *   2) entre las que empatan en el filtro anterior, la de duracion mas
+     *      cercana a [durationSeconds].
+     * Solo si /search no da ningun resultado usable, se cae a /get como
+     * ultimo recurso (por si el catalogo de LRCLIB indexa esa cancion de
+     * forma distinta para busqueda directa que para busqueda por texto).
+     */
     fun fetch(title: String, artist: String, durationSeconds: Long, callback: LyricsCallback) {
         val (cleanTitle, cleanArtist) = sanitizeTitleArtist(title, artist)
+        fetchBestViaSearch(cleanTitle, cleanArtist, durationSeconds, callback)
+    }
 
-        val getUrl = buildGetUrl(cleanTitle, cleanArtist, durationSeconds)
+    /**
+     * Busca TODAS las coincidencias que LRCLIB tenga para title/artist (via
+     * /search) y elige la mejor aplicando los filtros de [pickBestResult]:
+     * preferencia por sincronizada y, entre las que empatan, la de duracion
+     * mas cercana a [durationSeconds]. Si no encuentra nada usable, cae a
+     * /get como ultimo recurso.
+     */
+    private fun fetchBestViaSearch(
+        title: String,
+        artist: String,
+        durationSeconds: Long,
+        callback: LyricsCallback
+    ) {
+        val searchUrl = "$BASE_URL/search?track_name=${encode(title)}&artist_name=${encode(artist)}"
+        val request = Request.Builder()
+            .url(searchUrl)
+            .header("User-Agent", USER_AGENT)
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.w(TAG, "SEARCH falló, se intenta con /get", e)
+                fetchViaGet(title, artist, durationSeconds, callback)
+            }
+
+            override fun onResponse(call: Call, response: okhttp3.Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        fetchViaGet(title, artist, durationSeconds, callback)
+                        return
+                    }
+                    val body = it.body?.string()
+                    try {
+                        val array = JSONArray(body ?: "[]")
+                        val best = pickBestResult(array, durationSeconds)
+                        if (best != null) {
+                            mainHandler.post { callback.onSuccess(best) }
+                        } else {
+                            Log.d(TAG, "SEARCH sin candidatos usables, se intenta con /get")
+                            fetchViaGet(title, artist, durationSeconds, callback)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parseando respuesta de /search", e)
+                        fetchViaGet(title, artist, durationSeconds, callback)
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * Ultimo recurso: pide directamente /get (title+artist+duration), que
+     * en LRCLIB devuelve un unico resultado elegido por el propio servidor.
+     * Se usa solo cuando /search no encontro nada, asi que aqui no aplican
+     * los filtros de sincronizacion/duracion (no hay entre que elegir).
+     */
+    private fun fetchViaGet(
+        title: String,
+        artist: String,
+        durationSeconds: Long,
+        callback: LyricsCallback
+    ) {
+        val getUrl = buildGetUrl(title, artist, durationSeconds)
         val request = Request.Builder()
             .url(getUrl)
             .header("User-Agent", USER_AGENT)
@@ -85,19 +171,19 @@ object LyricsRepository {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.w(TAG, "GET falló, se intenta con /search", e)
-                fetchViaSearch(cleanTitle, cleanArtist, callback)
+                Log.w(TAG, "GET también falló", e)
+                mainHandler.post { callback.onError("Sin conexión o LRCLIB no respondió") }
             }
 
             override fun onResponse(call: Call, response: okhttp3.Response) {
                 response.use {
                     if (!it.isSuccessful) {
-                        fetchViaSearch(cleanTitle, cleanArtist, callback)
+                        mainHandler.post { callback.onError("No se encontró letra para esta canción") }
                         return
                     }
                     val body = it.body?.string()
                     if (body.isNullOrBlank()) {
-                        fetchViaSearch(cleanTitle, cleanArtist, callback)
+                        mainHandler.post { callback.onError("No se encontró letra para esta canción") }
                         return
                     }
                     try {
@@ -105,11 +191,74 @@ object LyricsRepository {
                         mainHandler.post { callback.onSuccess(result) }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error parseando respuesta de /get", e)
-                        fetchViaSearch(cleanTitle, cleanArtist, callback)
+                        mainHandler.post { callback.onError("Error leyendo la respuesta de LRCLIB") }
                     }
                 }
             }
         })
+    }
+
+    /**
+     * Elige, entre todos los resultados de [array] (respuesta cruda de
+     * /search), el que mejor cumple los dos filtros pedidos, en este orden
+     * de prioridad:
+     *
+     * 1) SINCRONIZACION: un resultado con letra sincronizada (syncedLyrics
+     *    no vacio) siempre gana sobre uno que solo tenga letra plana, sin
+     *    importar que tan lejos este su duracion de [targetDurationSeconds].
+     *
+     * 2) DURACION: entre los resultados que empatan en el filtro anterior
+     *    (todos sincronizados, o todos sin sincronizar si ninguno lo esta),
+     *    se elige el que tenga la duracion mas cercana a
+     *    [targetDurationSeconds]. Los resultados sin duracion informada se
+     *    tratan como "lo mas lejos posible" (van al final), para no
+     *    preferirlos por accidente sobre uno que si informa una duracion
+     *    cercana, pero sin descartarlos: si son la unica opcion sincronizada
+     *    disponible, igual se eligen.
+     *
+     * Descarta candidatos sin contenido util (marcados instrumental sin
+     * texto, o sin letra plana ni sincronizada). Devuelve null si ningun
+     * resultado del array sirve.
+     */
+    private fun pickBestResult(array: JSONArray, targetDurationSeconds: Long): LyricsResult? {
+        data class ScoredResult(
+            val result: LyricsResult,
+            val isSynced: Boolean,
+            val durationDistance: Long
+        )
+
+        val scored = mutableListOf<ScoredResult>()
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val result = parseSingleResult(obj)
+
+            val hasContent = !result.isInstrumental &&
+                    (!result.syncedLines.isNullOrEmpty() || !result.plainLyrics.isNullOrBlank())
+            if (!hasContent) continue
+
+            val candidateDuration = obj.optLong("duration", -1L).takeIf { it > 0L }
+            val distance = if (candidateDuration != null) {
+                kotlin.math.abs(candidateDuration - targetDurationSeconds)
+            } else {
+                Long.MAX_VALUE
+            }
+
+            scored += ScoredResult(
+                result = result,
+                isSynced = !result.syncedLines.isNullOrEmpty(),
+                durationDistance = distance
+            )
+        }
+
+        if (scored.isEmpty()) return null
+
+        return scored
+            .sortedWith(
+                compareByDescending<ScoredResult> { it.isSynced }
+                    .thenBy { it.durationDistance }
+            )
+            .first()
+            .result
     }
 
     /**
@@ -178,43 +327,6 @@ object LyricsRepository {
         val syncLabel = if (!result.syncedLines.isNullOrEmpty()) "Sincronizada" else "Sin sincronizar"
 
         return "$trackName - $artistName - $syncLabel"
-    }
-
-    private fun fetchViaSearch(title: String, artist: String, callback: LyricsCallback) {
-        val searchUrl = "$BASE_URL/search?track_name=${encode(title)}&artist_name=${encode(artist)}"
-        val request = Request.Builder()
-            .url(searchUrl)
-            .header("User-Agent", USER_AGENT)
-            .build()
-
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                Log.w(TAG, "SEARCH falló", e)
-                mainHandler.post { callback.onError("Sin conexión o LRCLIB no respondió") }
-            }
-
-            override fun onResponse(call: Call, response: okhttp3.Response) {
-                response.use {
-                    if (!it.isSuccessful) {
-                        mainHandler.post { callback.onError("No se encontró letra para esta canción") }
-                        return
-                    }
-                    val body = it.body?.string()
-                    try {
-                        val array = JSONArray(body ?: "[]")
-                        if (array.length() == 0) {
-                            mainHandler.post { callback.onError("No se encontró letra para esta canción") }
-                            return
-                        }
-                        val result = parseSingleResult(array.getJSONObject(0))
-                        mainHandler.post { callback.onSuccess(result) }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error parseando respuesta de /search", e)
-                        mainHandler.post { callback.onError("Error leyendo la respuesta de LRCLIB") }
-                    }
-                }
-            }
-        })
     }
 
     private fun parseSingleResult(json: JSONObject): LyricsResult {

@@ -77,6 +77,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private val btnPanelSleepTimer: ImageButton by lazy { findViewById(R.id.btnPanelSleepTimer) }
     private val btnPanelLyricsSync: ImageButton by lazy { findViewById(R.id.btnPanelLyricsSync) }
     private val btnPanelQueue: ImageButton by lazy { findViewById(R.id.btnPanelQueue) }
+    // Nuevo icono "Agregar a playlist" de la fila superior del panel
+    // expandido, junto a btnPanelQueue/btnPanelFavorite/btnPanelLyricsSync.
+    // El id btnPanelAddToPlaylist todavia no existe en activity_song_list.xml:
+    // falta agregarlo al layout (iteracion aparte) para que este findViewById
+    // no truene en tiempo de ejecucion.
+    private val btnPanelAddToPlaylist: ImageButton by lazy { findViewById(R.id.btnPanelAddToPlaylist) }
     private val ivPanelAlbumArt: ImageView by lazy { findViewById(R.id.ivPanelAlbumArt) }
 
     private val albumArtTransitionOverlay: FrameLayout by lazy { findViewById(R.id.flAlbumArtTransitionOverlay) }
@@ -207,6 +213,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnPanelQueue = btnPanelQueue,
             btnPanelFavorite = btnPanelFavorite,
             btnPanelLyricsSync = btnPanelLyricsSync,
+            btnPanelAddToPlaylist = btnPanelAddToPlaylist,
             ivPanelAlbumArt = ivPanelAlbumArt,
             albumArtTransitionOverlay = albumArtTransitionOverlay,
             audioSpectrumView = audioSpectrumView,
@@ -249,7 +256,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                         )
                     },
                     onLyricsChosen = { chosenSong, result ->
-                        SavedLyricsRepository.save(this, chosenSong.id, result)
+                        // Eleccion manual desde el picker de candidatos: no
+                        // debe pisarse sola con la letra embebida del archivo.
+                        SavedLyricsRepository.saveManual(this, chosenSong.id, result)
                         persistLyricsToAudioFileIfPossible(chosenSong, result)
                         lyricsPanelController.reloadSavedLyrics(chosenSong)
                         Toast.makeText(this, "Letra guardada", Toast.LENGTH_SHORT).show()
@@ -258,6 +267,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             },
             onEditSongMetadata = { song ->
                 playlistDialogs.showEditSongMetadataDialog(song)
+            },
+            onAddToPlaylist = { song ->
+                playlistDialogs.showAddToPlaylistDialog(song)
             },
             onAlbumArtChanged = { bitmap ->
                 if (bitmap != null) {

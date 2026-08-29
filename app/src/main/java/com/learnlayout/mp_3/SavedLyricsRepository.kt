@@ -34,6 +34,22 @@ object SavedLyricsRepository {
         }
     }
 
+    /**
+     * true si la letra guardada de [songId] fue elegida a mano por el
+     * usuario (picker de candidatos o sincronizacion manual, ver
+     * [saveManual]), en vez de venir de una descarga/lectura automatica.
+     * Una letra manual ya no se pisa sola con la letra embebida del
+     * archivo (ver LyricsPanelController.loadEmbeddedLyricsFirst).
+     */
+    fun isManual(context: Context, songId: Long): Boolean {
+        val json = prefs(context).getString(keyFor(songId), null) ?: return false
+        return try {
+            JSONObject(json).optBoolean("isManual", false)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun toggleSaved(context: Context, songId: Long, result: LyricsResult): Boolean {
         return if (isSaved(context, songId)) {
             prefs(context).edit().remove(keyFor(songId)).apply()
@@ -46,12 +62,22 @@ object SavedLyricsRepository {
 
     /**
      * Guarda (o sobreescribe) la letra de esta cancion sin importar si ya
-     * habia una guardada antes. La usa el modo de sincronizacion manual:
-     * cada vez que el usuario re-sincroniza a mano, esto reemplaza lo que
-     * hubiera guardado previamente (LRCLIB o una sincronizacion anterior).
+     * habia una guardada antes. La usa el guardado automatico (LRCLIB o
+     * letra embebida leida del archivo): esto reemplaza lo que hubiera
+     * guardado previamente, pero NO se marca como eleccion manual.
      */
     fun save(context: Context, songId: Long, result: LyricsResult) {
-        prefs(context).edit().putString(keyFor(songId), toJson(result).toString()).apply()
+        prefs(context).edit().putString(keyFor(songId), toJson(result, isManual = false).toString()).apply()
+    }
+
+    /**
+     * Igual que [save], pero marca esta letra como elegida a mano por el
+     * usuario (picker de candidatos del selector de caratula, o
+     * sincronizacion manual desde LyricsActivity). Una letra marcada asi
+     * ya no se pisa sola con la letra embebida del archivo.
+     */
+    fun saveManual(context: Context, songId: Long, result: LyricsResult) {
+        prefs(context).edit().putString(keyFor(songId), toJson(result, isManual = true).toString()).apply()
     }
 
     /**
@@ -68,10 +94,11 @@ object SavedLyricsRepository {
             .apply()
     }
 
-    private fun toJson(result: LyricsResult): JSONObject {
+    private fun toJson(result: LyricsResult, isManual: Boolean = false): JSONObject {
         val obj = JSONObject()
         obj.put("plainLyrics", result.plainLyrics ?: JSONObject.NULL)
         obj.put("isInstrumental", result.isInstrumental)
+        obj.put("isManual", isManual)
         val linesArray = JSONArray()
         result.syncedLines?.forEach { line ->
             val lineObj = JSONObject()
@@ -83,7 +110,7 @@ object SavedLyricsRepository {
         return obj
     }
 
-     private fun parse(obj: JSONObject): LyricsResult {
+    private fun parse(obj: JSONObject): LyricsResult {
         val plain = obj.optString("plainLyrics", "").ifBlank { null }
         val isInstrumental = obj.optBoolean("isInstrumental", false)
         val linesArray = obj.optJSONArray("syncedLines")

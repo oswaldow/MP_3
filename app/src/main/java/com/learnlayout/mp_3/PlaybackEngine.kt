@@ -12,7 +12,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import kotlin.math.cos
@@ -501,10 +503,34 @@ class PlaybackEngine(
                 .build()
         )
 
+        // LoadControl a medida: los valores por defecto de ExoPlayer estan
+        // pensados para streaming por red y exigen juntar hasta 5000ms de
+        // buffer antes de reanudar audio tras pasar por STATE_BUFFERING.
+        // Eso es justo lo que se percibia como "se pausa y despues avanza"
+        // al tocar el WaveformSeekBar: cada seekTo() pasa brevemente por
+        // BUFFERING y, aunque el archivo es local y se lee al instante,
+        // ExoPlayer no reanudaba el audio hasta juntar ese colchon. Bajarlo
+        // a un valor minimo deja que retome apenas tenga lo justo.
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                200 // bufferForPlaybackAfterRebufferMs (por defecto 5000ms)
+            )
+            .build()
+
         return ExoPlayer.Builder(context, EqAudioSinkRenderersFactory(context))
             .setTrackSelector(trackSelector)
+            .setLoadControl(loadControl)
             .build()
             .apply {
+                // CLOSEST_SYNC en vez de EXACT (por defecto): salta al punto
+                // de sincronizacion mas cercano en vez de decodificar de mas
+                // para caer exacto en el frame pedido. En audio la
+                // diferencia es inaudible pero el seek termina antes.
+                setSeekParameters(SeekParameters.CLOSEST_SYNC)
+
                 // handleAudioFocus = false: mismo comportamiento manual que
                 // tenia MediaPlayer (la app nunca gestiono audio focus).
                 setAudioAttributes(MUSIC_AUDIO_ATTRIBUTES, false)

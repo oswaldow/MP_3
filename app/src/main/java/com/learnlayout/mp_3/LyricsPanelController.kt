@@ -1,4 +1,3 @@
-
 package com.learnlayout.mp_3
 
 import android.animation.ValueAnimator
@@ -435,17 +434,17 @@ class LyricsPanelController(
     }
 
     /**
-     * Muestra la letra de la cancion actual usando
-     * solamente lo que ya este guardado localmente.
+     * Muestra la letra de la cancion actual.
      *
-     * SavedLyricsRepository contiene las letras descargadas
-     * previamente desde Configuracion o seleccionadas
-     * manualmente desde el selector de caratula.
+     * A pedido: se le da prioridad a lo que el propio archivo trae
+     * embebido por sobre cualquier letra ya guardada (SavedLyricsRepository),
+     * salvo que esa letra guardada haya sido elegida a mano por el usuario
+     * (ver [SavedLyricsRepository.isManual]) -- en ese caso se respeta la
+     * eleccion manual y no se vuelve a mirar el archivo.
      *
-     * Si todavia no hay nada guardado, antes de rendirse revisa si el
-     * propio archivo de audio ya trae letra embebida (ver
-     * [loadEmbeddedLyrics] / EmbeddedMetadataReader) y le da prioridad a
-     * eso sobre mostrar "sin letra".
+     * Esto implica abrir y parsear el archivo de audio completo cada vez
+     * que se cambia de cancion (salvo que tenga letra manual), es
+     * intencional pese al costo de I/O.
      */
     fun loadForSong(song: Song) {
 
@@ -457,50 +456,40 @@ class LyricsPanelController(
 
         lyricsRequestId++
 
-        val saved =
-            SavedLyricsRepository.getSavedLyrics(
-                activity,
-                song.id
-            )
+        btnPanelLyricsSync.visibility =
+            View.GONE
 
-        if (saved != null) {
+        showLyricsMessage(
+            "Buscando letra en el archivo..."
+        )
 
-            showLyricsResult(
-                saved,
-                song.id
-            )
-
-        } else {
-
-            btnPanelLyricsSync.visibility =
-                View.GONE
-
-            showLyricsMessage(
-                "Buscando letra en el archivo..."
-            )
-
-            loadEmbeddedLyrics(song)
-        }
+        loadEmbeddedLyricsFirst(song)
     }
 
     /**
-     * Revisa si [song] ya trae letra embebida en el archivo de audio (ver
-     * EmbeddedMetadataReader). Se llama solo cuando SavedLyricsRepository
-     * no tenia nada guardado para esta cancion (ver [loadForSong]).
+     * Revisa primero si [song] ya trae letra embebida en el archivo de
+     * audio (ver EmbeddedMetadataReader) y le da prioridad a eso. Solo si
+     * el archivo no trae nada se cae a lo que ya hubiera guardado
+     * SavedLyricsRepository (descarga previa o eleccion manual).
      *
-     * Si la encuentra, se le da prioridad sobre salir a buscar en red: se
-     * guarda en SavedLyricsRepository como si se hubiera descargado, asi
-     * que una sobreescritura posterior desde el selector de la caratula
-     * (mantener presionada) o desde Ajustes > Letras y Caratulas funciona
-     * exactamente igual que con cualquier otra letra guardada.
+     * Excepcion: si la letra guardada de [song] ya fue elegida a mano por
+     * el usuario (picker de candidatos o sincronizacion manual), esa
+     * eleccion se respeta directamente y no se toca el archivo.
      */
-    private fun loadEmbeddedLyrics(song: Song) {
+    private fun loadEmbeddedLyricsFirst(song: Song) {
 
         val requestId = lyricsRequestId
 
         AppExecutors.runInBackground {
 
-            val embedded = EmbeddedMetadataReader.readLyrics(activity, song)
+            val manualSaved = SavedLyricsRepository.getSavedLyrics(activity, song.id)
+                .takeIf { SavedLyricsRepository.isManual(activity, song.id) }
+
+            val embedded = if (manualSaved == null) {
+                EmbeddedMetadataReader.readLyrics(activity, song)
+            } else {
+                null
+            }
 
             AppExecutors.runOnMain {
 
@@ -511,20 +500,38 @@ class LyricsPanelController(
                     return@runOnMain
                 }
 
-                if (embedded != null) {
+                when {
 
-                    SavedLyricsRepository.save(activity, song.id, embedded)
+                    manualSaved != null -> {
 
-                    showLyricsResult(embedded, song.id)
+                        showLyricsResult(manualSaved, song.id)
+                    }
 
-                } else {
+                    embedded != null -> {
 
-                    btnPanelLyricsSync.visibility =
-                        View.GONE
+                        SavedLyricsRepository.save(activity, song.id, embedded)
 
-                    showLyricsMessage(
-                        "Sin letra guardada. Manten presionada la caratula para buscarla"
-                    )
+                        showLyricsResult(embedded, song.id)
+                    }
+
+                    else -> {
+
+                        val saved = SavedLyricsRepository.getSavedLyrics(activity, song.id)
+
+                        if (saved != null) {
+
+                            showLyricsResult(saved, song.id)
+
+                        } else {
+
+                            btnPanelLyricsSync.visibility =
+                                View.GONE
+
+                            showLyricsMessage(
+                                "Sin letra guardada. Manten presionada la caratula para buscarla"
+                            )
+                        }
+                    }
                 }
             }
         }

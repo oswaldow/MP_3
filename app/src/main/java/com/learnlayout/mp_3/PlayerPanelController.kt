@@ -34,6 +34,7 @@ class PlayerPanelController(
     private val btnPanelQueue: ImageButton,
     private val btnPanelFavorite: ImageButton,
     private val btnPanelLyricsSync: ImageButton,
+    private val btnPanelAddToPlaylist: ImageButton,
     private val ivPanelAlbumArt: ImageView,
     private val albumArtTransitionOverlay: FrameLayout,
     private val audioSpectrumView: AudioSpectrumView,
@@ -56,6 +57,10 @@ class PlayerPanelController(
     private val onAlbumArtLongPress: (Song) -> Unit,
     // Opcion "Editar nombre y artista" del mismo menu.
     private val onEditSongMetadata: (Song) -> Unit = {},
+    // Boton "Agregar a playlist" de la fila superior del panel expandido
+    // (btnPanelAddToPlaylist). Reusa PlaylistDialogs.showAddToPlaylistDialog,
+    // igual que el resto de los puntos de entrada a esa funcion.
+    private val onAddToPlaylist: (Song) -> Unit = {},
     // Avisa cada vez que cambia la caratula (o se va a placeholder, bitmap
     // null) para que quien arme este controller pueda enterar a otras
     // vistas, p.ej. el banner del panel de letra (Material You).
@@ -166,6 +171,13 @@ class PlayerPanelController(
 
         ButtonTapFillAnimator.setOnClickListener(btnPanelLyricsSync, { currentAccentColor }) {
             openLyricsSyncScreen()
+        }
+
+        ButtonTapFillAnimator.setOnClickListener(btnPanelAddToPlaylist, { currentAccentColor }) {
+            val song = getMusicService()?.getCurrentSong()
+            if (song != null) {
+                onAddToPlaylist(song)
+            }
         }
 
         ivPanelAlbumArt.setOnLongClickListener {
@@ -548,6 +560,7 @@ class PlayerPanelController(
         btnPanelPrevious.imageTintList = accentTint
         btnPanelNext.imageTintList = accentTint
         btnPanelQueue.imageTintList = accentTint
+        btnPanelAddToPlaylist.imageTintList = accentTint
         btnMiniPlayMode.imageTintList = accentTint
         btnMiniPlayPause.imageTintList = accentTint
 

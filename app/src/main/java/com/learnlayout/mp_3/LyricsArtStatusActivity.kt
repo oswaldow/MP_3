@@ -129,7 +129,9 @@ class LyricsArtStatusActivity : AppCompatActivity() {
                 )
             },
             onLyricsChosen = { chosenSong, result ->
-                SavedLyricsRepository.save(this, chosenSong.id, result)
+                // Eleccion manual desde el picker de candidatos: no debe
+                // pisarse sola con la letra embebida del archivo.
+                SavedLyricsRepository.saveManual(this, chosenSong.id, result)
                 // A diferencia de la caratula, guardar la letra aqui no
                 // la embebia en el archivo real (a diferencia de
                 // SongListActivity y LyricsActivity, que si lo hacen).

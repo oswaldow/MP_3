@@ -1,4 +1,3 @@
-
 package com.learnlayout.mp_3
 
 import android.content.Context
@@ -6,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.LruCache
 import org.json.JSONObject
 import java.io.File
@@ -42,6 +42,30 @@ object AlbumArtRepository {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val memoryCache = object : LruCache<Long, Bitmap>(MEMORY_CACHE_SIZE) {}
+
+    // ---------- Proteccion de elecciones manuales ----------
+    // Cuando el usuario elige a mano una caratula (picker de iTunes/Deezer o
+    // "Redescargar y sobreescribir" en Ajustes), esa eleccion NO debe volver
+    // a pisarse sola por la logica "el archivo primero" de loadCoverCacheOnly.
+    // Se persiste en SharedPreferences (no solo en memoria) porque tiene que
+    // sobrevivir a que la app se cierre y se vuelva a abrir.
+    private const val MANUAL_OVERRIDE_PREFS = "album_art_manual_overrides"
+    private const val KEY_MANUAL_IDS = "song_ids"
+
+    private fun manualOverridePrefs(context: Context) =
+        context.getSharedPreferences(MANUAL_OVERRIDE_PREFS, Context.MODE_PRIVATE)
+
+    private fun isManualOverride(context: Context, songId: Long): Boolean {
+        return manualOverridePrefs(context).getStringSet(KEY_MANUAL_IDS, emptySet())
+            ?.contains(songId.toString()) == true
+    }
+
+    private fun markManualOverride(context: Context, songId: Long) {
+        val prefs = manualOverridePrefs(context)
+        val current = prefs.getStringSet(KEY_MANUAL_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        current.add(songId.toString())
+        prefs.edit().putStringSet(KEY_MANUAL_IDS, current).apply()
+    }
 
     // Evita relanzar la misma busqueda de red si ya hay una en curso
     // para la misma cancion (pasa seguido con RecyclerView haciendo scroll).
@@ -88,12 +112,14 @@ object AlbumArtRepository {
      * (memoria o disco). Se usa para calcular el estado "descargada /
      * pendiente" de cada cancion en Ajustes (ver
      * LyricsArtStatusRepository), donde hace falta revisar cientos de
-     * canciones rapido sin bloquear la UI ni decodificar bitmaps que no
-     * se van a mostrar.
+     * canciones sin decodificar bitmaps que no se van a mostrar. Debe
+     * llamarse desde un hilo de fondo (ahora hace una consulta a
+     * MediaStore para resolver la ruta real del archivo, ver
+     * [cacheKeyFor]).
      */
     fun hasCachedCoverOnDisk(context: Context, song: Song): Boolean {
         if (memoryCache.get(song.id) != null) return true
-        val cacheKey = cacheKeyFor(song)
+        val cacheKey = cacheKeyFor(context.applicationContext, song)
         val diskFile = File(cacheDir(context.applicationContext), "$cacheKey.jpg")
         return diskFile.exists()
     }
@@ -115,7 +141,7 @@ object AlbumArtRepository {
 
     /**
      * Pide la caratula de [song]. Llama a [callback] en el hilo principal
-     * SOLO si la encuentra (memoria, disco o red) y sigue siendo necesaria.
+     * SOLO si la encuentra (embebida, disco o red) y sigue siendo necesaria.
      * Si no hay caratula disponible, no llama a [callback]: quien la pidio
      * debe dejar el placeholder que ya tenia puesto.
      *
@@ -125,6 +151,24 @@ object AlbumArtRepository {
      * y antes de entregar el resultado: si durante un scroll rapido la
      * vista ya no necesita esta caratula, la tarea se descarta enseguida en
      * vez de competir por un hilo del pool con las que si son visibles.
+     *
+     * FIX: antes esta funcion (usada por Home, listas, cola, widget,
+     * notificacion, etc.) iba directo de "cache en disco" a "red" apenas no
+     * habia nada en disco, sin revisar nunca la caratula que el propio
+     * archivo de audio ya trae embebida (eso solo lo hacia
+     * [loadCoverCacheOnly], usada unicamente por el reproductor). El
+     * resultado: la primera vez que una cancion aparecia en esas pantallas,
+     * se saltaba la caratula real del archivo y salia a buscar en
+     * iTunes/Deezer, a veces trayendo una portada de otra cancion/artista
+     * con nombre parecido -y esa portada equivocada quedaba guardada en
+     * disco (y hasta escrita sobre el archivo real si hay permiso de
+     * "Todos los archivos"), pisando la caratula original.
+     *
+     * Ahora, igual que en [loadCoverCacheOnly], si la cancion no tiene una
+     * eleccion manual guardada (ver [isManualOverride]) se prioriza la
+     * caratula embebida del archivo por sobre el cache de disco y por sobre
+     * la red. Solo se sale a la red si el archivo no trae ninguna caratula
+     * propia.
      */
     fun loadCover(
         context: Context,
@@ -150,20 +194,35 @@ object AlbumArtRepository {
         val appContext = context.applicationContext
         executor.execute {
             var bitmap: Bitmap? = null
+            var source = "NONE"
             try {
                 val stillNeeded = synchronized(inFlight) {
                     pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
                 }
                 if (!stillNeeded) return@execute
 
-                val cacheKey = cacheKeyFor(song)
+                val cacheKey = cacheKeyFor(appContext, song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
+                val manualOverride = isManualOverride(appContext, song.id)
 
-                val fromDisk = if (diskFile.exists()) {
+                // 1) Si no hay eleccion manual, la caratula embebida del
+                // propio archivo tiene prioridad sobre disco y sobre red.
+                val fromEmbedded = if (!manualOverride) {
+                    EmbeddedMetadataReader.readArtwork(appContext, song)
+                } else null
+
+                if (fromEmbedded != null) {
+                    saveToDisk(diskFile, fromEmbedded)
+                }
+
+                // 2) Cache de disco (solo si no habia embebida que mostrar).
+                val fromDisk = if (fromEmbedded == null && diskFile.exists()) {
                     decodeSampledBitmapFromFile(diskFile)
                 } else null
 
-                bitmap = fromDisk ?: run {
+                // 3) Red, unico caso en que puede llegar una caratula que
+                // no sea la del propio archivo.
+                bitmap = fromEmbedded ?: fromDisk ?: run {
                     val needsNetwork = synchronized(inFlight) {
                         pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
                     }
@@ -178,6 +237,7 @@ object AlbumArtRepository {
                         }
                     } else null
                 }
+                source = if (fromEmbedded != null) "EMBEDDED_FILE" else if (fromDisk != null) "DISK(cacheKey=$cacheKey)" else if (bitmap != null) "NETWORK" else "NONE"
 
                 if (bitmap != null) {
                     memoryCache.put(song.id, bitmap)
@@ -205,17 +265,24 @@ object AlbumArtRepository {
      * archivo de cache, exactamente igual que con una caratula bajada de
      * red.
      */
+    /**
+     * A pedido: se le da prioridad a lo que el propio archivo trae embebido
+     * por sobre cualquier cache (memoria o disco). Esto significa que CADA
+     * llamada abre y parsea el archivo de audio completo con jaudiotagger
+     * antes de mirar cualquier cache, incluso si la misma caratula ya se
+     * mostro hace un segundo. Es intencional (decision del usuario), pero
+     * tiene un costo real de I/O/CPU en cada scroll/cambio de cancion.
+     *
+     * Excepcion: si la cancion ya tiene una eleccion manual guardada (ver
+     * [isManualOverride]), esa eleccion se respeta tal cual y no se vuelve
+     * a mirar el archivo.
+     */
     fun loadCoverCacheOnly(
         context: Context,
         song: Song,
         callback: Callback,
         isStillNeeded: () -> Boolean = { true }
     ) {
-        memoryCache.get(song.id)?.let {
-            if (isStillNeeded()) callback.onCoverReady(it)
-            return
-        }
-
         val shouldStartLoad = synchronized(inFlight) {
             pendingCallbacks
                 .getOrPut(song.id) { mutableListOf() }
@@ -233,24 +300,52 @@ object AlbumArtRepository {
         val appContext = context.applicationContext
         executor.execute {
             var bitmap: Bitmap? = null
+            var source = "NONE"
             try {
                 val stillNeeded = synchronized(inFlight) {
                     pendingCallbacks[song.id]?.any { it.isStillNeeded() } == true
                 }
                 if (!stillNeeded) return@execute
 
-                val cacheKey = cacheKeyFor(song)
+                val cacheKey = cacheKeyFor(appContext, song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
+                val manualOverride = isManualOverride(appContext, song.id)
 
-                bitmap = if (diskFile.exists()) {
-                    decodeSampledBitmapFromFile(diskFile)
-                } else {
-                    val embedded = EmbeddedMetadataReader.readArtwork(appContext, song)
-                    if (embedded != null) {
-                        saveToDisk(diskFile, embedded)
+                if (manualOverride) {
+                    // El usuario ya eligio esta caratula a mano: no se
+                    // vuelve a mirar el archivo, se respeta memoria -> disco
+                    // como antes.
+                    val memHit = memoryCache.get(song.id)
+                    if (memHit != null) {
+                        bitmap = memHit
+                        source = "MEMORY(manual)"
+                    } else if (diskFile.exists()) {
+                        bitmap = decodeSampledBitmapFromFile(diskFile)
+                        source = "DISK(manual)"
                     }
-                    embedded
+                } else {
+                    // 1) Lo que trae el archivo, primero.
+                    bitmap = EmbeddedMetadataReader.readArtwork(appContext, song)
+
+                    if (bitmap != null) {
+                        source = "EMBEDDED_FILE"
+                        // La guardamos en disco para que hasCachedCoverOnDisk()
+                        // y el resto de la app sigan funcionando igual que antes.
+                        saveToDisk(diskFile, bitmap)
+                    } else {
+                        // 2) Cache de memoria.
+                        val memHit = memoryCache.get(song.id)
+                        if (memHit != null) {
+                            bitmap = memHit
+                            source = "MEMORY"
+                        } else if (diskFile.exists()) {
+                            // 3) Cache de disco.
+                            bitmap = decodeSampledBitmapFromFile(diskFile)
+                            source = "DISK"
+                        }
+                    }
                 }
+
 
                 if (bitmap != null) {
                     memoryCache.put(song.id, bitmap)
@@ -271,6 +366,7 @@ object AlbumArtRepository {
             inFlight.remove(songId)
             pendingCallbacks.remove(songId)?.toList().orEmpty()
         }
+
 
         if (bitmap == null || callbacks.isEmpty()) return
 
@@ -307,7 +403,7 @@ object AlbumArtRepository {
         executor.execute {
             var found = false
             try {
-                val cacheKey = cacheKeyFor(song)
+                val cacheKey = cacheKeyFor(appContext, song)
                 val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
                 found = diskFile.exists()
                 if (!found) {
@@ -335,7 +431,7 @@ object AlbumArtRepository {
      * No toca la cache: solo devuelve opciones para previsualizar.
      */
     fun searchCandidates(song: Song, callback: CandidatesCallback) {
-        val query = "${song.artist} ${song.title}".trim()
+        val query = "${sanitizeArtistForQuery(song.artist, song.title)} ${song.title}".trim()
         if (query.isBlank()) {
             callback.onCandidatesReady(emptyList())
             return
@@ -358,10 +454,13 @@ object AlbumArtRepository {
     fun applyOverride(context: Context, song: Song, bitmap: Bitmap, callback: Callback) {
         val appContext = context.applicationContext
         executor.execute {
-            val cacheKey = cacheKeyFor(song)
+            val cacheKey = cacheKeyFor(appContext, song)
             val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
             saveToDisk(diskFile, bitmap)
             memoryCache.put(song.id, bitmap)
+            // Marca esta eleccion como manual para que loadCoverCacheOnly
+            // ya no la pise sola con lo que traiga el archivo.
+            markManualOverride(appContext, song.id)
             // Eleccion manual de caratula (picker de iTunes/Deezer): tambien
             // se graba en el archivo real, igual que una descarga automatica.
             persistCoverToAudioFileIfPossible(appContext, song, bitmap)
@@ -380,7 +479,7 @@ object AlbumArtRepository {
      */
     fun cacheEmbeddedArtwork(context: Context, song: Song, bitmap: Bitmap) {
         val appContext = context.applicationContext
-        val diskFile = File(cacheDir(appContext), "${cacheKeyFor(song)}.jpg")
+        val diskFile = File(cacheDir(appContext), "${cacheKeyFor(appContext, song)}.jpg")
         saveToDisk(diskFile, bitmap)
         memoryCache.put(song.id, bitmap)
     }
@@ -413,10 +512,13 @@ object AlbumArtRepository {
             try {
                 val bitmap = fetchFromNetwork(song)
                 if (bitmap != null) {
-                    val cacheKey = cacheKeyFor(song)
+                    val cacheKey = cacheKeyFor(appContext, song)
                     val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
                     saveToDisk(diskFile, bitmap)
                     memoryCache.put(song.id, bitmap)
+                    // "Redescargar y sobreescribir" es una accion explicita
+                    // del usuario: se trata igual que una eleccion manual.
+                    markManualOverride(appContext, song.id)
                     found = true
                 }
             } catch (e: Exception) {
@@ -485,21 +587,56 @@ object AlbumArtRepository {
     }
 
     private fun fetchFromNetwork(song: Song): Bitmap? {
-        val query = "${song.artist} ${song.title}".trim()
+        val query = "${sanitizeArtistForQuery(song.artist, song.title)} ${song.title}".trim()
         if (query.isBlank()) return null
 
-        return fetchFromItunes(query) ?: fetchFromDeezer(query)
+        return fetchFromItunes(query, song) ?: fetchFromDeezer(query, song)
     }
 
-    private fun fetchFromItunes(query: String): Bitmap? {
+    /**
+     * Apps que descargan musica (ej. "Muka") a veces generan archivos con
+     * metadata sucia donde el campo "artista" repite el titulo de la
+     * cancion al final (ej. artist="Grupo MM, Bruce Wayne" para una
+     * cancion title="Bruce Wayne"). Si esa query se manda tal cual a
+     * iTunes/Deezer como "{artist} {title}", queda algo como
+     * "Grupo MM, Bruce Wayne Bruce Wayne": el titulo aparece dos veces y la
+     * API puede matchear una cancion real distinta que tambien se llama
+     * igual pero es de otro artista/album (la API responde bien a lo que
+     * se le pidio, el problema es la query).
+     *
+     * Si el artista termina con el titulo (sin distinguir mayusculas), se
+     * recorta esa repeticion antes de concatenar. Si al recortar no queda
+     * nada util (ej. el campo artista era solo el titulo repetido), se
+     * devuelve el artista original tal cual para no mandar una query vacia
+     * de artista.
+     */
+    private fun sanitizeArtistForQuery(artist: String, title: String): String {
+        val artistTrim = artist.trim()
+        val titleTrim = title.trim()
+        if (artistTrim.isBlank() || titleTrim.isBlank()) return artist
+
+        if (artistTrim.endsWith(titleTrim, ignoreCase = true)) {
+            val withoutTitle = artistTrim.substring(0, artistTrim.length - titleTrim.length)
+            val cleaned = withoutTitle.trim().trimEnd(',', ';', '-', '/').trim()
+            if (cleaned.isNotBlank()) return cleaned
+        }
+
+        return artist
+    }
+
+    private fun fetchFromItunes(query: String, song: Song): Bitmap? {
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "https://itunes.apple.com/search?term=$encoded&media=music&entity=song&limit=1"
             val json = httpGetJson(url) ?: return null
             val results = json.optJSONArray("results") ?: return null
-            if (results.length() == 0) return null
+            if (results.length() == 0) {
+                return null
+            }
 
-            val artworkUrl = results.getJSONObject(0).optString("artworkUrl100", "")
+            val matched = results.getJSONObject(0)
+
+            val artworkUrl = matched.optString("artworkUrl100", "")
             if (artworkUrl.isBlank()) return null
 
             // iTunes devuelve 100x100 por defecto; se pide una version mas grande.
@@ -510,15 +647,18 @@ object AlbumArtRepository {
         }
     }
 
-    private fun fetchFromDeezer(query: String): Bitmap? {
+    private fun fetchFromDeezer(query: String, song: Song): Bitmap? {
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "https://api.deezer.com/search?q=$encoded&limit=1"
             val json = httpGetJson(url) ?: return null
             val data = json.optJSONArray("data") ?: return null
-            if (data.length() == 0) return null
+            if (data.length() == 0) {
+                return null
+            }
 
-            val album = data.getJSONObject(0).optJSONObject("album") ?: return null
+            val matchedTrack = data.getJSONObject(0)
+            val album = matchedTrack.optJSONObject("album") ?: return null
             val coverUrl = album.optString("cover_xl", "").ifBlank {
                 album.optString("cover_big", "")
             }
@@ -620,10 +760,88 @@ object AlbumArtRepository {
         }
     }
 
-    private fun cacheKeyFor(song: Song): String {
-        val raw = "${song.artist}|${song.title}".lowercase()
+    /**
+     * Antes la clave del cache de disco se armaba solo con artista+titulo,
+     * pensado para sobrevivir a que Android reasigne un _ID nuevo a la
+     * misma cancion (ver SongIdMigrator). El efecto secundario: dos
+     * canciones DISTINTAS con el mismo artista y titulo (una descarga
+     * duplicada, una version diferente, un feat. con el mismo nombre...)
+     * terminaban compartiendo la misma caratula en disco -- si le
+     * cambiabas la caratula a una, la otra heredaba ese cambio sin que vos
+     * lo hicieras.
+     *
+     * Se cambio a usar la ruta real del archivo (MediaStore.DATA), pero
+     * eso solo no alcanza: apps que descargan musica (ej. "Muka") generan
+     * el nombre de archivo de forma deterministica a partir de
+     * titulo+artista, asi que si mas adelante se vuelve a descargar algo
+     * con ese mismo nombre, el archivo fisico en esa ruta se sobreescribe
+     * con contenido distinto pero la caratula vieja cacheada en disco
+     * para esa ruta se le seguia sirviendo a la cancion nueva.
+     *
+     * Por eso ahora la clave tambien incluye la fecha de modificacion
+     * (lastModified) del archivo: si el archivo en una ruta cambia
+     * (re-descarga, sobreescritura), la clave cambia y el cache viejo
+     * queda huerfano en vez de reutilizarse por error. Esto invalida de
+     * una sola vez todo el cache existente (las claves viejas no tenian
+     * fecha de modificacion, asi que no hay forma de migrarlas sin
+     * arriesgarse a conservar justo las que ya estaban mal), pero es
+     * necesario: no hay forma de saber si una caratula cacheada
+     * previamente corresponde a la version actual del archivo o a una
+     * version anterior ya reemplazada.
+     *
+     * Si no se puede resolver la ruta (por ejemplo, MediaStore todavia
+     * no termino de indexar un archivo recien descargado -- pasa seguido
+     * justo despues de una descarga, antes de que el escaneo de medios
+     * termine), el fallback NO puede ser el viejo "artista+titulo" tal
+     * cual: ese era justo el esquema que causaba que canciones distintas
+     * con el mismo nombre compartieran caratula, y dos descargas
+     * consecutivas del mismo nombre calan en este fallback si MediaStore
+     * anda lento las dos veces. Por eso el fallback ahora incluye
+     * ademas song.id y song.dateAdded (la fecha en que MediaStore indexo
+     * esta fila en particular), que para una descarga nueva es un valor
+     * que ninguna cancion anterior pudo haber tenido, y se le agrega un
+     * prefijo para no coincidir nunca con una clave del esquema por ruta
+     * ni con una clave del esquema viejo (pre-fix).
+     */
+    private fun cacheKeyFor(context: Context, song: Song): String {
+        val path = resolveFilePath(context, song)
+        val raw = if (path != null) {
+            "$path|${fileLastModifiedSafe(path)}"
+        } else {
+            "nopath|${song.id}|${song.dateAdded}|${song.artist}|${song.title}"
+        }.lowercase()
         val digest = MessageDigest.getInstance("MD5").digest(raw.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
+        val key = digest.joinToString("") { "%02x".format(it) }
+        return key
+    }
+
+    /**
+     * lastModified() del archivo en [path], o 0L si no se puede leer
+     * (archivo eliminado justo en este instante, permiso revocado, etc.).
+     * Se usa solo como parte de la clave del cache, asi que un valor 0L
+     * en el peor caso hace que esa cancion en particular se comporte como
+     * antes de este cambio (clave estable mientras no cambie la ruta),
+     * en vez de romper nada.
+     */
+    private fun fileLastModifiedSafe(path: String): Long {
+        return try {
+            File(path).lastModified()
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolveFilePath(context: Context, song: Song): String? {
+        return try {
+            val projection = arrayOf(MediaStore.Audio.Media.DATA)
+            context.contentResolver.query(song.uri, projection, null, null, null)?.use { cursor ->
+                val dataColumn = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                if (dataColumn >= 0 && cursor.moveToFirst()) cursor.getString(dataColumn) else null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     // ---------- Decode con downsampling ----------

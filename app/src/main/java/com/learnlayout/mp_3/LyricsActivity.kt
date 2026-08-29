@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.widget.EditText
 import android.widget.ImageButton
@@ -151,6 +152,20 @@ class LyricsActivity : AppCompatActivity() {
         originalRvLyricsPaddingTop = rvLyrics.paddingTop
         originalRvLyricsPaddingBottom = rvLyrics.paddingBottom
 
+        // tvSyncHint y llSyncControls flotan encima de rvLyrics (ver
+        // applySyncModePadding), pero el padding por si solo solo evita
+        // que las lineas se DIBUJEN detras de ellos: no cambia que
+        // rvLyrics siga siendo, para efectos de deteccion de toques, la
+        // misma vista de siempre ocupando toda la pantalla. Si en el
+        // layout quedo declarado despues de estos dos, se queda con el
+        // toque antes de que le llegue al boton "Guardar" -exactamente
+        // el reporte de "presiono Guardar y no pasa nada"-, sin importar
+        // el padding. Se traen al frente para que ganen esa prioridad de
+        // toque sobre la lista, de una vez y para siempre (no hace falta
+        // repetirlo cada vez que se muestran/ocultan).
+        tvSyncHint.bringToFront()
+        llSyncControls.bringToFront()
+
         btnBack.setOnClickListener { finish() }
 
         btnLyricsEdit.setOnClickListener {
@@ -190,7 +205,16 @@ class LyricsActivity : AppCompatActivity() {
         }
 
         btnSaveSync.setOnClickListener {
-            saveManualSync()
+            // DEBUG temporal (ver TAG_SYNCSAVE): dejar hasta confirmar en
+            // un dispositivo real que el boton ya dispara el click ahora
+            // que se habilita en updateSaveSyncButtonEnabled(). Se puede
+            // quitar junto con el resto de logs "DEBUG temporal".
+            Log.d(TAG_SYNCSAVE, "btnSaveSync.onClick recibido (isSyncMode=$isSyncMode)")
+            try {
+                saveManualSync()
+            } catch (e: Exception) {
+                Log.e(TAG_SYNCSAVE, "btnSaveSync.onClick: excepcion dentro de saveManualSync()", e)
+            }
         }
 
         song = intent.getParcelableExtra("song")
@@ -252,10 +276,21 @@ class LyricsActivity : AppCompatActivity() {
      * error: es un guardado de "mejor esfuerzo".
      */
     private fun persistLyricsToAudioFileIfPossible(song: Song, result: LyricsResult) {
-        if (!SongFileTagWriter.hasManageStoragePermission(this)) return
+        val hasPermission = SongFileTagWriter.hasManageStoragePermission(this)
+        // DEBUG temporal (ver TAG_SYNCSAVE)
+        Log.d(TAG_SYNCSAVE, "persistLyricsToAudioFileIfPossible(): hasManageStoragePermission=$hasPermission")
+        if (!hasPermission) return
         val appContext = applicationContext
         AppExecutors.runInBackground {
-            SongFileTagWriter.writeToFile(appContext, song, lyricsResult = result)
+            Log.d(TAG_SYNCSAVE, "persistLyricsToAudioFileIfPossible(): escribiendo en archivo (hilo de fondo)")
+            try {
+                val ok = SongFileTagWriter.writeToFile(appContext, song, lyricsResult = result)
+                Log.d(TAG_SYNCSAVE, "persistLyricsToAudioFileIfPossible(): writeToFile() devolvio $ok")
+            } catch (e: Exception) {
+                // Antes esta excepcion (si la hubiera) se hubiera perdido
+                // en el hilo de fondo sin ningun rastro en logcat.
+                Log.e(TAG_SYNCSAVE, "persistLyricsToAudioFileIfPossible(): excepcion escribiendo en archivo", e)
+            }
         }
     }
 
@@ -333,6 +368,7 @@ class LyricsActivity : AppCompatActivity() {
         manualTimes = MutableList(currentLines.size) { null }
         isSyncMode = true
         updateManualSyncButtonsVisibility()
+        updateSaveSyncButtonEnabled()
 
         val adapterLines = currentLines.map { LyricsLine(timeMs = -1, text = it) }
         val adapter = LyricsLineAdapter(adapterLines) { tappedIndex -> onLineTapped(tappedIndex) }
@@ -346,6 +382,60 @@ class LyricsActivity : AppCompatActivity() {
         llSyncControls.visibility = View.VISIBLE
         btnLyricsSyncToggle.setImageResource(R.drawable.ic_close)
         updateSyncProgressLabel()
+        applySyncModePadding()
+    }
+
+    /**
+     * FIX (ver TAG_SYNCSAVE): btnSaveSync nace con android:enabled="false"
+     * en el XML (por eso se ve "apagado" con alpha=0.5 hasta que terminas
+     * de sincronizar), pero en ningun lado del codigo se volvia a poner
+     * isEnabled=true. Una vista deshabilitada sigue "quedandose" con el
+     * toque (por eso no pasaba nada ni aparecia ningun otro mensaje) pero
+     * nunca llega a disparar performClick(), asi que el listener de
+     * "Guardar" jamas se ejecutaba, sin importar cuantas lineas tuvieras
+     * sincronizadas. Ahora el boton se habilita/deshabilita en vivo segun
+     * si ya se toco cada linea.
+     */
+    private fun updateSaveSyncButtonEnabled() {
+        val allTagged = currentLines.isNotEmpty() && manualTimes.all { it != null }
+        btnSaveSync.isEnabled = allTagged
+        btnSaveSync.alpha = if (allTagged) 1f else 0.5f
+    }
+
+    /**
+     * El banner "Toca la linea cuando empiece a sonar" (tvSyncHint) y la
+     * barra inferior (llSyncControls: play/pausa, contador y "Guardar")
+     * quedan flotando encima de la lista de letra, y como antes no se
+     * les hacia espacio, tapaban las primeras Y ultimas lineas apenas se
+     * entraba a modo sincronizacion.
+     *
+     * Que el banner tape lineas de arriba es solo un problema visual,
+     * pero que la barra de abajo quede tapada por lineas de la lista es
+     * ademas un problema de toques: al no tener padding inferior,
+     * rvLyrics se extendia hasta el fondo de la pantalla, y como queda
+     * por encima de llSyncControls en el layout, se quedaba con los
+     * toques que el usuario le daba al boton "Guardar" en esa zona (se
+     * presionaba el boton y no pasaba absolutamente nada, ni siquiera el
+     * aviso de "aun faltan lineas").
+     *
+     * Se miden las alturas reales de ambas vistas (ya con contenido
+     * puesto, por eso se hace en post{}, tras el siguiente paso de
+     * layout) y se usan como padding superior/inferior de rvLyrics -mas
+     * un margen chico en cada extremo- para que ninguna linea quede
+     * detras de ellas.
+     */
+    private fun applySyncModePadding() {
+        tvSyncHint.post {
+            val topGap = (SYNC_HINT_GAP_DP * resources.displayMetrics.density).toInt()
+            val bottomGap = (SYNC_CONTROLS_GAP_DP * resources.displayMetrics.density).toInt()
+
+            rvLyrics.setPadding(
+                rvLyrics.paddingLeft,
+                tvSyncHint.bottom + topGap,
+                rvLyrics.paddingRight,
+                llSyncControls.height + bottomGap
+            )
+        }
     }
 
     private fun onLineTapped(index: Int) {
@@ -356,15 +446,16 @@ class LyricsActivity : AppCompatActivity() {
         (lyricsAdapter as? LyricsLineAdapter)?.markTagged(index)
         updateSyncProgressLabel()
 
-        val nextIndex = index + 1
-        if (nextIndex < currentLines.size) {
-            scrollToLine(nextIndex)
-        }
+        // Antes, al tocar una linea, la pantalla bajaba sola a la
+        // siguiente (scrollToLine(nextIndex)). Eso interfiere con quien
+        // sincroniza a su propio ritmo: el usuario pidio que el scroll lo
+        // controle el solo con el dedo, asi que ya no se mueve nada aca.
     }
 
     private fun updateSyncProgressLabel() {
         val done = manualTimes.count { it != null }
         tvSyncProgress.text = "$done/${currentLines.size}"
+        updateSaveSyncButtonEnabled()
     }
 
     private fun updateSyncPlayPauseIcon(isPlaying: Boolean) {
@@ -400,8 +491,20 @@ class LyricsActivity : AppCompatActivity() {
     }
 
     private fun saveManualSync() {
-        val currentSong = song ?: return
+        // DEBUG temporal (ver TAG_SYNCSAVE)
+        Log.d(
+            TAG_SYNCSAVE,
+            "saveManualSync() inicio: currentLines.size=${currentLines.size} " +
+                    "manualTimes.size=${manualTimes.size} nulos=${manualTimes.count { it == null }}"
+        )
+
+        val currentSong = song
+        if (currentSong == null) {
+            Log.w(TAG_SYNCSAVE, "saveManualSync(): song es null, se aborta sin avisar al usuario")
+            return
+        }
         if (manualTimes.any { it == null } || currentLines.isEmpty()) {
+            Log.w(TAG_SYNCSAVE, "saveManualSync(): validacion fallo (hay nulos o currentLines vacio)")
             Toast.makeText(this, "Aun faltan lineas por sincronizar", Toast.LENGTH_SHORT).show()
             return
         }
@@ -417,9 +520,20 @@ class LyricsActivity : AppCompatActivity() {
             syncedLines = lines,
             isInstrumental = false
         )
-        SavedLyricsRepository.save(this, currentSong.id, result)
+        Log.d(
+            TAG_SYNCSAVE,
+            "saveManualSync(): validacion OK, guardando ${lines.size} lineas para songId=${currentSong.id}"
+        )
+
+        // Sincronizacion manual: se guarda como eleccion manual para que
+        // no se pise sola con la letra embebida del archivo.
+        SavedLyricsRepository.saveManual(this, currentSong.id, result)
+        Log.d(TAG_SYNCSAVE, "saveManualSync(): SavedLyricsRepository.saveManual() completado")
+
         persistLyricsToAudioFileIfPossible(currentSong, result)
+
         Toast.makeText(this, "Sincronizacion guardada", Toast.LENGTH_SHORT).show()
+        Log.d(TAG_SYNCSAVE, "saveManualSync(): Toast mostrado")
         setResult(RESULT_OK)
 
         isSyncMode = false
@@ -429,6 +543,7 @@ class LyricsActivity : AppCompatActivity() {
         resetRvLyricsPadding()
         showSynced(lines)
         updateManualSyncButtonsVisibility()
+        Log.d(TAG_SYNCSAVE, "saveManualSync(): fin, modo sincronizacion cerrado")
     }
 
     // ==================== FIN MODO DE SINCRONIZACION MANUAL ====================
@@ -490,5 +605,22 @@ class LyricsActivity : AppCompatActivity() {
             unbindService(connection)
             isBound = false
         }
+    }
+
+    companion object {
+        // Separacion en dp entre el borde inferior del banner de
+        // sincronizacion y la primera linea de la letra.
+        private const val SYNC_HINT_GAP_DP = 16f
+
+        // Separacion en dp entre la ultima linea de la letra y el borde
+        // superior de la barra inferior de sincronizacion (play/pausa,
+        // contador, "Guardar").
+        private const val SYNC_CONTROLS_GAP_DP = 16f
+
+        // DEBUG temporal: filtrar con `adb logcat -s MP3_SYNCSAVE`.
+        // Se puede quitar (junto con todos los Log.d/w/e marcados como
+        // "DEBUG temporal" en este archivo) una vez resuelto el bug de
+        // "Guardar" en sincronizacion manual.
+        private const val TAG_SYNCSAVE = "MP3_SYNCSAVE"
     }
 }
