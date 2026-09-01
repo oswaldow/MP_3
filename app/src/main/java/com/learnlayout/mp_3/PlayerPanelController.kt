@@ -23,6 +23,11 @@ class PlayerPanelController(
     private val playerPanel: FrameLayout,
     private val groupExpanded: View,
     private val groupMini: View,
+    // Contenedor del banner de letra (lyricsCoordinator, hermano de
+    // groupExpanded dentro de playerPanel). Se reenvia sin mas a
+    // PlayerPanelAnimationController, que es quien le sincroniza el alpha
+    // con groupExpanded durante la expansion/colapso del panel.
+    private val lyricsCoordinator: View,
     private val ivMiniAlbumArt: ImageView,
     private val tvMiniTitle: TextView,
     private val tvMiniArtist: TextView,
@@ -90,6 +95,13 @@ class PlayerPanelController(
         ContextCompat.getColor(activity, R.color.text_primary_light)
     private var currentAccentColor: Int = defaultAccentColor
 
+    // Ultimo color de banner calculado (ver PlayerPaletteTheme.applyFromBitmap
+    // / applyFallback). Se usa en applyControlsAccent() para chequear que
+    // los iconos "sueltos" (sin su propio circulo de fondo) tengan
+    // contraste real contra el banner, en vez de asumir a ciegas que el
+    // acento siempre se va a distinguir (ver PlayerPaletteTheme.iconColorFor).
+    private var currentBannerColor: Int = defaultBannerColor
+
     private var isUserSeekingPanel = false
 
     private val miniAlbumArtBasePadding = intArrayOf(
@@ -107,6 +119,7 @@ class PlayerPanelController(
             playerPanel = playerPanel,
             groupExpanded = groupExpanded,
             groupMini = groupMini,
+            lyricsCoordinator = lyricsCoordinator,
             audioSpectrumView = audioSpectrumView,
             btnPanelBack = btnPanelBack,
             btnPanelSleepTimer = btnPanelSleepTimer,
@@ -472,7 +485,7 @@ class PlayerPanelController(
                 applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
                 onAlbumArtChanged(bitmap)
                 // Banner estilo Material You: color extraido de la caratula.
-                PlayerPaletteTheme.applyFromBitmap(bitmap, viewPanelArtBanner, defaultBannerColor)
+                PlayerPaletteTheme.applyFromBitmap(bitmap, defaultBannerColor, { color -> currentBannerColor = color }, viewPanelArtBanner)
                 // Color de acento para los controles (play/pause, siguiente,
                 // anterior, modo). Mismo espiritu de Material You pero sin
                 // oscurecer, para que los iconos se vean saturados.
@@ -515,7 +528,7 @@ class PlayerPanelController(
         applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
         applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
         onAlbumArtChanged(bitmap)
-        PlayerPaletteTheme.applyFromBitmap(bitmap, viewPanelArtBanner, defaultBannerColor)
+        PlayerPaletteTheme.applyFromBitmap(bitmap, defaultBannerColor, { color -> currentBannerColor = color }, viewPanelArtBanner)
         PlayerPaletteTheme.applyAccentFromBitmap(
             bitmap, defaultAccentColor, currentAccentColor
         ) { color ->
@@ -536,7 +549,7 @@ class PlayerPanelController(
         applyPlaceholder(ivMiniAlbumArt, miniAlbumArtBasePadding)
         applyPlaceholder(ivPanelAlbumArt, panelAlbumArtBasePadding)
         onAlbumArtChanged(null)
-        PlayerPaletteTheme.applyFallback(viewPanelArtBanner, defaultBannerColor)
+        PlayerPaletteTheme.applyFallback(defaultBannerColor, { color -> currentBannerColor = color }, viewPanelArtBanner)
         PlayerPaletteTheme.applyAccentFallback(defaultAccentColor, currentAccentColor) { color ->
             currentAccentColor = color
             applyControlsAccent(color)
@@ -556,13 +569,22 @@ class PlayerPanelController(
         btnPanelPlayPause.backgroundTintList = accentTint
         btnPanelPlayPause.imageTintList = onColorTint
 
-        btnPanelBack.imageTintList = accentTint
-        btnPanelPrevious.imageTintList = accentTint
-        btnPanelNext.imageTintList = accentTint
-        btnPanelQueue.imageTintList = accentTint
-        btnPanelAddToPlaylist.imageTintList = accentTint
-        btnMiniPlayMode.imageTintList = accentTint
-        btnMiniPlayPause.imageTintList = accentTint
+        // Botones "sueltos" (sin su propio circulo de fondo, se dibujan
+        // directo sobre el banner/mini player): a diferencia de
+        // btnPanelPlayPause, aca no hay un color de fondo propio que
+        // garantice contraste, asi que si el acento sale demasiado
+        // parecido al banner real (caratulas muy monocromaticas) se cae
+        // a blanco/negro puro en vez de quedar practicamente invisibles.
+        val looseIconTint = ColorStateList.valueOf(
+            PlayerPaletteTheme.iconColorFor(currentBannerColor, color)
+        )
+        btnPanelBack.imageTintList = looseIconTint
+        btnPanelPrevious.imageTintList = looseIconTint
+        btnPanelNext.imageTintList = looseIconTint
+        btnPanelQueue.imageTintList = looseIconTint
+        btnPanelAddToPlaylist.imageTintList = looseIconTint
+        btnMiniPlayMode.imageTintList = looseIconTint
+        btnMiniPlayPause.imageTintList = looseIconTint
 
         // El icono del sleep timer no se tiñe aca: su color depende ademas
         // de si el timer esta activo (ver updateSleepTimerIcon), pero

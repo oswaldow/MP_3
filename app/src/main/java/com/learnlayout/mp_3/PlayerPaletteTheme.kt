@@ -31,21 +31,48 @@ object PlayerPaletteTheme {
 
     private const val MIN_ACCENT_SATURATION = 0.20f
 
+    // Contraste minimo (formula WCAG, via ColorUtils.calculateContrast)
+    // que debe haber entre el color de acento y el fondo real que tiene
+    // detras un icono "suelto" (sin su propio circulo de fondo, ej.
+    // btnPanelPrevious/Next/Queue/Back/AddToPlaylist) para considerarse
+    // legible. Por debajo de esto, iconColorFor() cae a blanco o negro
+    // puro en vez del acento. 3.0 es el minimo que recomienda WCAG para
+    // graficos/componentes de UI (no texto).
+    private const val MIN_ICON_CONTRAST = 3.0f
+
     private val argbEvaluator = ArgbEvaluator()
 
-
-    fun applyFromBitmap(bitmap: Bitmap, targetView: View, fallbackColor: Int) {
+    // fallbackColor va antes del vararg (Kotlin exige que el vararg quede
+    // al final si se llama con argumentos posicionales). Se acepta 1+
+    // vistas para poder themear banner + mini-player con el mismo color
+    // ya calculado, sin recalcular la paleta por cada vista (ver
+    // PlayerPanelController: viewPanelArtBanner + groupMini).
+    //
+    // onColorPicked se llama con el color final ya elegido (antes de que
+    // termine la animacion) para que el llamador pueda guardarlo y usarlo
+    // despues, por ejemplo para calcular contraste de otros elementos
+    // contra este mismo fondo (ver iconColorFor / currentBannerColor en
+    // PlayerPanelController). Default vacio para no romper llamadores que
+    // no lo necesiten.
+    fun applyFromBitmap(
+        bitmap: Bitmap,
+        fallbackColor: Int,
+        onColorPicked: (Int) -> Unit = {},
+        vararg targetViews: View
+    ) {
         Palette.from(bitmap)
             .clearFilters() // no descartar tonos muy oscuros/claros: queremos el color real del album
             .generate { palette ->
-                animateBackground(targetView, pickColor(palette, fallbackColor))
+                val color = pickColor(palette, fallbackColor)
+                targetViews.forEach { animateBackground(it, color) }
+                onColorPicked(color)
             }
     }
 
-    fun applyFallback(targetView: View, fallbackColor: Int) {
-        animateBackground(targetView, fallbackColor)
+    fun applyFallback(fallbackColor: Int, onColorPicked: (Int) -> Unit = {}, vararg targetViews: View) {
+        targetViews.forEach { animateBackground(it, fallbackColor) }
+        onColorPicked(fallbackColor)
     }
-
 
     fun applyToDrawable(bitmap: Bitmap, drawable: GradientDrawable, fallbackColor: Int) {
         Palette.from(bitmap)
@@ -149,6 +176,21 @@ object PlayerPaletteTheme {
 
     fun onColorFor(backgroundColor: Int): Int {
         return if (ColorUtils.calculateLuminance(backgroundColor) > 0.5) Color.BLACK else Color.WHITE
+    }
+
+    /**
+     * Color a usar para un icono "suelto" (sin su propio circulo de
+     * fondo) que se dibuja directo sobre [backgroundColor]. Si
+     * [preferredColor] (normalmente el acento Material You) ya tiene
+     * contraste suficiente contra ese fondo, se usa tal cual para
+     * mantener el tono de la caratula. Si no (caratulas muy
+     * monocromaticas, donde el acento sale casi del mismo tono que el
+     * fondo y el icono se vuelve invisible), cae a blanco o negro puro
+     * segun [onColorFor], que siempre garantiza contraste maximo.
+     */
+    fun iconColorFor(backgroundColor: Int, preferredColor: Int): Int {
+        val contrast = ColorUtils.calculateContrast(preferredColor, backgroundColor)
+        return if (contrast >= MIN_ICON_CONTRAST) preferredColor else onColorFor(backgroundColor)
     }
 
     private fun animateColor(from: Int, to: Int, onColorAnimated: (Int) -> Unit) {

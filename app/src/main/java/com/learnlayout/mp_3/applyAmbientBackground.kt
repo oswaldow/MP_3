@@ -1,5 +1,7 @@
 package com.learnlayout.mp_3
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ArgbEvaluator
 import android.animation.ValueAnimator
 import android.content.Context
@@ -29,10 +31,16 @@ import androidx.palette.graphics.Palette
  *
  *   ambientBackground.updateForSong(song) // cuando se conoce la cancion
  *   ambientBackground.updateForSong(null) // para volver al fondo neutro
+ *
+ * [onBackgroundUpdated] es opcional: se dispara cuando termina la
+ * animacion de cambio de color, para que quien lo necesite (por
+ * ejemplo, los paneles [LiquidGlassView] del Home) pueda refrescar
+ * cualquier cosa que dependa visualmente de este fondo.
  */
 class AmbientBackgroundController(
     private val context: Context,
-    private val targetView: View
+    private val targetView: View,
+    private val onBackgroundUpdated: (() -> Unit)? = null
 ) {
 
     /** ID de la cancion que actualmente controla el fondo. */
@@ -221,6 +229,12 @@ class AmbientBackgroundController(
 
                     baseGradientDrawable.colors = intArrayOf(top, middle, bottom)
                 }
+
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        onBackgroundUpdated?.invoke()
+                    }
+                })
 
                 start()
             }

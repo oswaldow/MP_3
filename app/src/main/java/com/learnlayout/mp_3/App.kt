@@ -11,6 +11,7 @@ class App : Application() {
         super.onCreate()
         CrashHandler.install(this)
         requestNotificationListenerRebindIfGranted()
+        pruneOrphanedSongReferences()
     }
 
     private fun requestNotificationListenerRebindIfGranted() {
@@ -25,6 +26,27 @@ class App : Application() {
             )
         }.onFailure {
             Log.w("MP3_App", "requestRebind() fallo en el arranque: ${it.message}", it)
+        }
+    }
+
+    /**
+     * Limpia, en segundo plano, las referencias a songId "huerfanos"
+     * que hayan quedado sueltas en playlists (incluida Favoritos),
+     * contadores de reproduccion y ganancia (ver SongIdMigrator). Estas
+     * referencias se acumulan cuando MediaStore le asigna un _ID nuevo
+     * a un archivo por fuera del mecanismo de remapSongId() (por
+     * ejemplo, reescaneos del sistema en MIUI/HyperOS). Se corre una
+     * vez por arranque de proceso; es una limpieza barata (solo compara
+     * contra el _ID actual de MediaStore) y no bloquea la UI.
+     */
+    private fun pruneOrphanedSongReferences() {
+        AppExecutors.runInBackground {
+            runCatching {
+                val removed = SongIdMigrator.pruneOrphanedReferences(this)
+                Log.i("MP3_App", "pruneOrphanedSongReferences(): $removed referencias huerfanas eliminadas en el arranque")
+            }.onFailure {
+                Log.w("MP3_App", "pruneOrphanedSongReferences() fallo en el arranque: ${it.message}", it)
+            }
         }
     }
 }

@@ -300,8 +300,11 @@ class LyricsPanelController(
 
     fun onPlayerPanelExpanded() {
 
-        lyricsCoordinator.visibility =
-            View.VISIBLE
+        // La visibilidad/alpha de lyricsCoordinator ya no se maneja aqui:
+        // PlayerPanelAnimationController la sincroniza cuadro a cuadro con
+        // groupExpanded (mismo alpha, mismo progress) para que el banner de
+        // letra suba pegado al resto del panel expandido, sin aparecer de
+        // golpe. Aqui solo queda lo que le corresponde a esta clase.
 
         updatePeekHeight()
     }
@@ -309,9 +312,6 @@ class LyricsPanelController(
     fun onPlayerPanelCollapsed() {
 
         collapse()
-
-        lyricsCoordinator.visibility =
-            View.GONE
     }
 
     // ---------- Insets / edge-to-edge ----------

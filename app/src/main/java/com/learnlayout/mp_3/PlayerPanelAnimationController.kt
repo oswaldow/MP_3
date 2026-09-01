@@ -28,6 +28,13 @@ class PlayerPanelAnimationController(
     private val playerPanel: FrameLayout,
     private val groupExpanded: View,
     private val groupMini: View,
+    // Contenedor del banner de letra (lyricsCoordinator), hermano de
+    // groupExpanded dentro de playerPanel. Se sincroniza aqui con el
+    // mismo alpha/progress que groupExpanded para que ambos aparezcan
+    // juntos durante smoothExpand()/onSlide() y no se vea el banner de
+    // letra ya solido mientras el resto del panel todavia esta
+    // transparente (ver hilo sobre "huecos" al expandir el panel).
+    private val lyricsCoordinator: View,
     private val audioSpectrumView: AudioSpectrumView,
     private val btnPanelBack: View,
     private val btnPanelSleepTimer: View,
@@ -83,8 +90,10 @@ class PlayerPanelAnimationController(
                     BottomSheetBehavior.STATE_EXPANDED -> {
                         groupMini.alpha = 0f
                         groupExpanded.alpha = 1f
+                        lyricsCoordinator.alpha = 1f
                         groupMini.visibility = View.INVISIBLE
                         groupExpanded.visibility = View.VISIBLE
+                        lyricsCoordinator.visibility = View.VISIBLE
                         endSharedAlbumArt()
 
                         if (coldExpandInProgress) return
@@ -95,8 +104,10 @@ class PlayerPanelAnimationController(
                     BottomSheetBehavior.STATE_COLLAPSED -> {
                         groupMini.alpha = 1f
                         groupExpanded.alpha = 0f
+                        lyricsCoordinator.alpha = 0f
                         groupMini.visibility = View.VISIBLE
                         groupExpanded.visibility = View.INVISIBLE
+                        lyricsCoordinator.visibility = View.INVISIBLE
                         endSharedAlbumArt()
                         updatePeekHeight()
                         audioSpectrumView.stop()
@@ -105,6 +116,7 @@ class PlayerPanelAnimationController(
                     else -> {
                         groupMini.visibility = View.VISIBLE
                         groupExpanded.visibility = View.VISIBLE
+                        lyricsCoordinator.visibility = View.VISIBLE
                     }
                 }
             }
@@ -112,7 +124,13 @@ class PlayerPanelAnimationController(
             override fun onSlide(bottomSheet: View, slideOffset: Float) {
                 val progress = slideOffset.coerceIn(0f, 1f)
                 groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
-                groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                val expandedAlpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                groupExpanded.alpha = expandedAlpha
+                // El banner de letra comparte exactamente el mismo alpha que
+                // groupExpanded (mismo progress, mismo umbral) para que suba
+                // "pegado" al resto del panel expandido en vez de aparecer
+                // de golpe mientras lo demas sigue transparente.
+                lyricsCoordinator.alpha = expandedAlpha
                 // Esto cubre tanto el arrastre manual del panel (el dedo del
                 // usuario) como el "settle" por defecto de BottomSheetBehavior
                 // al colapsar con el boton de atras: en ambos casos la
@@ -124,8 +142,10 @@ class PlayerPanelAnimationController(
         behavior.state = BottomSheetBehavior.STATE_COLLAPSED
         groupMini.alpha = 1f
         groupExpanded.alpha = 0f
+        lyricsCoordinator.alpha = 0f
         groupMini.visibility = View.VISIBLE
         groupExpanded.visibility = View.INVISIBLE
+        lyricsCoordinator.visibility = View.INVISIBLE
         audioSpectrumView.stop()
 
         groupMini.setOnClickListener { onMiniClicked() }
@@ -161,6 +181,8 @@ class PlayerPanelAnimationController(
         groupMini.visibility = View.INVISIBLE
         groupExpanded.alpha = 1f
         groupExpanded.visibility = View.VISIBLE
+        lyricsCoordinator.alpha = 1f
+        lyricsCoordinator.visibility = View.VISIBLE
 
         val offscreenOffset = maxOf(
             playerPanel.height,
@@ -192,6 +214,12 @@ class PlayerPanelAnimationController(
         groupMini.alpha = 1f
         groupExpanded.visibility = View.VISIBLE
         groupExpanded.alpha = 0f
+        // Ya arrancamos con el banner de letra visible (a alpha 0, igual que
+        // groupExpanded) para que ambos vayan encendiendose juntos frame a
+        // frame en vez de que el banner aparezca de golpe con un toggle de
+        // visibilidad aparte.
+        lyricsCoordinator.visibility = View.VISIBLE
+        lyricsCoordinator.alpha = 0f
 
         playerPanel.translationY = startOffset
         playerPanel.visibility = View.GONE
@@ -206,7 +234,11 @@ class PlayerPanelAnimationController(
                 playerPanel.translationY = value
                 val progress = 1f - (value / startOffset).coerceIn(0f, 1f)
                 groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
-                groupExpanded.alpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                val expandedAlpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                groupExpanded.alpha = expandedAlpha
+                // Mismo alpha, mismo frame: el banner de letra sube "pegado"
+                // al resto del panel expandido, sin desfase.
+                lyricsCoordinator.alpha = expandedAlpha
                 if (progress > 0.4f) groupExpanded.visibility = View.VISIBLE
                 updateSharedAlbumArt(progress)
             }
@@ -218,6 +250,8 @@ class PlayerPanelAnimationController(
                     groupMini.visibility = View.INVISIBLE
                     groupExpanded.alpha = 1f
                     groupExpanded.visibility = View.VISIBLE
+                    lyricsCoordinator.alpha = 1f
+                    lyricsCoordinator.visibility = View.VISIBLE
                     behavior.isDraggable = true
                     expandAnimator = null
                     endSharedAlbumArt()

@@ -18,7 +18,13 @@ class HomeController(
     private val getCurrentSong: () -> Song?,
     private val isPlaying: () -> Boolean,
     private val onPlaySong: (Song) -> Unit,
-    private val onOpenSongs: () -> Unit
+    private val onOpenSongs: () -> Unit,
+    // Paneles "liquid glass" que viven FUERA del arbol de vistas del Home
+    // (por ejemplo groupMini, el mini reproductor que se ve en todas las
+    // pestañas) pero que deben fotografiar el mismo fondo animado y
+    // refrescarse junto con los del Home cada vez que ese fondo cambia de
+    // color. Vacio por defecto para no romper otros usos de HomeController.
+    private val additionalGlassPanels: List<LiquidGlassView> = emptyList()
 ) {
 
     // ============================================================
@@ -75,6 +81,35 @@ class HomeController(
 
 
     // ============================================================
+    // PANELES "LIQUID GLASS" (Accesos rapidos)
+    // ============================================================
+
+    /**
+     * El banner de hero ("Continuar escuchando") + los paneles de
+     * "Accesos rapidos" del Home. Cada uno se "fotografia" contra
+     * [backgroundTarget] (el mismo fondo animado de degradado +
+     * destellos) para simular vidrio esmerilado. Ver [LiquidGlassView].
+     */
+    private val glassPanels: List<LiquidGlassView> =
+        listOf(
+            R.id.homeHeroCard,
+            R.id.btnHomeFavorites,
+            R.id.btnHomeRecent,
+            R.id.btnHomeSongs,
+            R.id.btnHomePlaylists,
+            R.id.btnHomeMostPlayed
+        ).map { id ->
+            root.findViewById<LiquidGlassView>(id)
+        } + additionalGlassPanels
+
+    init {
+        glassPanels.forEach { panel ->
+            panel.attachBackdrop(backgroundTarget)
+        }
+    }
+
+
+    // ============================================================
     // CANCION DEL HERO
     // ============================================================
 
@@ -117,12 +152,40 @@ class HomeController(
      * abajo") terminen quedando entre homeView y la raiz. Depender del
      * padre inmediato era fragil: cualquier envoltorio nuevo alrededor
      * de homeView rompia el fondo sin avisar.
+     *
+     * onBackgroundUpdated refresca los paneles liquid glass cada vez
+     * que termina la animacion de cambio de color, para que el vidrio
+     * quede en sintonia con el nuevo tono de la caratula.
      */
     private val ambientBackground: AmbientBackgroundController by lazy {
         AmbientBackgroundController(
             context = context,
-            targetView = backgroundTarget
+            targetView = backgroundTarget,
+            onBackgroundUpdated = { refreshGlassPanels() }
         )
+    }
+
+    /**
+     * Actualiza SOLO el fondo animado (y en consecuencia los paneles
+     * liquid glass, incluido groupMini via additionalGlassPanels) para
+     * reflejar [song], sin tocar el resto del contenido del Home
+     * (textos, filas de canciones, contadores, etc).
+     *
+     * A diferencia de [refresh], debe poder llamarse aunque el Home NO
+     * este visible: groupMini (el mini reproductor) se ve en las tres
+     * pestañas, asi que necesita que el fondo se mantenga al dia con la
+     * cancion sonando sin importar cual pestaña este activa. Se llama
+     * desde SongListActivity.showMiniPlayer() cada vez que se muestra o
+     * actualiza el mini player (cambio de cancion, reconexion al
+     * servicio al reabrir la app, etc), que es justo el caso que antes
+     * se perdia: al reconectar con el servicio y restaurar la cancion
+     * que ya estaba sonando, se llamaba a showMiniPlayer() sin pasar
+     * por refresh(), asi que el fondo se quedaba en el degradado neutro
+     * por defecto y groupMini fotografiaba ese neutro en vez del color
+     * real de la cancion.
+     */
+    fun updateAmbientBackground(song: Song?) {
+        ambientBackground.updateForSong(song)
     }
 
 
@@ -147,7 +210,7 @@ class HomeController(
                 20
             )
 
-        val favorites =
+        val favoriteIds =
             PlaylistRepository.getPlaylistById(
                 context,
                 PlaylistRepository.FAVORITES_PLAYLIST_ID
@@ -174,22 +237,20 @@ class HomeController(
 
 
         // --------------------------------------------------------
-        // CONTADORES
-        // --------------------------------------------------------
-
-        tvFavoritesCount.text =
-            favorites.size.toString()
-
-        tvRecentCount.text =
-            recentIds.size.toString()
-
-        tvMostCount.text =
-            mostIds.size.toString()
-
-
-        // --------------------------------------------------------
         // CANCIONES
         // --------------------------------------------------------
+
+        // IMPORTANTE: recentIds/mostIds/favoriteIds pueden contener
+        // songId "huerfanos" que ya no corresponden a ninguna cancion
+        // actual (ver SongIdMigrator: MediaStore les asigna un _ID
+        // nuevo a los archivos reescritos, y las tablas que guardaban
+        // el _ID viejo quedan apuntando a nada). Filtramos contra byId
+        // ANTES de contar, para que el numero que se ve en el Home
+        // coincida con lo que el usuario realmente ve al entrar a cada
+        // lista (PlaylistDetailActivity hace exactamente este mismo
+        // filtro). Antes se mostraba favorites.size/recentIds.size/
+        // mostIds.size "en bruto", sin filtrar, por lo que el Home
+        // podia anunciar mas canciones de las que la lista real tenia.
 
         val byId =
             songs.associateBy { it.id }
@@ -200,10 +261,27 @@ class HomeController(
         val mostSongs =
             mostIds.mapNotNull { byId[it] }
 
+        val favoriteSongs =
+            favoriteIds.mapNotNull { byId[it] }
+
         val addedSongs =
             songs
                 .sortedByDescending { it.dateAdded }
                 .take(12)
+
+
+        // --------------------------------------------------------
+        // CONTADORES
+        // --------------------------------------------------------
+
+        tvFavoritesCount.text =
+            favoriteSongs.size.toString()
+
+        tvRecentCount.text =
+            recentSongs.size.toString()
+
+        tvMostCount.text =
+            mostSongs.size.toString()
 
 
         // --------------------------------------------------------
@@ -281,6 +359,22 @@ class HomeController(
         // nunca reaccionaba a las canciones mostradas en el Home, solo
         // a la que sonaba.
         ambientBackground.updateForSong(hero)
+    }
+
+
+    // ============================================================
+    // PANELES LIQUID GLASS
+    // ============================================================
+
+    /**
+     * Vuelve a "fotografiar" el fondo animado en cada panel de
+     * Accesos rapidos. Se llama cuando termina de cambiar el color de
+     * fondo (ver [ambientBackground]).
+     */
+    private fun refreshGlassPanels() {
+        glassPanels.forEach { panel ->
+            panel.refreshGlass()
+        }
     }
 
 

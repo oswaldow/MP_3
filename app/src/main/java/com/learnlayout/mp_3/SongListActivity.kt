@@ -66,7 +66,19 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
     private val playerPanel: FrameLayout by lazy { findViewById(R.id.playerPanel) }
     private val groupExpanded: View by lazy { findViewById(R.id.groupExpanded) }
-    private val groupMini: View by lazy { findViewById(R.id.groupMini) }
+    // LiquidGlassView (antes un LinearLayout normal) para que el mini
+    // reproductor tenga el mismo efecto de vidrio esmerilado que los
+    // paneles de Accesos rapidos del Home (ver setupHome/HomeController).
+    private val groupMini: LiquidGlassView by lazy {
+        findViewById<LiquidGlassView>(R.id.groupMini).also {
+            // Esquinas rectas (0dp) en vez del radio por defecto (22dp):
+            // como groupMini ocupa el ancho completo pegado arriba de
+            // playerPanel, un rectangulo sin redondear siempre cubre por
+            // completo el fondo de playerPanel (bg_mini_player_full),
+            // sin importar el radio que tenga ese drawable.
+            it.setCornerRadiusDp(0f)
+        }
+    }
     private val ivMiniAlbumArt: ImageView by lazy { findViewById(R.id.ivMiniAlbumArt) }
     private val tvMiniTitle: TextView by lazy { findViewById(R.id.tvMiniTitle) }
     private val tvMiniArtist: TextView by lazy { findViewById(R.id.tvMiniArtist) }
@@ -114,6 +126,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private var isReverseOrder: Boolean = false
     private var searchQuery: String = ""
 
+    private var songsLoaded = false
+    private var pendingRestoreLastSong = false
+
     private val playlistDialogs by lazy {
         PlaylistDialogs(
             context = this,
@@ -155,8 +170,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     if (current != null) {
                         showMiniPlayer(current, service.isPlaying())
                         songAdapter.setCurrentPlayingId(current.id)
-                    } else {
+                    } else if (songsLoaded) {
                         tryRestoreLastSong()
+                    } else {
+                        // loadSongs() (background) todavia no termino: se
+                        // marca para restaurar la cola en cuanto termine,
+                        // en vez de intentarlo ahora con allSongs vacio.
+                        pendingRestoreLastSong = true
                     }
                 }
 
@@ -202,6 +222,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             playerPanel = playerPanel,
             groupExpanded = groupExpanded,
             groupMini = groupMini,
+            lyricsCoordinator = lyricsCoordinator,
             ivMiniAlbumArt = ivMiniAlbumArt,
             tvMiniTitle = tvMiniTitle,
             tvMiniArtist = tvMiniArtist,
@@ -506,6 +527,13 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         topBarController.dispatchTouchEvent(ev)
         guardLyricsPanelDrag(ev)
+        // DEBUG TEMPORAL - tag: MP3_SwipeDebug
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            android.util.Log.d(
+                "MP3_SwipeDebug",
+                "SongListActivity.dispatchTouchEvent ACTION_DOWN en (${ev.rawX}, ${ev.rawY}) playerPanelController.isReady=${playerPanelController.isReady}"
+            )
+        }
         return super.dispatchTouchEvent(ev)
     }
 
@@ -517,6 +545,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     lyricsPanelController.isPointInside(ev.rawX, ev.rawY)
                 ) {
                     playerPanelController.setDraggable(false)
+                    // DEBUG TEMPORAL - tag: MP3_SwipeDebug
+                    android.util.Log.d("MP3_SwipeDebug", "guardLyricsPanelDrag: setDraggable(false) - el panel de letra capturo el toque")
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -622,7 +652,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     }
                 }
             },
-            onOpenSongs = { homeNavigationController.showSongs() }
+            onOpenSongs = { homeNavigationController.showSongs() },
+            // groupMini vive fuera de homeView (es visible en las tres
+            // pestañas), pero comparte el mismo fondo animado (rootLayout):
+            // se agrega aqui para que se fotografie y se refresque junto
+            // con el resto de los paneles liquid glass del Home.
+            additionalGlassPanels = listOf(groupMini)
         )
 
         findViewById<View>(R.id.btnHomeSongs).setOnClickListener { homeNavigationController.showSongs() }
@@ -676,7 +711,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         swipeRefreshSongList.setOnRefreshListener {
             loadSongs()
             loadPlaylists()
-            swipeRefreshSongList.isRefreshing = false
         }
     }
 
@@ -787,30 +821,63 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 
+    /**
+     * SongRepository.getAllSongs() (consulta MediaStore + limpieza de
+     * artista por regex) corria entero en el hilo principal, cada vez que
+     * se llamaba: al abrir la app, al tirar para refrescar, al borrar o
+     * editar una cancion, etc. Con ~450+ canciones eso se sentia como una
+     * traba. Ahora el escaneo corre en segundo plano y solo el resultado
+     * ya calculado se aplica a las vistas en el hilo principal.
+     *
+     * songsLoaded/pendingRestoreLastSong: ver el comentario junto a esos
+     * campos, arriba.
+     */
     private fun loadSongs() {
-        val rawSongs = SongRepository.getAllSongs(this)
+        AppExecutors.runInBackground {
+            val rawSongs = SongRepository.getAllSongs(this)
 
-        val overrides = SongMetadataRepository.getAllOverrides(this)
-        allSongs = rawSongs.map { song ->
-            val override = overrides[song.id]
-            if (override != null) {
-                song.copy(
-                    title = override.first.ifBlank { song.title },
-                    artist = override.second.ifBlank { song.artist }
-                )
-            } else {
-                song
+            val overrides = SongMetadataRepository.getAllOverrides(this)
+            val result = rawSongs.map { song ->
+                val override = overrides[song.id]
+                if (override != null) {
+                    song.copy(
+                        title = override.first.ifBlank { song.title },
+                        artist = override.second.ifBlank { song.artist }
+                    )
+                } else {
+                    song
+                }
+            }
+
+            AppExecutors.runOnMain {
+                if (isFinishing || isDestroyed) return@runOnMain
+
+                allSongs = result
+                songsLoaded = true
+
+                if (allSongs.isEmpty()) {
+                    tvEmptyState.visibility = View.VISIBLE
+                    rvSongs.visibility = View.GONE
+                } else {
+                    applyFilterAndSort()
+                    if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
+                }
+
+                // Antes esto lo apagaba quien llamaba a loadSongs() justo
+                // despues (por ejemplo, el gesto de "tirar para
+                // refrescar"), lo cual funcionaba porque loadSongs() era
+                // sincrono. Ahora que es async, se apaga aca, cuando el
+                // resultado ya esta aplicado. En el resto de los casos
+                // (loadSongs() no vino de un pull-to-refresh) esto es un
+                // no-op: isRefreshing ya estaba en false.
+                swipeRefreshSongList.isRefreshing = false
+
+                if (pendingRestoreLastSong) {
+                    pendingRestoreLastSong = false
+                    tryRestoreLastSong()
+                }
             }
         }
-
-        if (allSongs.isEmpty()) {
-            tvEmptyState.visibility = View.VISIBLE
-            rvSongs.visibility = View.GONE
-            return
-        }
-
-        applyFilterAndSort()
-        if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
     }
 
     /**
@@ -1028,6 +1095,19 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         playerPanelController.updateNowPlaying(song, playing)
         lyricsPanelController.updatePeekHeight()
         lyricsPanelController.loadForSong(song)
+        // groupMini es visible en las tres pestañas (Home, Canciones,
+        // Playlists), asi que su fondo liquid glass debe mantenerse al
+        // dia con la cancion sonando sin importar cual este activa. Los
+        // demas usos de homeController.refresh() estan condicionados a
+        // homeView.visibility == VISIBLE (evitan trabajo de mas en
+        // vistas no visibles), pero eso dejaba a groupMini fotografiando
+        // el degradado neutro por defecto cada vez que el mini player se
+        // mostraba desde una ruta que no pasaba por refresh() completo
+        // (por ejemplo al reconectar con el servicio y restaurar una
+        // cancion que ya estaba sonando).
+        if (::homeController.isInitialized) {
+            homeController.updateAmbientBackground(song)
+        }
     }
 
     override fun onSongChanged(song: Song, index: Int) {

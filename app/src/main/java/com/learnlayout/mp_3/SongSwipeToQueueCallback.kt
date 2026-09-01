@@ -17,6 +17,41 @@ class SongSwipeToQueueCallback(
         target: RecyclerView.ViewHolder
     ): Boolean = false
 
+    // Por defecto ItemTouchHelper pide cruzar el 50% del ancho de la fila
+    // para que el swipe "cuente" por distancia. Con logs de diagnostico
+    // se vio que incluso al 28% (valor anterior) un swipe lento de ~18%
+    // de recorrido se regresaba sin avisar. Bajado a 20% para que baste
+    // con un recorrido corto y notorio.
+    override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder): Float = 0.20f
+
+    // Ademas del umbral por distancia, ItemTouchHelper completa el swipe
+    // si el dedo se suelta con suficiente velocidad (un "flick"), sin
+    // importar que tan lejos haya llegado. Los logs mostraron que con la
+    // mitad del default (0.5x) la mayoria de los swipes normales ya
+    // completaban por velocidad; se baja un poco mas (0.35x) para cubrir
+    // tambien los mas lentos/cortos.
+    override fun getSwipeEscapeVelocity(defaultValue: Float): Float = defaultValue * 0.35f
+
+    override fun getSwipeVelocityThreshold(defaultValue: Float): Float = defaultValue * 0.5f
+
+    // La animacion por defecto (tanto la de "volar" hacia afuera al
+    // completar el swipe, como la de regresar a su lugar al cancelarlo)
+    // tarda lo mismo que la del ItemAnimator del RecyclerView, lo que se
+    // sentia lento/pegajoso al final del gesto. Se acorta a un valor fijo
+    // mas rapido para que se sienta inmediato.
+    override fun getAnimationDuration(
+        recyclerView: RecyclerView,
+        animationType: Int,
+        animateDx: Float,
+        animateDy: Float
+    ): Long {
+        return when (animationType) {
+            ItemTouchHelper.ANIMATION_TYPE_SWIPE_SUCCESS -> 150L
+            ItemTouchHelper.ANIMATION_TYPE_SWIPE_CANCEL -> 150L
+            else -> super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy)
+        }
+    }
+
     // La cancion se agrega a la cola pero se queda en la lista, asi que se
     // regresa a su posicion original con notifyItemChanged en vez de
     // dejar que ItemTouchHelper la elimine visualmente.

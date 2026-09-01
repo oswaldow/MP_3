@@ -262,6 +262,13 @@ class TopBarController(
     // ============================================================
 
     fun dispatchTouchEvent(ev: MotionEvent) {
+        // DEBUG TEMPORAL - tag: MP3_SwipeDebug
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            android.util.Log.d(
+                "MP3_SwipeDebug",
+                "TopBarController.dispatchTouchEvent ACTION_DOWN: isSearchVisible=$isSearchVisible isHomeActive=$isHomeActive (si alguno es true, este detector no hace nada mas)"
+            )
+        }
         if (isSearchVisible || isHomeActive) return
 
         when (ev.actionMasked) {
@@ -270,6 +277,7 @@ class TopBarController(
                 swipeDownY = ev.rawY
                 swipeTracking = true
                 downOverSongsList = isPointOverView(rvSongs, ev.rawX, ev.rawY)
+                android.util.Log.d("MP3_SwipeDebug", "TopBarController: downOverSongsList=$downOverSongsList")
             }
 
             MotionEvent.ACTION_UP -> {

@@ -191,12 +191,11 @@
                             android:textColor="@color/text_secondary_light"
                             android:textSize="14sp" />
 
-                        <LinearLayout
+                        <com.learnlayout.mp_3.LiquidGlassView
                             android:id="@+id/homeHeroCard"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="18dp"
-                            android:background="@drawable/bg_home_card"
                             android:clickable="true"
                             android:focusable="true"
                             android:gravity="center_vertical"
@@ -257,7 +256,7 @@
 
                             </LinearLayout>
 
-                        </LinearLayout>
+                        </com.learnlayout.mp_3.LiquidGlassView>
 
                         <TextView
                             android:layout_width="match_parent"
@@ -274,13 +273,12 @@
                             android:layout_marginTop="10dp"
                             android:orientation="horizontal">
 
-                            <LinearLayout
+                            <com.learnlayout.mp_3.LiquidGlassView
                                 android:id="@+id/btnHomeFavorites"
                                 android:layout_width="0dp"
                                 android:layout_height="72dp"
                                 android:layout_marginEnd="6dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/bg_home_action"
                                 android:clickable="true"
                                 android:focusable="true"
                                 android:gravity="center_vertical"
@@ -317,15 +315,14 @@
 
                                 </LinearLayout>
 
-                            </LinearLayout>
+                            </com.learnlayout.mp_3.LiquidGlassView>
 
-                            <LinearLayout
+                            <com.learnlayout.mp_3.LiquidGlassView
                                 android:id="@+id/btnHomeRecent"
                                 android:layout_width="0dp"
                                 android:layout_height="72dp"
                                 android:layout_marginStart="6dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/bg_home_action"
                                 android:clickable="true"
                                 android:focusable="true"
                                 android:gravity="center_vertical"
@@ -362,7 +359,7 @@
 
                                 </LinearLayout>
 
-                            </LinearLayout>
+                            </com.learnlayout.mp_3.LiquidGlassView>
 
                         </LinearLayout>
 
@@ -372,35 +369,47 @@
                             android:layout_marginTop="10dp"
                             android:orientation="horizontal">
 
-                            <TextView
+                            <com.learnlayout.mp_3.LiquidGlassView
                                 android:id="@+id/btnHomeSongs"
                                 android:layout_width="0dp"
                                 android:layout_height="72dp"
                                 android:layout_marginEnd="6dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/bg_home_action"
                                 android:clickable="true"
                                 android:focusable="true"
                                 android:gravity="center"
-                                android:text="Todas las canciones"
-                                android:textColor="@color/text_primary_light"
-                                android:textSize="14sp"
-                                android:textStyle="bold" />
+                                android:orientation="horizontal">
 
-                            <TextView
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Todas las canciones"
+                                    android:textColor="@color/text_primary_light"
+                                    android:textSize="14sp"
+                                    android:textStyle="bold" />
+
+                            </com.learnlayout.mp_3.LiquidGlassView>
+
+                            <com.learnlayout.mp_3.LiquidGlassView
                                 android:id="@+id/btnHomePlaylists"
                                 android:layout_width="0dp"
                                 android:layout_height="72dp"
                                 android:layout_marginStart="6dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/bg_home_action"
                                 android:clickable="true"
                                 android:focusable="true"
                                 android:gravity="center"
-                                android:text="Ver playlists"
-                                android:textColor="@color/text_primary_light"
-                                android:textSize="14sp"
-                                android:textStyle="bold" />
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Ver playlists"
+                                    android:textColor="@color/text_primary_light"
+                                    android:textSize="14sp"
+                                    android:textStyle="bold" />
+
+                            </com.learnlayout.mp_3.LiquidGlassView>
 
                         </LinearLayout>
 
@@ -409,11 +418,10 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp">
 
-                            <LinearLayout
+                            <com.learnlayout.mp_3.LiquidGlassView
                                 android:id="@+id/btnHomeMostPlayed"
                                 android:layout_width="match_parent"
                                 android:layout_height="64dp"
-                                android:background="@drawable/bg_home_action"
                                 android:clickable="true"
                                 android:focusable="true"
                                 android:gravity="center_vertical"
@@ -450,7 +458,7 @@
 
                                 </LinearLayout>
 
-                            </LinearLayout>
+                            </com.learnlayout.mp_3.LiquidGlassView>
 
                         </LinearLayout>
 
@@ -1074,7 +1082,7 @@
         <!-- MINI PLAYER                                                -->
         <!-- ========================================================= -->
 
-        <LinearLayout
+        <com.learnlayout.mp_3.LiquidGlassView
             android:id="@+id/groupMini"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -1164,7 +1172,7 @@
 
             </LinearLayout>
 
-        </LinearLayout>
+        </com.learnlayout.mp_3.LiquidGlassView>
 
     </FrameLayout>
 

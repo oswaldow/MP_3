@@ -133,44 +133,79 @@ class PlaylistDetailActivity : AppCompatActivity() {
                 playlistId == SongListActivity.MOST_PLAYED_PLAYLIST_ID
     }
 
+    /** Resultado de armar la lista de esta playlist, calculado en el hilo de fondo. */
+    private data class LoadedPlaylist(val title: String, val songs: List<Song>)
+
+    /**
+     * SongRepository.getAllSongs() consulta MediaStore y le aplica a cada
+     * fila una limpieza de artista con regex; con una biblioteca grande
+     * eso no es instantaneo. Antes esto corria entero en el hilo
+     * principal, y ademas se repetia en CADA onResume() (o sea, cada vez
+     * que volvias a esta pantalla desde el reproductor, o despues de
+     * agregar/quitar una cancion), lo que se sentia como una traba
+     * perceptible al entrar y salir. Ahora el escaneo + filtrado corre en
+     * AppExecutors.runInBackground y solo el resultado ya calculado se
+     * aplica a las vistas en el hilo principal.
+     */
     private fun loadPlaylistSongs() {
-        val allSongs = SongRepository.getAllSongs(this).map { SongMetadataRepository.apply(this, it) }
-        val songsById = allSongs.associateBy { it.id }
+        AppExecutors.runInBackground {
+            val allSongs = SongRepository.getAllSongs(this).map { SongMetadataRepository.apply(this, it) }
+            val songsById = allSongs.associateBy { it.id }
 
-        if (isAutoPlaylist()) {
-            // Playlists automaticas de historial: no viven en
-            // PlaylistRepository, se recalculan desde PlayCountRepository.
-            val songIds = when (playlistId) {
-                SongListActivity.RECENT_PLAYLIST_ID ->
-                    PlayCountRepository.getRecentlyPlayedSongIds(this)
-                else ->
-                    PlayCountRepository.getMostPlayedSongIds(this)
+            val result: LoadedPlaylist? = if (isAutoPlaylist()) {
+                // Playlists automaticas de historial: no viven en
+                // PlaylistRepository, se recalculan desde PlayCountRepository.
+                // Limite explicito de 20: debe coincidir siempre con el
+                // limite que usa HomeController.refresh() para el contador
+                // del Home. Antes esta pantalla llamaba sin limite (caia al
+                // default de PlayCountRepository, 50), por lo que la lista
+                // completa podia mostrar mas canciones que el numero
+                // anunciado en el Home (26 vs 20).
+                val songIds = when (playlistId) {
+                    SongListActivity.RECENT_PLAYLIST_ID ->
+                        PlayCountRepository.getRecentlyPlayedSongIds(this, 20)
+                    else ->
+                        PlayCountRepository.getMostPlayedSongIds(this, 20)
+                }
+
+                val title = when (playlistId) {
+                    SongListActivity.RECENT_PLAYLIST_ID -> SongListActivity.RECENT_PLAYLIST_NAME
+                    else -> SongListActivity.MOST_PLAYED_PLAYLIST_NAME
+                }
+
+                LoadedPlaylist(title, songIds.mapNotNull { songsById[it] })
+            } else {
+                val playlist = PlaylistRepository.getPlaylistById(this, playlistId)
+                if (playlist == null) {
+                    null
+                } else {
+                    LoadedPlaylist(playlist.name, playlist.songIds.mapNotNull { songsById[it] })
+                }
             }
 
-            binding.tvPlaylistTitle.text = when (playlistId) {
-                SongListActivity.RECENT_PLAYLIST_ID -> SongListActivity.RECENT_PLAYLIST_NAME
-                else -> SongListActivity.MOST_PLAYED_PLAYLIST_NAME
-            }
+            AppExecutors.runOnMain {
+                // La pantalla pudo cerrarse mientras esto corria en el
+                // hilo de fondo (por ejemplo, el usuario toco "atras"
+                // antes de que terminara el escaneo): no tocar binding
+                // de una Activity ya destruida.
+                if (isFinishing || isDestroyed) return@runOnMain
 
-            playlistSongs = songIds.mapNotNull { songsById[it] }.toMutableList()
-        } else {
-            val playlist = PlaylistRepository.getPlaylistById(this, playlistId)
-            if (playlist == null) {
-                finish()
-                return
-            }
+                if (result == null) {
+                    finish()
+                    return@runOnMain
+                }
 
-            binding.tvPlaylistTitle.text = playlist.name
-            playlistSongs = playlist.songIds.mapNotNull { songsById[it] }.toMutableList()
+                binding.tvPlaylistTitle.text = result.title
+                playlistSongs = result.songs.toMutableList()
+                songAdapter.updateData(playlistSongs)
+
+                val hasSongs = playlistSongs.isNotEmpty()
+                binding.tvEmptyPlaylist.visibility = if (hasSongs) View.GONE else View.VISIBLE
+                binding.rvPlaylistSongs.visibility = if (hasSongs) View.VISIBLE else View.GONE
+
+                updateAmbientBackground()
+            }
         }
-
-        songAdapter.updateData(playlistSongs)
-
-        val hasSongs = playlistSongs.isNotEmpty()
-        binding.tvEmptyPlaylist.visibility = if (hasSongs) View.GONE else View.VISIBLE
-        binding.rvPlaylistSongs.visibility = if (hasSongs) View.VISIBLE else View.GONE
-
-        updateAmbientBackground()
     }
 
     /** Se llama cuando el usuario suelta una cancion arrastrada: guarda el orden que quedo en el adapter. */
