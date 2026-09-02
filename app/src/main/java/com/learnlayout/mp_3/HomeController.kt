@@ -371,7 +371,7 @@ class HomeController(
      * Accesos rapidos. Se llama cuando termina de cambiar el color de
      * fondo (ver [ambientBackground]).
      */
-    private fun refreshGlassPanels() {
+    fun refreshGlassPanels() {
         glassPanels.forEach { panel ->
             panel.refreshGlass()
         }

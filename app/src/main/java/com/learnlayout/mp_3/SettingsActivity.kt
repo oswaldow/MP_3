@@ -129,10 +129,6 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        binding.rowBluetooth.setOnClickListener {
-            startActivity(Intent(this, BluetoothAudioActivity::class.java))
-        }
-
         binding.rowEqualizer.setOnClickListener {
             startActivity(Intent(this, EqualizerActivity::class.java))
         }
@@ -273,6 +269,5 @@ class SettingsActivity : AppCompatActivity() {
         engine.voice = voice ?: engine.defaultVoice
         engine.speak("Asi sueno yo", TextToSpeech.QUEUE_FLUSH, null, "voice_preview")
     }
-
     // ==================== FIN VOZ DE LECTURA ====================
 }

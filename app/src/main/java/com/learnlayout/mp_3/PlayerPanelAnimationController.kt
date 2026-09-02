@@ -50,6 +50,14 @@ class PlayerPanelAnimationController(
         private const val TAG = "MP3_PANEL"
         private const val EXPAND_ANIM_DURATION_MS = 320L
 
+        // Fraccion del progreso (0..1) en la que ocurre todo el crossfade
+        // mini<->expandido. Con 0.5f el intercambio de opacidad termina a
+        // mitad de camino y el resto del gesto solo termina de deslizar el
+        // panel ya con groupExpanded a alpha 1 (mismo "ritmo" visual que
+        // tenia antes, pero ahora sin hueco de opacidad simultanea: ver
+        // onSlide() y el addUpdateListener de smoothExpand()).
+        private const val CROSSFADE_SPAN = 0.5f
+
         // Mismos radios que PlayerPanelController.applyRoundedCorners() usa
         // para ivMiniAlbumArt / ivPanelAlbumArt: deben coincidir para que la
         // vista "volante" no pegue un salto de esquinas al empezar/terminar.
@@ -123,8 +131,15 @@ class PlayerPanelAnimationController(
 
             override fun onSlide(bottomSheet: View, slideOffset: Float) {
                 val progress = slideOffset.coerceIn(0f, 1f)
-                groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
-                val expandedAlpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                // Crossfade real: expandedAlpha + miniAlpha siempre suman 1
+                // durante todo el tramo de transicion (0..CROSSFADE_SPAN), asi
+                // que nunca hay un instante en que ambos esten casi del todo
+                // transparentes a la vez. Antes groupMini se apagaba de 0 a
+                // 0.5 y groupExpanded empezaba a encenderse recien en 0.4,
+                // dejando un hueco (~0.4-0.5) donde los dos estaban casi
+                // invisibles y se veia el negro de fondo detras del panel.
+                val expandedAlpha = (progress / CROSSFADE_SPAN).coerceIn(0f, 1f)
+                groupMini.alpha = 1f - expandedAlpha
                 groupExpanded.alpha = expandedAlpha
                 // El banner de letra comparte exactamente el mismo alpha que
                 // groupExpanded (mismo progress, mismo umbral) para que suba
@@ -233,13 +248,14 @@ class PlayerPanelAnimationController(
                 val value = anim.animatedValue as Float
                 playerPanel.translationY = value
                 val progress = 1f - (value / startOffset).coerceIn(0f, 1f)
-                groupMini.alpha = (1f - (progress / 0.5f)).coerceIn(0f, 1f)
-                val expandedAlpha = ((progress - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                // Mismo crossfade sin hueco que onSlide(): ver comentario ahi.
+                val expandedAlpha = (progress / CROSSFADE_SPAN).coerceIn(0f, 1f)
+                groupMini.alpha = 1f - expandedAlpha
                 groupExpanded.alpha = expandedAlpha
                 // Mismo alpha, mismo frame: el banner de letra sube "pegado"
                 // al resto del panel expandido, sin desfase.
                 lyricsCoordinator.alpha = expandedAlpha
-                if (progress > 0.4f) groupExpanded.visibility = View.VISIBLE
+                if (expandedAlpha > 0f) groupExpanded.visibility = View.VISIBLE
                 updateSharedAlbumArt(progress)
             }
             addListener(object : AnimatorListenerAdapter() {

@@ -55,6 +55,19 @@ class QueueSheetController(
     private var llQueueSearchBar: View? = null
     private var etQueueSearch: EditText? = null
 
+    // Panel unico "liquid glass" que envuelve TODO el contenido de la
+    // cola (header, buscador, lista, botones de modo). Es la propia
+    // raiz de bottom_sheet_queue.xml: se fotografia a si mismo, ya que
+    // su android:background (pintado por glassBackground) es lo que
+    // hay que difuminar para el efecto vidrio del panel completo.
+    private var queueGlassPanel: LiquidGlassView? = null
+
+    // Fondo estatico (sin animacion, ver QueueGlassBackgroundController)
+    // detras del panel de vidrio, coloreado segun la caratula de la
+    // cancion actual. Se recrea en cada show() porque el Dialog y su
+    // vista se reinflan cada vez que se abre la cola.
+    private var glassBackground: QueueGlassBackgroundController? = null
+
     // Texto actual de busqueda. Vacio = sin filtro, se muestra la cola
     // completa con drag & drop y swipe habilitados como siempre.
     private var searchQuery: String = ""
@@ -101,6 +114,9 @@ class QueueSheetController(
             // Forzamos ancho y alto de la VENTANA (no solo de la vista de
             // contenido) a MATCH_PARENT.
             queueWindow.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            // Queda como respaldo debajo de todo: la raiz (view) ahora
+            // pinta su propio degradado via glassBackground, asi que
+            // esto normalmente ni se llega a ver.
             queueWindow.setBackgroundDrawable(ColorDrawable(Color.BLACK))
 
             // EDGE-TO-EDGE: igual que en SongListActivity (setupEdgeToEdge()),
@@ -112,6 +128,24 @@ class QueueSheetController(
         }
 
         bindViews(view)
+
+        // Fondo estatico "liquid glass": se pinta sobre la vista raiz
+        // (view, que ES queueGlassPanel) y el propio panel se
+        // fotografia y difumina a si mismo. onBackgroundApplied vuelve
+        // a pedirle la foto cada vez que el color queda fijado,
+        // incluida la resolucion asincronica de la caratula.
+        glassBackground = QueueGlassBackgroundController(
+            context = activity,
+            targetView = view,
+            onBackgroundApplied = { queueGlassPanel?.refreshGlass() }
+        )
+        glassBackground?.applyForSong(getMusicService()?.getCurrentSong())
+
+        // Radio de esquina en 0: el panel de vidrio es la pantalla
+        // completa (edge-to-edge), no una tarjeta flotante, asi que no
+        // debe redondear sus esquinas como si fuera el hero del Home.
+        queueGlassPanel?.setCornerRadiusDp(0f)
+        queueGlassPanel?.attachBackdrop(view)
 
         ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -164,6 +198,8 @@ class QueueSheetController(
             btnQueueSearch = null
             llQueueSearchBar = null
             etQueueSearch = null
+            queueGlassPanel = null
+            glassBackground = null
             searchQuery = ""
             filteredIndices = null
             touchHelper = null
@@ -207,6 +243,7 @@ class QueueSheetController(
         btnQueueSearch = view.findViewById(R.id.btnQueueSearch)
         llQueueSearchBar = view.findViewById(R.id.llQueueSearchBar)
         etQueueSearch = view.findViewById(R.id.etQueueSearch)
+        queueGlassPanel = view.findViewById(R.id.queueGlassPanel)
     }
 
     fun refreshList() {
@@ -428,6 +465,10 @@ class QueueSheetController(
         val newIndex = getMusicService()?.getCurrentIndex() ?: return
         queueAdapter?.setCurrentIndex(newIndex)
         refreshHeader()
+
+        // Mantiene el degradado del vidrio en sintonia con la caratula
+        // de la nueva cancion mientras la cola sigue abierta.
+        glassBackground?.applyForSong(song)
     }
 
     /**

@@ -113,11 +113,24 @@ class PlaylistDetailActivity : AppCompatActivity() {
         )
         binding.rvPlaylistSongs.adapter = songAdapter
 
+        // El ItemTouchHelper se adjunta siempre (antes solo se creaba si
+        // canReorder era true), porque el swipe a la derecha para "sonar a
+        // continuacion" debe funcionar tambien en playlists automaticas
+        // (Recientes/Mas escuchadas), que no permiten reordenar pero si
+        // agregar a la cola.
+        val callback = PlaylistSongTouchHelperCallback(
+            adapter = songAdapter,
+            dragEnabled = canReorder,
+            onSwipeToPlayNext = { position ->
+                val song = playlistSongs.getOrNull(position) ?: return@PlaylistSongTouchHelperCallback
+                musicService?.addToPlayNext(song)
+                Toast.makeText(this, "Sonará a continuación", Toast.LENGTH_SHORT).show()
+            }
+        )
+        val helper = ItemTouchHelper(callback)
+        helper.attachToRecyclerView(binding.rvPlaylistSongs)
+        touchHelper = helper
         if (canReorder) {
-            val callback = PlaylistSongTouchHelperCallback(songAdapter)
-            val helper = ItemTouchHelper(callback)
-            helper.attachToRecyclerView(binding.rvPlaylistSongs)
-            touchHelper = helper
             songAdapter.dragStartListener = { viewHolder -> helper.startDrag(viewHolder) }
         }
 

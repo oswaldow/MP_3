@@ -1,24 +1,44 @@
 package com.learnlayout.mp_3
 
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 
+/**
+ * Maneja tanto el reordenamiento por arrastre (drag up/down) como el swipe
+ * a la derecha para "sonar a continuacion", en la lista de canciones de una
+ * playlist. Antes esta clase solo hacia drag y tenia el swipe apagado a
+ * proposito (isItemViewSwipeEnabled = false); eso dejaba sin el gesto de
+ * agregar a la cola a cualquier pantalla que la usara (PlaylistDetailActivity),
+ * a diferencia del Home, que ya lo tenia via SongSwipeToQueueCallback.
+ *
+ * El drag (reordenar) sigue siendo opcional via [dragEnabled] -las playlists
+ * automaticas como "Recientes"/"Mas escuchadas" no lo permiten, ver
+ * PlaylistDetailActivity.isAutoPlaylist()-, pero el swipe a la derecha queda
+ * siempre disponible, tambien en esas listas automaticas.
+ */
 class PlaylistSongTouchHelperCallback(
-    private val adapter: SongAdapter
+    private val adapter: SongAdapter,
+    private val dragEnabled: Boolean,
+    private val onSwipeToPlayNext: (Int) -> Unit
 ) : ItemTouchHelper.Callback() {
 
     private var dragFromPosition: Int = -1
 
     override fun isLongPressDragEnabled(): Boolean = false
 
-    override fun isItemViewSwipeEnabled(): Boolean = false
+    override fun isItemViewSwipeEnabled(): Boolean = true
 
     override fun getMovementFlags(
         recyclerView: RecyclerView,
         viewHolder: RecyclerView.ViewHolder
     ): Int {
-        val dragFlags = ItemTouchHelper.UP or ItemTouchHelper.DOWN
-        return makeMovementFlags(dragFlags, 0)
+        val dragFlags = if (dragEnabled) ItemTouchHelper.UP or ItemTouchHelper.DOWN else 0
+        val swipeFlags = ItemTouchHelper.RIGHT
+        return makeMovementFlags(dragFlags, swipeFlags)
     }
 
     override fun onMove(
@@ -38,9 +58,79 @@ class PlaylistSongTouchHelperCallback(
         return true
     }
 
+    // Igual que SongSwipeToQueueCallback (Home): la cancion se agrega a la
+    // cola pero se queda en la lista de la playlist, asi que se regresa a
+    // su posicion original con notifyItemChanged en vez de dejar que
+    // ItemTouchHelper la elimine visualmente. Quitar una cancion de la
+    // playlist sigue siendo solo desde el menu de 3 puntos.
     override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-        // El swipe esta desactivado (ver isItemViewSwipeEnabled): quitar
-        // una cancion de la playlist se hace desde el menu de 3 puntos.
+        val position = viewHolder.bindingAdapterPosition
+        if (position == RecyclerView.NO_POSITION) return
+        onSwipeToPlayNext(position)
+        viewHolder.bindingAdapter?.notifyItemChanged(position)
+    }
+
+    // Mismos umbrales/velocidades que SongSwipeToQueueCallback (Home), para
+    // que el gesto se sienta igual de facil en ambas pantallas.
+    override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder): Float = 0.20f
+
+    override fun getSwipeEscapeVelocity(defaultValue: Float): Float = defaultValue * 0.35f
+
+    override fun getSwipeVelocityThreshold(defaultValue: Float): Float = defaultValue * 0.5f
+
+    override fun getAnimationDuration(
+        recyclerView: RecyclerView,
+        animationType: Int,
+        animateDx: Float,
+        animateDy: Float
+    ): Long {
+        return when (animationType) {
+            ItemTouchHelper.ANIMATION_TYPE_SWIPE_SUCCESS -> 150L
+            ItemTouchHelper.ANIMATION_TYPE_SWIPE_CANCEL -> 150L
+            else -> super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy)
+        }
+    }
+
+    // Mismo fondo/icono que SongSwipeToQueueCallback (Home), para que el
+    // gesto se vea igual en las dos pantallas.
+    override fun onChildDraw(
+        c: Canvas,
+        recyclerView: RecyclerView,
+        viewHolder: RecyclerView.ViewHolder,
+        dX: Float,
+        dY: Float,
+        actionState: Int,
+        isCurrentlyActive: Boolean
+    ) {
+        if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && dX > 0) {
+            val itemView = viewHolder.itemView
+            val context = itemView.context
+            val density = context.resources.displayMetrics.density
+
+            val background = Paint().apply {
+                color = ContextCompat.getColor(context, R.color.purple_primary)
+                isAntiAlias = true
+            }
+            val cornerRadius = 16f * density
+            val rect = RectF(
+                itemView.left.toFloat(),
+                itemView.top.toFloat(),
+                dX,
+                itemView.bottom.toFloat()
+            )
+            c.drawRoundRect(rect, cornerRadius, cornerRadius, background)
+
+            val icon = ContextCompat.getDrawable(context, R.drawable.ic_queue_music)
+            if (icon != null) {
+                val iconSize = (24 * density).toInt()
+                val iconTop = itemView.top + (itemView.height - iconSize) / 2
+                val iconLeft = itemView.left + (itemView.height - iconSize) / 2
+                icon.setTint(ContextCompat.getColor(context, R.color.spotify_black))
+                icon.setBounds(iconLeft, iconTop, iconLeft + iconSize, iconTop + iconSize)
+                icon.draw(c)
+            }
+        }
+        super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
     }
 
     override fun clearView(

@@ -28,7 +28,8 @@ class TopBarController(
     private val etSearch: EditText,
     private val btnSearch: ImageButton,
     private val btnSort: ImageButton,
-    private val btnSettings: ImageButton,
+    private val btnSettings: LiquidGlassView,
+    private val ivSettingsIcon: ImageView,
     private val tabSongs: TextView,
     private val tabPlaylists: TextView,
     private val rvSongs: View,
@@ -154,8 +155,7 @@ class TopBarController(
         val iconTint = ColorStateList.valueOf(currentAccentColor)
         btnSearch.imageTintList = iconTint
         btnSort.imageTintList = iconTint
-        btnSettings.imageTintList = iconTint
-
+        ivSettingsIcon.imageTintList = iconTint
         styleTabBackgrounds()
     }
 

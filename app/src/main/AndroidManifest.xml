@@ -79,12 +79,6 @@
             android:theme="@style/Theme.MP_3" />
 
         <activity
-            android:name=".BluetoothAudioActivity"
-            android:exported="false"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.MP_3" />
-
-        <activity
             android:name=".LyricsActivity"
             android:exported="false"
             android:label="@string/app_name"

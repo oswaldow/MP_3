@@ -110,18 +110,26 @@
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintEnd_toStartOf="@id/btnSettings" />
 
-        <ImageButton
+        <com.learnlayout.mp_3.LiquidGlassView
             android:id="@+id/btnSettings"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:layout_marginTop="12dp"
             android:layout_marginEnd="20dp"
-            android:background="@drawable/bg_icon_button_circle"
-            android:contentDescription="Configuracion"
-            android:padding="9dp"
-            android:src="@drawable/ic_settings"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <ImageView
+                android:id="@+id/ivSettingsIcon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="Configuracion"
+                android:src="@drawable/ic_settings" />
+
+        </com.learnlayout.mp_3.LiquidGlassView>
 
         <androidx.constraintlayout.widget.Barrier
             android:id="@+id/topBarBarrier"
@@ -662,6 +670,21 @@
 
         </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
+        <!-- ============================================================= -->
+        <!-- Fundido debajo del header: suaviza la costura donde empieza    -->
+        <!-- el contenido con scroll (topBarBarrier), para que no se note   -->
+        <!-- como un corte duro al bajar.                                  -->
+        <!-- ============================================================= -->
+
+        <View
+            android:id="@+id/vTopBarFade"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_top_bar_fade"
+            app:layout_constraintTop_toBottomOf="@id/topBarBarrier"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
@@ -987,7 +1010,6 @@
                         android:layout_gravity="center"
                         android:background="@android:color/transparent"
                         android:contentDescription="Ver cola"
-                        android:foreground="@drawable/border_icon_button_circle"
                         android:padding="10dp"
                         android:src="@drawable/ic_queue_music" />
 

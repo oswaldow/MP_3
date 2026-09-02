@@ -1,6 +1,5 @@
 package com.learnlayout.mp_3
 
-import android.graphics.drawable.AnimationDrawable
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -20,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.widget.NestedScrollView
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -52,15 +52,23 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private val tvEmptyState: TextView by lazy { findViewById(R.id.tvEmptyState) }
     private val tvAppName: TextView by lazy { findViewById(R.id.tvAppName) }
     private val ivMascot: ImageView by lazy { findViewById(R.id.ivMascot) }
-    private val ivMonito: ImageView by lazy { findViewById(R.id.ivMonito) }
     private val llInlineSearch: View by lazy { findViewById(R.id.llInlineSearch) }
     private val etSearch: EditText by lazy { findViewById(R.id.etSearch) }
     private val btnSearch: ImageButton by lazy { findViewById(R.id.btnSearch) }
     private val btnSort: ImageButton by lazy { findViewById(R.id.btnSort) }
-    private val btnSettings: ImageButton by lazy { findViewById(R.id.btnSettings) }
+    private val btnSettings: LiquidGlassView by lazy {
+        findViewById<LiquidGlassView>(R.id.btnSettings).also {
+            it.setCornerRadiusDp(20f)
+        }
+    }
+    private val ivSettingsIcon: ImageView by lazy { findViewById(R.id.ivSettingsIcon) }
     private val tabSongs: TextView by lazy { findViewById(R.id.tabSongs) }
     private val tabPlaylists: TextView by lazy { findViewById(R.id.tabPlaylists) }
-    private val homeView: View by lazy { findViewById(R.id.homeView) }
+    private val homeView: NestedScrollView by lazy { findViewById(R.id.homeView) }
+    private val glassPanelsScrollHandler = Handler(Looper.getMainLooper())
+    private val glassPanelsScrollRefresh = Runnable {
+        if (::homeController.isInitialized) homeController.refreshGlassPanels()
+    }
     private lateinit var homeController: HomeController
     private lateinit var homeNavigationController: HomeNavigationController
 
@@ -249,11 +257,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnPanelNext = btnPanelNext,
             onExpanded = {
                 lyricsPanelController.onPlayerPanelExpanded()
-                startMonitoAnimation()
             },
             onCollapsed = {
                 lyricsPanelController.onPlayerPanelCollapsed()
-                resetMonitoToTop()
             },
             onShowQueue = { queueSheet.show() },
             onFavoriteToggled = {
@@ -336,6 +342,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             btnSearch = btnSearch,
             btnSort = btnSort,
             btnSettings = btnSettings,
+            ivSettingsIcon = ivSettingsIcon,
             tabSongs = tabSongs,
             tabPlaylists = tabPlaylists,
             rvSongs = rvSongs,
@@ -471,58 +478,6 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
 
         topBarController.startMascotAnimation()
     }
-    private val monitoHandler = Handler(Looper.getMainLooper())
-
-    private var monitoBlinkRunnable: Runnable? = null
-
-    private fun resetMonitoToTop() {
-        // Se llama al cerrar el panel: cancela cualquier bajada/parpadeo
-        // pendiente y deja al monito quieto en su frame inicial.
-        monitoBlinkRunnable?.let { monitoHandler.removeCallbacks(it) }
-
-        monitoBlinkRunnable = null
-
-        (ivMonito.drawable as? AnimationDrawable)?.stop()
-        ivMonito.setImageResource(R.drawable.ic_monito_frame1)
-    }
-
-    private fun startMonitoAnimation() {
-        // Si ya habia una animacion pendiente, la cancelamos para evitar
-        // que se acumulen varias animaciones.
-        monitoBlinkRunnable?.let { monitoHandler.removeCallbacks(it) }
-
-        monitoBlinkRunnable = null
-
-        ivMonito.setImageResource(R.drawable.anim_monito_descend)
-
-        ivMonito.post {
-            val descendDrawable =
-                ivMonito.drawable as? AnimationDrawable
-                    ?: return@post
-
-            descendDrawable.start()
-
-            // AnimationDrawable no proporciona un callback directo cuando
-            // termina, asi que calculamos su duracion total.
-            var totalDuration = 0
-
-            for (i in 0 until descendDrawable.numberOfFrames) {
-                totalDuration += descendDrawable.getDuration(i)
-            }
-
-            val blinkRunnable = Runnable {
-                ivMonito.setImageResource(R.drawable.anim_monito_blink)
-                (ivMonito.drawable as? AnimationDrawable)?.start()
-            }
-
-            monitoBlinkRunnable = blinkRunnable
-
-            monitoHandler.postDelayed(
-                blinkRunnable,
-                totalDuration.toLong()
-            )
-        }
-    }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         topBarController.dispatchTouchEvent(ev)
@@ -657,8 +612,16 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             // pestañas), pero comparte el mismo fondo animado (rootLayout):
             // se agrega aqui para que se fotografie y se refresque junto
             // con el resto de los paneles liquid glass del Home.
-            additionalGlassPanels = listOf(groupMini)
+            additionalGlassPanels = listOf(groupMini, btnSettings)
         )
+
+        // Vuelve a fotografiar los paneles de vidrio cuando el scroll de
+        // Home se detiene, para que el degradado que reflejan coincida
+        // con su posicion real (ver refreshGlassPanels() en HomeController).
+        homeView.setOnScrollChangeListener { _, _, _, _, _ ->
+            glassPanelsScrollHandler.removeCallbacks(glassPanelsScrollRefresh)
+            glassPanelsScrollHandler.postDelayed(glassPanelsScrollRefresh, 120L)
+        }
 
         findViewById<View>(R.id.btnHomeSongs).setOnClickListener { homeNavigationController.showSongs() }
         findViewById<View>(R.id.btnHomePlaylists).setOnClickListener { homeNavigationController.showPlaylists() }
@@ -1161,6 +1124,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     override fun onDestroy() {
         super.onDestroy()
         if (isRedirectingToOnboarding) return
+        glassPanelsScrollHandler.removeCallbacks(glassPanelsScrollRefresh)
         AppAccentColor.removeListener(accentColorListener)
         stopMiniProgressPolling()
         queueSheet.dismiss()
