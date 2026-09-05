@@ -49,12 +49,40 @@ import android.view.View
  * ~23ms), sacando un snapshot nuevo por tick en vez de vaciar la cola
  * entera de una, sin importar si el frame de UI corre mas rapido (60,
  * 90 o 120fps) que la llegada de datos nuevos.
+ *
+ * IMPORTANTE (fix bug "el visualizador va atrasado, no en tiempo
+ * real"): consumir siempre "de a uno, en orden" tenia un efecto
+ * secundario: si esta vista se atrasaba aunque sea una vez (jank de
+ * UI, decodificar la caratula, GC, o simplemente estar detenida
+ * mientras el panel estaba colapsado y el audio seguia sonando), el
+ * backlog de snapshots viejos en la cola JAMAS se recuperaba solo,
+ * porque el ritmo de consumo nunca era mas rapido que el de
+ * produccion. El resultado: un atraso que se quedaba pegado para
+ * siempre despues de la primera interrupcion. Ahora:
+ *  - resumeIfPossible() vacia la cola (SpectrumAudioProcessor.clearQueue())
+ *    antes de arrancar, para no consumir snapshots de antes de la pausa.
+ *  - pullPacedSnapshot() descarta snapshots viejos cuando el backlog es
+ *    mayor al que produciria un burst normal de FLAC hi-res (ver
+ *    MAX_EXPECTED_BURST_BACKLOG), en vez de arrastrarlos. Un burst
+ *    chico (3-6 snapshots de un paquete grande) se sigue consumiendo
+ *    de a uno para que se vea parejo, pero un backlog mas grande que
+ *    eso ya no es un burst normal: es que la UI se atraso de verdad, y
+ *    ahi conviene saltar directo al dato mas reciente.
  */
 class AudioSpectrumView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
+
+    companion object {
+        // Cuantos snapshots pendientes en la cola se consideran todavia
+        // "un burst normal" (tipico de FLAC hi-res, ver comentario de
+        // SpectrumAudioProcessor). Mas que esto ya no es un burst del
+        // decoder, es que el consumidor se atraso de verdad: en ese caso
+        // se descartan los mas viejos para ponerse al dia de una.
+        private const val MAX_EXPECTED_BURST_BACKLOG = 6
+    }
 
     private val density = resources.displayMetrics.density
     private val barSpacingPx = 3f * density
@@ -169,6 +197,11 @@ class AudioSpectrumView @JvmOverloads constructor(
     private fun resumeIfPossible() {
         if (!wantsToRun || running) return
         running = true
+        // Vacia cualquier backlog que se haya acumulado mientras esta
+        // vista estaba parada (panel colapsado, vista oculta, etc.): sin
+        // esto, al reanudar se arrancaba consumiendo snapshots viejos de
+        // antes de la pausa en vez del audio actual.
+        SpectrumAudioProcessor.clearQueue()
         // Arranca el pauteo de cero: el primer tick despues de reanudar
         // consume un snapshot apenas haya uno disponible.
         lastSnapshotPullNs = 0L
@@ -193,12 +226,25 @@ class AudioSpectrumView @JvmOverloads constructor(
      * mientras tanto. Asi, si llegaron varios snapshots juntos (paquete
      * grande de PCM, tipico de FLAC hi-res), se van consumiendo de a uno
      * a ritmo parejo en vez de perderse todos menos el ultimo.
+     *
+     * Si el backlog pendiente es mayor al que produciria un burst normal
+     * del decoder (MAX_EXPECTED_BURST_BACKLOG), ya no es un burst: es que
+     * este consumidor se atraso de verdad (jank, pausa, etc.), y en ese
+     * caso se descartan los snapshots mas viejos para ponerse al dia de
+     * una, en vez de arrastrar ese atraso indefinidamente.
      */
     private fun pullPacedSnapshot(frameTimeNs: Long) {
         val intervalNs = SpectrumAudioProcessor.getUpdateIntervalMs().coerceAtLeast(1L) * 1_000_000L
         if (lastSnapshotPullNs != 0L && frameTimeNs - lastSnapshotPullNs < intervalNs) {
             return
         }
+
+        var pending = SpectrumAudioProcessor.pendingSnapshotCount()
+        while (pending > MAX_EXPECTED_BURST_BACKLOG) {
+            SpectrumAudioProcessor.pollNextSnapshot()
+            pending--
+        }
+
         val snapshot = SpectrumAudioProcessor.pollNextSnapshot() ?: return
         if (levels.size != snapshot.size) {
             levels = FloatArray(snapshot.size)
@@ -224,27 +270,24 @@ class AudioSpectrumView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val bands = levels
-        if (bands.isEmpty()) return
+        val bandCount = levels.size
+        if (bandCount == 0 || width <= 0 || height <= 0) return
 
-        val usableWidth = width - paddingLeft - paddingRight
-        val usableHeight = (height - paddingTop - paddingBottom).toFloat()
-        if (usableWidth <= 0 || usableHeight <= 0) return
+        val totalSpacing = barSpacingPx * (bandCount - 1)
+        val barWidth = (width - totalSpacing) / bandCount
+        if (barWidth <= 0f) return
 
-        val barWidthPx = (usableWidth - barSpacingPx * (bands.size - 1)) / bands.size
-        if (barWidthPx <= 0f) return
-
-        val bottom = height - paddingBottom.toFloat()
-        var x = paddingLeft.toFloat()
-
-        for (level in bands) {
-            val barHeight = (level * usableHeight).coerceAtLeast(minBarHeightPx)
-            val top = bottom - barHeight
+        var x = 0f
+        for (i in 0 until bandCount) {
+            val level = levels[i].coerceIn(0f, 1f)
+            val barHeight = (level * height).coerceAtLeast(minBarHeightPx)
+            val top = height - barHeight
             canvas.drawRoundRect(
-                x, top, x + barWidthPx, bottom,
-                cornerRadiusPx, cornerRadiusPx, barPaint
+                x, top, x + barWidth, height.toFloat(),
+                cornerRadiusPx, cornerRadiusPx,
+                barPaint
             )
-            x += barWidthPx + barSpacingPx
+            x += barWidth + barSpacingPx
         }
     }
 }

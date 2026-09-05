@@ -50,6 +50,20 @@ import kotlin.math.sqrt
  * saque un snapshot de la cola a ritmo parejo -uno cada ~23ms a
  * 44.1kHz- sin importar si llegaron todos juntos o de a uno.
  *
+ * IMPORTANTE (fix bug "el visualizador va atrasado, no en tiempo
+ * real"): la cola por si sola no bastaba. Si el consumidor
+ * (AudioSpectrumView) se atrasaba aunque sea una vez -jank de UI,
+ * decodificar la caratula, GC, o simplemente estar pausado mientras
+ * el panel estaba colapsado- el hilo de audio seguia produciendo
+ * snapshots en tiempo real y la cola se llenaba. Como el consumidor
+ * jamas sacaba mas de un snapshot por tick, ese atraso quedaba
+ * pegado para siempre en vez de recuperarse solo. Se agregan
+ * pendingSnapshotCount() (para que el consumidor sepa si el backlog
+ * es mas grande de lo esperable por un burst normal de FLAC hi-res,
+ * y en ese caso descarte lo viejo) y clearQueue() (para que el
+ * consumidor vacie la cola al reanudar despues de una pausa, y no
+ * arranque mostrando snapshots de antes de esa pausa).
+ *
  * El estado publicado vive en el companion object, igual que
  * bandGainsMillibel en SoftwareEqualizerProcessor: se escribe desde
  * el hilo de audio (queueInput) y se lee desde el hilo de UI
@@ -118,10 +132,30 @@ class SpectrumAudioProcessor : AudioProcessor {
          */
         fun pollNextSnapshot(): FloatArray? = snapshotQueue.poll()
 
-        /** Cada cuantos ms conviene sacar un snapshot nuevo de la cola. */
-        fun getUpdateIntervalMs(): Long = updateIntervalMs
+        /**
+         * Cuantos snapshots hay esperando a ser consumidos ahora mismo.
+         * Pensado para que el consumidor detecte un backlog "anormal"
+         * (mas grande que el que produciria un burst normal de FLAC
+         * hi-res) y decida ponerse al dia descartando snapshots viejos,
+         * en vez de arrastrar ese atraso para siempre.
+         */
+        fun pendingSnapshotCount(): Int = snapshotQueue.size
+
+        /**
+         * Vacia la cola sin tocar el "ultimo valor" publicado en
+         * magnitudes. Pensado para llamarse cuando el consumidor vuelve
+         * a arrancar despues de estar parado (panel colapsado, vista
+         * oculta, etc.), para no arrastrar snapshots viejos de antes de
+         * esa pausa.
+         */
+        fun clearQueue() {
+            snapshotQueue.clear()
+        }
 
         fun bandCount(): Int = NUM_BANDS
+
+        /** Cada cuantos ms conviene sacar un snapshot nuevo de la cola. */
+        fun getUpdateIntervalMs(): Long = updateIntervalMs
 
         // Frecuencias centrales de cada banda, distribuidas en escala
         // logaritmica (asi se ve/siente como un espectrometro real: mas

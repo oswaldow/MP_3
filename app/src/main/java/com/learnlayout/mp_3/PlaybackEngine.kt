@@ -1,6 +1,8 @@
 package com.learnlayout.mp_3
 
 import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
 import android.util.Log
@@ -16,6 +18,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import kotlin.math.cos
 import kotlin.math.sin
@@ -62,12 +65,40 @@ class PlaybackEngine(
     // realmente puso a continuacion.
     private var loadedIndex: Int = -1
 
-    // Una sola sesion de audio para TODOS los ExoPlayer que crea este
-    // motor (normal, restore, crossfade). Ya no hace falta para el
-    // ecualizador (que ahora es por software, ver
-    // SoftwareEqualizerProcessor / EqAudioSinkRenderersFactory), pero se
-    // mantiene por si en el futuro se necesita para otro efecto de audio
-    // del sistema. Ver buildPlayer().
+    // *** FIX (corte de audio antes del crossfade) ***
+    // Antes, esta variable era LA sesion que se forzaba (via
+    // setAudioSessionId()) en TODOS los ExoPlayer que crea este motor,
+    // sin importar si eran el player principal, el de restore, o el
+    // "next" de un crossfade/cambio manual. Con eso, en cualquier
+    // momento en que hubiera mas de un player vivo (crossfade, o el
+    // instante entre crear el player nuevo y liberar el viejo en un
+    // cambio manual), habia DOS AudioTrack activos sobre la MISMA
+    // sesion nativa.
+    //
+    // Diagnostico confirmado via logcat (tag MP3_XFADE) comparando la
+    // curva de volumen del crossfade -perfecta, sin underruns, sin
+    // errores- contra los eventos de AnalyticsListener: 1.7 a 2.7
+    // segundos DESPUES de liberar el player saliente (finishCrossfade()
+    // o manualFadeOutAndRelease()), aparecia un
+    // onAudioTrackReleased+onAudioTrackInitialized sobre el player QUE
+    // SEGUIA SONANDO, sin relacion con ningun seek/cambio de pista de
+    // por medio. Es decir: el teardown nativo tardio del AudioTrack
+    // saliente (en este fabricante -Xiaomi/HyperOS-) reconfigura la
+    // cadena de audio de TODA la sesion compartida, y el player en vivo
+    // se ve forzado a recrear su propio AudioTrack. Ese es el corte "se
+    // calla y vuelve" reportado.
+    //
+    // Fix: cada player nuevo (buildPlayer()) ya NO recibe ninguna sesion
+    // forzada; ExoPlayer le asigna su propia sesion nativa. Nunca hay
+    // dos AudioTrack activos sobre la misma sesion al mismo tiempo, asi
+    // que liberar el saliente no puede afectar al que sigue sonando.
+    // "sharedAudioSessionId" ahora es solo un CACHE de lectura: la
+    // sesion nativa del player que es "oficialmente" el mediaPlayer
+    // principal en este momento. Se actualiza exclusivamente desde
+    // promoteAudioSession(), que ademas reengancha
+    // BassVirtualizerRepository (BassBoost/Virtualizer) a esa sesion.
+    // getAudioSessionId() sigue exponiendo este valor sin cambios, para
+    // que MusicService/EqualizerActivity sigan funcionando igual.
     private var sharedAudioSessionId: Int = AudioManager.ERROR
 
     private var progressRunnable: Runnable? = null
@@ -96,6 +127,7 @@ class PlaybackEngine(
     private var playFadeRunnable: Runnable? = null
     private var manualFadeOutRunnable: Runnable? = null
     private var manualFadeInRunnable: Runnable? = null
+    private var logicalIsPlaying: Boolean = false
 
     // Player que esta a mitad del fundido de salida disparado por
     // manualFadeOutAndRelease(), si lo hay. Se necesita como campo de la
@@ -168,6 +200,43 @@ class PlaybackEngine(
     // vez de la que el usuario acababa de mover ahi.
     private var prepareRequestToken: Int = 0
 
+    // DEBUG: AudioManager y listener de cambios de dispositivo de salida
+    // (parlante / auriculares / bluetooth). Se agrega para descartar -o
+    // confirmar- que el corte que se oye justo antes del cambio de
+    // cancion venga de un cambio de RUTA de audio y no del crossfade en
+    // si mismo. Se registra sobre el mismo Handler del motor para que
+    // estos logs queden intercalados, en el orden real en que ocurrieron,
+    // con el resto de logs de TAG_XFADE.
+    private val audioManager: AudioManager? =
+        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            addedDevices.forEach { device ->
+                Log.w(
+                    TAG_XFADE,
+                    "audioDeviceCallback: DISPOSITIVO AGREGADO type=${device.type} " +
+                            "productName=${device.productName} isCrossfading=$isCrossfading"
+                )
+            }
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            removedDevices.forEach { device ->
+                Log.w(
+                    TAG_XFADE,
+                    "audioDeviceCallback: DISPOSITIVO QUITADO type=${device.type} " +
+                            "productName=${device.productName} isCrossfading=$isCrossfading"
+                )
+            }
+        }
+    }
+
+    init {
+        runCatching { audioManager?.registerAudioDeviceCallback(audioDeviceCallback, handler) }
+            .onFailure { e -> Log.e(TAG_XFADE, "No se pudo registrar audioDeviceCallback", e) }
+    }
+
     companion object {
         // Cada cuanto se revisa el progreso y se recalcula el volumen del
         // crossfade. 100ms da un fundido suave sin gastar mucha CPU.
@@ -195,7 +264,7 @@ class PlaybackEngine(
         // cualquier fin de cancion legitimo posterior se ignoraria.
         private const val SEEK_SAFETY_TIMEOUT_MS = 1500L
 
-        private const val TAG_XFADE = "MP3_XFADE"
+        const val TAG_XFADE = "MP3_XFADE"
 
         // AudioAttributes explicitos para todos los ExoPlayer de musica.
         private val MUSIC_AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
@@ -278,7 +347,7 @@ class PlaybackEngine(
 
     fun getAudioSessionId(): Int = sharedAudioSessionId
 
-    fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
+    fun isPlaying(): Boolean = logicalIsPlaying
 
     fun getCurrentPosition(): Int = mediaPlayer?.currentPosition?.toInt() ?: 0
 
@@ -335,6 +404,8 @@ class PlaybackEngine(
         player.playWhenReady = true
         mediaPlayer = player
         loadedIndex = index
+        logicalIsPlaying = true
+        promoteAudioSession(player, "playSongAt idx=$index")
 
         if (hadOutgoing && outgoingPlayer != null) {
             manualFadeOutAndRelease(outgoingPlayer)
@@ -363,6 +434,8 @@ class PlaybackEngine(
         }
         mediaPlayer = player
         loadedIndex = index
+        logicalIsPlaying = false
+        promoteAudioSession(player, "restoreSongAt idx=$index")
 
         startProgressUpdates()
         callback.onSongStarted(song, index, SongStartReason.RESTORED)
@@ -375,6 +448,9 @@ class PlaybackEngine(
     private fun applyVolumeNormalization(song: Song) {
         val enabled = SettingsRepository.isVolumeNormalizationEnabled(context)
         ReplayGainAudioProcessor.setEnabled(enabled)
+        ReplayGainAudioProcessor.setUserGainMillibel(
+            SettingsRepository.getVolumeNormalizationGainMillibel(context)
+        )
         if (!enabled) return
 
         SongGainRepository.applyGainForSong(context, song) { gainDb ->
@@ -400,6 +476,7 @@ class PlaybackEngine(
             fadeInOnPlay(player)
         }
         nextMediaPlayer?.let { if (!it.isPlaying) it.playWhenReady = true }
+        logicalIsPlaying = true
         callback.onPlaybackStateChanged(true)
     }
 
@@ -413,6 +490,7 @@ class PlaybackEngine(
             cancelPausePlayFadesIfAny()
             fadeOutThenPause(player)
         }
+        logicalIsPlaying = false
         callback.onPlaybackStateChanged(false)
     }
 
@@ -432,6 +510,18 @@ class PlaybackEngine(
         mediaPlayer = null
     }
 
+    /**
+     * Llamar UNA sola vez, desde MusicService.onDestroy(): desengancha el
+     * listener de dispositivos de audio registrado en el bloque init().
+     * A diferencia de releasePlayer() (que tambien se usa a mitad de la
+     * vida del servicio, ver restoreSongAt()), esto es exclusivamente
+     * para cuando el motor completo va a dejar de existir.
+     */
+    fun shutdown() {
+        runCatching { audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback) }
+            .onFailure { e -> Log.e(TAG_XFADE, "shutdown: no se pudo desregistrar audioDeviceCallback", e) }
+    }
+
     private fun markSeekStarted() {
         isSeeking = true
         seekSafetyRunnable?.let { handler.removeCallbacks(it) }
@@ -449,26 +539,72 @@ class PlaybackEngine(
         seekSafetyRunnable = null
     }
 
+    // *** FIX (corte de audio antes del crossfade) ***
+    // Convierte a [player] en la fuente de sesion de audio "oficial":
+    // actualiza sharedAudioSessionId (lo que expone getAudioSessionId(),
+    // usado por MusicService.getAudioSessionId() para que
+    // EqualizerActivity enganche BassBoost/Virtualizer) y reengancha esos
+    // efectos nativos a la sesion PROPIA de este player.
+    //
+    // Se llama SOLO cuando un player pasa a ser de verdad "el"
+    // mediaPlayer principal: cancion nueva sin crossfade (playSongAt),
+    // restore (restoreSongAt), o al terminar un crossfade
+    // (finishCrossfade). Los players "candidatos" que todavia se estan
+    // precargando (prepareNextPlayerAsync) NO se promueven: mientras
+    // conviven dos AudioTrack (el saliente y el entrante durante el
+    // crossfade), cada uno vive en su PROPIA sesion nativa, asi que
+    // liberar uno no puede forzar al sistema a reconfigurar la sesion del
+    // otro. Ver comentario grande junto al campo "sharedAudioSessionId".
+    private fun promoteAudioSession(player: ExoPlayer, reason: String) {
+        val sessionId = player.audioSessionId
+        if (sessionId == AudioManager.ERROR || sessionId == 0) {
+            Log.w(TAG_XFADE, "promoteAudioSession($reason): sessionId invalido ($sessionId), no se promueve")
+            return
+        }
+        if (sessionId == sharedAudioSessionId) return
+
+        Log.d(
+            TAG_XFADE,
+            "promoteAudioSession($reason): sharedAudioSessionId $sharedAudioSessionId -> $sessionId " +
+                    "(player #${System.identityHashCode(player)})"
+        )
+        sharedAudioSessionId = sessionId
+        BassVirtualizerRepository.attachToSession(sessionId)
+    }
+
     // DEBUG: engancha diagnostico profundo de audio a un player. Esto NO
     // cambia comportamiento, solo agrega logs. El objetivo es distinguir
-    // entre 3 causas MUY distintas para el mismo sintoma ("se escucha
-    // menos y luego vuelve a lo normal"):
+    // entre VARIAS causas distintas para el mismo sintoma ("se escucha
+    // menos/nada y luego vuelve a lo normal" justo al EMPEZAR el crossfade):
     //
     //  1) Nuestra propia matematica de volumen esta mal          -> ya
-    //     deberia estar descartado con el fundido equal-power.
+    //     deberia estar descartado con el fundido equal-power, pero ahora
+    //     tambien se loguea cada vez que runCatching { ...volume = ... }
+    //     FALLA de verdad (antes se tragaba la excepcion en silencio).
     //  2) El AudioTrack real sufre un UNDERRUN (se queda sin datos
     //     un instante) durante el cruce                          -> se ve
     //     como "onAudioUnderrun" en el log.
     //  3) El sistema (MIUI/HyperOS/Dolby/etc) esta RECONFIGURANDO la
     //     cadena de audio (por ejemplo al pasar de 1 a 2 AudioTrack
-    //     activos, o algun efecto global) cuando aparece el segundo
-    //     player                                                  -> se ve
+    //     activos, o algun efecto global -BassBoost/Virtualizer incluido-)
+    //     cuando aparece el segundo player                        -> se ve
     //     como un "onAudioTrackInitialized"/"onAudioTrackReleased"
-    //     inesperado justo durante isCrossfading=true, o como un salto de
-    //     "streamVol"/"onVolumeChanged" que NO viene de nuestro propio
-    //     runCatching { ...volume = ... }.
+    //     inesperado justo durante isCrossfading=true, o un
+    //     "onAudioSessionIdChanged" que no pedimos nosotros.
+    //  4) BassBoost/Virtualizer (BassVirtualizerRepository) fuerzan un
+    //     re-attach de efecto justo cuando aparece el segundo AudioTrack
+    //     de la misma sesion                                      -> se ve
+    //     como un log de BassVirtualizerRepo con timestamp pegado al de
+    //     "beginCrossfade()" de aqui abajo.
+    //  5) CONFIRMADO (ver promoteAudioSession() y el comentario junto a
+    //     "sharedAudioSessionId"): el teardown nativo tardio (1.7-2.7s)
+    //     del AudioTrack de un player que se libera reconfigura TODA la
+    //     sesion nativa que comparte con otros players, forzando a
+    //     recrear el AudioTrack del que sigue sonando. Ya corregido:
+    //     cada player usa su propia sesion, y solo se comparte
+    //     BassBoost/Virtualizer con el player promovido a principal.
     //
-    // Filtra en Logcat con:  adb logcat -s MP3_XFADE
+    // Filtra en Logcat con:  adb logcat -s MP3_XFADE MP3_EQ BassVirtualizerRepo
     @OptIn(UnstableApi::class)
     private fun attachAudioDiagnostics(player: ExoPlayer, label: String) {
         val playerId = System.identityHashCode(player)
@@ -481,6 +617,69 @@ class PlaybackEngine(
             override fun onAudioCodecError(eventTime: AnalyticsListener.EventTime, audioCodecError: Exception) {
                 Log.e(TAG_XFADE, "[$label #$playerId] onAudioCodecError: ${audioCodecError.message}", audioCodecError)
             }
+
+            override fun onAudioUnderrun(
+                eventTime: AnalyticsListener.EventTime,
+                bufferSize: Int,
+                bufferSizeMs: Long,
+                elapsedSinceLastFeedMs: Long
+            ) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioUnderrun: bufferSizeMs=$bufferSizeMs " +
+                            "elapsedSinceLastFeedMs=$elapsedSinceLastFeedMs isCrossfading=$isCrossfading"
+                )
+            }
+
+            override fun onAudioTrackInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                audioTrackConfig: AudioSink.AudioTrackConfig
+            ) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioTrackInitialized: sampleRate=${audioTrackConfig.sampleRate} " +
+                            "channelConfig=${audioTrackConfig.channelConfig} encoding=${audioTrackConfig.encoding} " +
+                            "tunneling=${audioTrackConfig.tunneling} offload=${audioTrackConfig.offload} " +
+                            "isCrossfading=$isCrossfading"
+                )
+            }
+
+            override fun onAudioTrackReleased(
+                eventTime: AnalyticsListener.EventTime,
+                audioTrackConfig: AudioSink.AudioTrackConfig
+            ) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioTrackReleased: encoding=${audioTrackConfig.encoding} " +
+                            "sampleRate=${audioTrackConfig.sampleRate} isCrossfading=$isCrossfading"
+                )
+            }
+
+            override fun onAudioSessionIdChanged(eventTime: AnalyticsListener.EventTime, audioSessionId: Int) {
+                Log.w(
+                    TAG_XFADE,
+                    "[$label #$playerId] onAudioSessionIdChanged: nuevo sessionId=$audioSessionId " +
+                            "(sharedAudioSessionId actual=$sharedAudioSessionId) isCrossfading=$isCrossfading"
+                )
+            }
+
+            override fun onVolumeChanged(eventTime: AnalyticsListener.EventTime, volume: Float) {
+                Log.d(TAG_XFADE, "[$label #$playerId] onVolumeChanged (reportado por ExoPlayer): $volume")
+            }
+
+            override fun onAudioEnabled(
+                eventTime: AnalyticsListener.EventTime,
+                decoderCounters: androidx.media3.exoplayer.DecoderCounters
+            ) {
+                Log.d(TAG_XFADE, "[$label #$playerId] onAudioEnabled isCrossfading=$isCrossfading")
+            }
+
+            override fun onAudioDisabled(
+                eventTime: AnalyticsListener.EventTime,
+                decoderCounters: androidx.media3.exoplayer.DecoderCounters
+            ) {
+                Log.d(TAG_XFADE, "[$label #$playerId] onAudioDisabled isCrossfading=$isCrossfading")
+            }
         })
     }
 
@@ -491,7 +690,30 @@ class PlaybackEngine(
     // reconfigurar la cadena de efectos -eso es el corte audible-.
     // Con offload desactivado desde el inicio, esa reconfiguracion nunca
     // ocurre.
+    //
+    // *** FIX (corte de audio antes del crossfade) ***
+    // Ya NO se fuerza ninguna sesion de audio compartida aqui: cada
+    // player que crea este metodo (principal, restore, o el "next" de
+    // un crossfade/cambio manual) recibe la sesion nativa PROPIA que
+    // ExoPlayer le asigna automaticamente. Ver comentario grande junto al
+    // campo "sharedAudioSessionId" y la funcion promoteAudioSession().
     private fun buildPlayer(startVolume: Float): ExoPlayer {
+        // DEBUG: snapshot completo del estado de audio del sistema en el
+        // instante exacto en que se crea un ExoPlayer nuevo (cancion
+        // normal, restore, o el segundo player para crossfade). Se
+        // compara contra el snapshot de beginCrossfade()/finishCrossfade()
+        // para ver si algo (modo de audio, efectos nativos activos) cambio
+        // entre una llamada y otra, justo alrededor del corte reportado.
+        Log.d(
+            TAG_XFADE,
+            "buildPlayer: snapshot -> eqAvailable=${EqualizerRepository.isAvailable} " +
+                    "eqEnabled=${EqualizerRepository.isEnabled()} " +
+                    "bassVirtualizerEnabled=${BassVirtualizerRepository.isMasterEnabled()} " +
+                    "audioManager.mode=${audioManager?.mode} " +
+                    "isSpeakerphoneOn=${runCatching { audioManager?.isSpeakerphoneOn }.getOrNull()} " +
+                    "isMusicActive=${runCatching { audioManager?.isMusicActive }.getOrNull()}"
+        )
+
         val trackSelector = DefaultTrackSelector(context)
         trackSelector.setParameters(
             trackSelector.buildUponParameters()
@@ -536,24 +758,18 @@ class PlaybackEngine(
                 setAudioAttributes(MUSIC_AUDIO_ATTRIBUTES, false)
                 volume = startVolume
 
-                if (sharedAudioSessionId != AudioManager.ERROR) {
-                    // Ya existe una sesion real (adoptada de un player
-                    // anterior): se la asignamos a este player nuevo para
-                    // que el Equalizer siga aplicando sin importar cual
-                    // player interno este sonando (cancion normal,
-                    // restore o el segundo player del crossfade).
-                    setAudioSessionId(sharedAudioSessionId)
-                } else {
-                    // Primer player del servicio: NO forzamos ninguna
-                    // sesion inventada. Dejamos que ExoPlayer/AudioTrack
-                    // genere su propia sesion nativa y la adoptamos como
-                    // sharedAudioSessionId para el resto de la vida del
-                    // servicio (ver comentario grande junto al campo).
-                    val ownSessionId = this.audioSessionId
-                    if (ownSessionId != AudioManager.ERROR && ownSessionId != 0) {
-                        sharedAudioSessionId = ownSessionId
-                    }
-                }
+                // Se deja que ExoPlayer/AudioTrack genere su propia sesion
+                // nativa para este player (ya no se le fuerza ninguna). Cada
+                // player -principal, restore, o "next" de crossfade/cambio
+                // manual- queda asi aislado en su propia sesion mientras
+                // conviven; solo el que se promueve a "mediaPlayer"
+                // principal pasa a compartir BassBoost/Virtualizer (ver
+                // promoteAudioSession()).
+                Log.d(
+                    TAG_XFADE,
+                    "buildPlayer: player nuevo #${System.identityHashCode(this)} " +
+                            "con audioSessionId propio=${this.audioSessionId}"
+                )
             }
     }
 
@@ -661,6 +877,13 @@ class PlaybackEngine(
             // cancion vieja que ya estaba precargada para ese indice.
             if (ready != null && preparedNextIndex == upcomingIndex && preparedNextSongId == upcomingSong.id) {
                 beginCrossfade(upcomingIndex, ready, remainingMs.coerceAtMost(fadeMs))
+            } else {
+                Log.d(
+                    TAG_XFADE,
+                    "handleCrossfadeTick: remainingMs=$remainingMs <= fadeMs=$fadeMs pero el 'siguiente' " +
+                            "AUN NO esta listo (ready=${ready != null} preparedNextIndex=$preparedNextIndex " +
+                            "preparedNextSongId=$preparedNextSongId). Se dejara terminar sin crossfade esta vez."
+                )
             }
             // Si aun no esta listo (cancion muy corta, almacenamiento lento,
             // etc.) no se fuerza nada: se deja que termine normal y el
@@ -678,6 +901,11 @@ class PlaybackEngine(
         val requestToken = ++prepareRequestToken
 
         val player = buildPlayer(startVolume = 0f)
+        Log.d(
+            TAG_XFADE,
+            "prepareNextPlayerAsync: creando player NEXT #${System.identityHashCode(player)} " +
+                    "idx=$index song='${song.title}' requestToken=$requestToken"
+        )
         val listener = createNextPlayerListener(index, song.id, requestToken, player)
         preparedNextListener = listener
         player.addListener(listener)
@@ -705,10 +933,23 @@ class PlaybackEngine(
                     // llego tarde y se descarta en vez de instalarse como
                     // "el siguiente" a sonar.
                     if (requestToken == prepareRequestToken && preparedNextPlayer == null) {
+                        Log.d(
+                            TAG_XFADE,
+                            "createNextPlayerListener: NEXT #${System.identityHashCode(player)} idx=$index " +
+                                    "llego a STATE_READY y fue ACEPTADO como preparedNextPlayer " +
+                                    "(sessionId=${player.audioSessionId})"
+                        )
                         preparedNextPlayer = player
                         preparedNextIndex = index
                         preparedNextSongId = songId
                     } else {
+                        Log.w(
+                            TAG_XFADE,
+                            "createNextPlayerListener: NEXT #${System.identityHashCode(player)} idx=$index " +
+                                    "llego a STATE_READY pero fue DESCARTADO " +
+                                    "(requestToken=$requestToken vigente=$prepareRequestToken " +
+                                    "preparedNextPlayer ya ocupado=${preparedNextPlayer != null})"
+                        )
                         runCatching { player.stop() }
                         runCatching { player.release() }
                     }
@@ -733,6 +974,11 @@ class PlaybackEngine(
         prepareRequestToken++
 
         preparedNextPlayer?.let { player ->
+            Log.d(
+                TAG_XFADE,
+                "discardPreparedNextIfAny: descartando preparedNextPlayer #${System.identityHashCode(player)} " +
+                        "idx=$preparedNextIndex songId=$preparedNextSongId"
+            )
             preparedNextListener?.let { runCatching { player.removeListener(it) } }
             runCatching { player.stop() }
             runCatching { player.release() }
@@ -750,6 +996,32 @@ class PlaybackEngine(
             discardPreparedNextIfAny()
             return
         }
+
+        Log.d(
+            TAG_XFADE,
+            "beginCrossfade(): INICIO upcomingIndex=$upcomingIndex durationMs=$durationMs " +
+                    "current(mediaPlayer)=${System.identityHashCode(current)} " +
+                    "readyPlayer(NEXT)=${System.identityHashCode(readyPlayer)} " +
+                    "sharedAudioSessionId=$sharedAudioSessionId " +
+                    "current.audioSessionId=${current.audioSessionId} " +
+                    "readyPlayer.audioSessionId=${readyPlayer.audioSessionId} " +
+                    "current.isPlaying=${current.isPlaying} readyPlayer.isPlaying=${readyPlayer.isPlaying} " +
+                    "current.volume=${current.volume} readyPlayer.volume=${readyPlayer.volume}"
+        )
+
+        // DEBUG NUEVO: snapshot en el instante exacto en que empiezan a
+        // convivir DOS AudioTrack (ahora en sesiones nativas DISTINTAS,
+        // ver comentario junto a "sharedAudioSessionId"). Comparar
+        // mode/isMusicActive de aqui contra el de finishCrossfade() de mas
+        // abajo.
+        Log.w(
+            TAG_XFADE,
+            "beginCrossfade(): SNAPSHOT AL INICIAR (2 AudioTrack activos desde aqui) -> " +
+                    "eqEnabled=${EqualizerRepository.isEnabled()} " +
+                    "bassVirtualizerEnabled=${BassVirtualizerRepository.isMasterEnabled()} " +
+                    "audioManager.mode=${audioManager?.mode} " +
+                    "isMusicActive=${runCatching { audioManager?.isMusicActive }.getOrNull()}"
+        )
 
         // *** FIX: desenganchar el listener de "preparado" ANTES de que ***
         // *** este player pase a vivir como nextMediaPlayer/mediaPlayer ***
@@ -789,6 +1061,7 @@ class PlaybackEngine(
         }
 
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
+        var loggedFirstTick = false
         val crossfadeRunnableLocal = object : Runnable {
             override fun run() {
                 if (!isCrossfading) return
@@ -807,8 +1080,36 @@ class PlaybackEngine(
                 val outgoingVolume = cos(angle) * duckLevel
                 val incomingVolume = sin(angle) * duckLevel
 
+                if (!loggedFirstTick) {
+                    loggedFirstTick = true
+                    Log.d(
+                        TAG_XFADE,
+                        "beginCrossfade(): PRIMER TICK fraction=$fraction outgoingVolume=$outgoingVolume " +
+                                "incomingVolume=$incomingVolume mediaPlayer.isPlaying=${mediaPlayer?.isPlaying} " +
+                                "nextMediaPlayer.isPlaying=${nextMediaPlayer?.isPlaying}"
+                    )
+                }
+
                 runCatching { mediaPlayer?.volume = outgoingVolume }
+                    .onFailure { e -> Log.e(TAG_XFADE, "beginCrossfade tick: fallo al fijar volume en outgoing", e) }
                 runCatching { nextMediaPlayer?.volume = incomingVolume }
+                    .onFailure { e -> Log.e(TAG_XFADE, "beginCrossfade tick: fallo al fijar volume en incoming", e) }
+
+                // Log periodico (cada ~500ms) para poder correlacionar la
+                // curva de volumen real contra cualquier evento de
+                // attachAudioDiagnostics (underrun, track reinit, etc.) o
+                // de BassVirtualizerRepository que aparezca en el mismo
+                // rango de tiempo.
+                if (crossfadeElapsedMs % 500L < FADE_STEP_MS) {
+                    Log.d(
+                        TAG_XFADE,
+                        "beginCrossfade(): tick fraction=${"%.2f".format(fraction)} " +
+                                "outgoingVolume=${"%.2f".format(outgoingVolume)} " +
+                                "incomingVolume=${"%.2f".format(incomingVolume)} " +
+                                "mediaPlayer.isPlaying=${mediaPlayer?.isPlaying} " +
+                                "nextMediaPlayer.isPlaying=${nextMediaPlayer?.isPlaying}"
+                    )
+                }
 
                 if (fraction >= 1f) {
                     finishCrossfade()
@@ -840,7 +1141,18 @@ class PlaybackEngine(
         Log.d(
             TAG_XFADE,
             "finishCrossfade(): outgoing(mediaPlayer)=${mediaPlayer?.let { System.identityHashCode(it) }} " +
-                    "-> incoming=${System.identityHashCode(incomingPlayer)} finishedIndex=$finishedIndex"
+                    "-> incoming=${System.identityHashCode(incomingPlayer)} finishedIndex=$finishedIndex " +
+                    "incoming.audioSessionId=${incomingPlayer.audioSessionId}"
+        )
+
+        // DEBUG NUEVO: snapshot al volver a quedar UN solo AudioTrack
+        // activo (se libera el saliente unas lineas mas abajo). Comparar
+        // contra el snapshot de beginCrossfade() de arriba.
+        Log.w(
+            TAG_XFADE,
+            "finishCrossfade(): SNAPSHOT AL TERMINAR (vuelve a 1 AudioTrack) -> " +
+                    "audioManager.mode=${audioManager?.mode} " +
+                    "isMusicActive=${runCatching { audioManager?.isMusicActive }.getOrNull()}"
         )
 
         // *** FIX CRITICO ***
@@ -858,6 +1170,13 @@ class PlaybackEngine(
         // messages sent after release."). Con el runCatching de abajo, la
         // excepcion se loguea pero la reasignacion a "incomingPlayer"
         // ocurre SIEMPRE.
+        //
+        // *** FIX (corte de audio antes del crossfade) ***
+        // El player saliente ahora vive en su PROPIA sesion nativa (ver
+        // buildPlayer()/promoteAudioSession()), distinta de la del
+        // entrante: su teardown -aunque el sistema lo demore unos
+        // segundos, como se confirmo en logcat- ya no puede reconfigurar
+        // la sesion del player que va a seguir sonando.
         runCatching { mediaPlayer?.removeListener(mainPlayerListener) }
             .onFailure { e -> Log.e(TAG_XFADE, "finishCrossfade: removeListener del outgoing fallo", e) }
         runCatching { mediaPlayer?.release() }
@@ -875,6 +1194,7 @@ class PlaybackEngine(
         nextMediaPlayer = null
         nextIndexDuringCrossfade = -1
         isCrossfading = false
+        promoteAudioSession(incomingPlayer, "finishCrossfade idx=$finishedIndex")
 
         Log.d(TAG_XFADE, "finishCrossfade(): mediaPlayer ahora es ${System.identityHashCode(mediaPlayer)}")
 
@@ -1079,6 +1399,8 @@ class PlaybackEngine(
         discardPreparedNextIfAny()
 
         if (!isCrossfading && nextMediaPlayer == null) return
+
+        Log.d(TAG_XFADE, "cancelCrossfadeIfAny: abortando crossfade en curso (isCrossfading=$isCrossfading)")
 
         crossfadeRunnable?.let { handler.removeCallbacks(it) }
         crossfadeRunnable = null

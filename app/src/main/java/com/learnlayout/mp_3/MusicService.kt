@@ -414,6 +414,15 @@ class MusicService : Service() {
     // notificacion, MediaSession y los repositorios de estado. ----------
 
     private fun handleSongStarted(song: Song, index: Int, reason: PlaybackEngine.SongStartReason) {
+        // Attach() es idempotente si la sesion no cambio (ver
+        // EqualizerRepository.attachToSession()), asi que llamarla en cada
+        // cancion no tiene costo real una vez que Equalizer/BassBoost/
+        // Virtualizer ya quedaron creados la primera vez. Tiene que ir aqui
+        // (no en onCreate) porque sharedAudioSessionId de PlaybackEngine
+        // recien existe despues de que el primer ExoPlayer se construyo y
+        // arranco una cancion.
+        EqualizerRepository.attachToSession(playbackEngine.getAudioSessionId())
+
         queueManager.setCurrentIndex(index)
 
         notifier.updateMediaMetadata(
@@ -611,5 +620,11 @@ class MusicService : Service() {
         persistQueueStateBlocking()
         playbackEngine.releasePlayer()
         notifier.release()
+        // Libera Equalizer/BassBoost/Virtualizer nativos (ver
+        // EqualizerRepository.release()). No hacerlo puede dejar el efecto
+        // "colgado" del audioSessionId a nivel del sistema hasta que el
+        // proceso muera.
+        EqualizerRepository.release()
     }
+
 }

@@ -643,6 +643,12 @@
                     android:visibility="gone"
                     android:clipToPadding="false"
                     android:paddingBottom="100dp"
+                    android:scrollbars="none"
+                    app:fastScrollEnabled="true"
+                    app:fastScrollHorizontalThumbDrawable="@drawable/fast_scroll_thumb"
+                    app:fastScrollHorizontalTrackDrawable="@drawable/fast_scroll_track"
+                    app:fastScrollVerticalThumbDrawable="@drawable/fast_scroll_thumb"
+                    app:fastScrollVerticalTrackDrawable="@drawable/fast_scroll_track"
                     app:layout_constraintTop_toBottomOf="@id/llTabSelector"
                     app:layout_constraintBottom_toBottomOf="parent"
                     app:layout_constraintStart_toStartOf="parent"
@@ -944,7 +950,6 @@
                         android:layout_gravity="center"
                         android:background="@android:color/transparent"
                         android:contentDescription="Modo de reproduccion"
-                        android:foreground="@drawable/border_icon_button_circle"
                         android:padding="10dp"
                         android:src="@drawable/ic_repeat" />
 

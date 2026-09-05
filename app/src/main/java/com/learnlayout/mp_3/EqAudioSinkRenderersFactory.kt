@@ -18,26 +18,24 @@ class EqAudioSinkRenderersFactory(context: Context) : DefaultRenderersFactory(co
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
                     ReplayGainAudioProcessor(),
-                    SoftwareEqualizerProcessor(),
                     SpectrumAudioProcessor()
                 )
             )
-            // SoftwareEqualizerProcessor y SpectrumAudioProcessor solo saben
-            // procesar PCM de 16 bits (ver sus configure(), que lanzan
-            // UnhandledAudioFormatException para cualquier otro encoding).
-            // Si se deja pasar enableFloatOutput=true (lo que ExoPlayer
-            // pide solo con archivos de mayor calidad, ej. FLAC/WAV de 24
-            // bits), ambos procesadores se salen solos de la cadena de
-            // audio para ESA cancion: el ecualizador deja de aplicarse y
-            // las barras del visualizador de espectro se quedan
-            // congeladas (no reciben datos nuevos).
-            // Forzamos siempre 16 bits para que EQ y visualizador
-            // funcionen igual en cualquier cancion, sin importar su
-            // calidad. El costo es no aprovechar el mayor rango dinamico
-            // de los archivos hi-res, pero esta app esta construida
-            // alrededor de procesar el audio (EQ, ReplayGain, espectro),
-            // asi que tiene mas sentido que esas funciones nunca se
-            // desactiven solas.
+            // El ecualizador de bandas ya no vive aqui (ver
+            // EqualizerRepository): ahora es android.media.audiofx.Equalizer,
+            // atado directamente al audioSessionId por fuera de esta cadena
+            // de AudioProcessor. Lo que SI sigue aqui es ReplayGainAudioProcessor
+            // (ganancia por cancion + preamp manual del ecualizador, ver ese
+            // archivo) y SpectrumAudioProcessor (visualizador de espectro).
+            //
+            // SpectrumAudioProcessor solo sabe procesar PCM de 16 bits (ver su
+            // configure(), que lanza UnhandledAudioFormatException para
+            // cualquier otro encoding). Si se deja pasar enableFloatOutput=true
+            // (lo que ExoPlayer pide solo con archivos de mayor calidad, ej.
+            // FLAC/WAV de 24 bits), el procesador se sale solo de la cadena de
+            // audio para ESA cancion y las barras del visualizador se quedan
+            // congeladas. Forzamos siempre 16 bits para que el visualizador
+            // funcione igual en cualquier cancion, sin importar su calidad.
             .setEnableFloatOutput(false)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .build()

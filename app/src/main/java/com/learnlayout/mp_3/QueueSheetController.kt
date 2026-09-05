@@ -80,7 +80,6 @@ class QueueSheetController(
     private var filteredIndices: List<Int>? = null
 
     private val artworkController = QueueSheetArtworkController(activity)
-    private val queueActions = QueueSheetActions(activity)
 
     val isShowing: Boolean get() = dialog != null
 
@@ -168,7 +167,6 @@ class QueueSheetController(
 
         view.findViewById<ImageButton>(R.id.btnQueueClose).setOnClickListener { queueDialog.dismiss() }
         view.findViewById<ImageButton>(R.id.btnLocateCurrent).setOnClickListener { scrollCurrentSongIntoView() }
-        view.findViewById<TextView>(R.id.btnQueueSave).setOnClickListener { saveQueueAsPlaylist() }
         btnQueueSearch?.setOnClickListener { toggleSearchBar() }
 
         etQueueSearch?.addTextChangedListener(object : TextWatcher {
@@ -506,11 +504,6 @@ class QueueSheetController(
             etQueueSearch?.requestFocus()
             imm.showSoftInput(etQueueSearch, InputMethodManager.SHOW_IMPLICIT)
         }
-    }
-
-    private fun saveQueueAsPlaylist() {
-        val songs = getMusicService()?.getSongList() ?: return
-        queueActions.saveQueueAsPlaylist(songs)
     }
 
     private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density).toInt()

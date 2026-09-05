@@ -233,42 +233,104 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
+                android:orientation="vertical"
                 android:background="@drawable/bg_item_song"
                 android:padding="16dp">
 
                 <LinearLayout
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
 
-                    <TextView
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Normalizar volumen"
+                            android:textColor="@color/text_primary_light"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Empareja el volumen entre canciones de distintas fuentes para que no suenen unas mas fuertes que otras"
+                            android:textColor="@color/text_secondary_light"
+                            android:textSize="13sp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switchVolumeNormalization"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Normalizar volumen"
-                        android:textColor="@color/text_primary_light"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="Empareja el volumen entre canciones de distintas fuentes para que no suenen unas mas fuertes que otras"
-                        android:textColor="@color/text_secondary_light"
-                        android:textSize="13sp" />
+                        android:layout_marginStart="12dp"
+                        app:thumbTint="@color/spotify_green"
+                        app:trackTint="@color/spotify_gray" />
 
                 </LinearLayout>
 
-                <com.google.android.material.switchmaterial.SwitchMaterial
-                    android:id="@+id/switchVolumeNormalization"
-                    android:layout_width="wrap_content"
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="16dp"
+                    android:background="#22FFFFFF" />
+
+                <LinearLayout
+                    android:id="@+id/groupVolumeNormalizationGain"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
-                    app:thumbTint="@color/spotify_green"
-                    app:trackTint="@color/spotify_gray" />
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Intensidad"
+                            android:textColor="@color/text_primary_light"
+                            android:textSize="15sp" />
+
+                        <TextView
+                            android:id="@+id/tvVolumeNormalizationGain"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+0.0 dB"
+                            android:textColor="@color/spotify_green"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                    </LinearLayout>
+
+                    <SeekBar
+                        android:id="@+id/seekVolumeNormalizationGain"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:max="1200"
+                        android:progressTint="@color/spotify_green"
+                        android:thumbTint="@color/spotify_green" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:text="Sube o baja el volumen de todas las canciones ya emparejadas"
+                        android:textColor="@color/text_secondary_light"
+                        android:textSize="12sp" />
+
+                </LinearLayout>
 
             </LinearLayout>
 

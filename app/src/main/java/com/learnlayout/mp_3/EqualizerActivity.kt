@@ -45,7 +45,10 @@ class EqualizerActivity : AppCompatActivity() {
     private lateinit var eqCurveView: EqCurveView
     private lateinit var seekPreamp: SeekBar
     private lateinit var tvPreampValue: TextView
-    private lateinit var switchAutoCompensation: SwitchMaterial
+    private lateinit var seekBassBoost: SeekBar
+    private lateinit var tvBassBoostValue: TextView
+    private lateinit var seekVirtualizer: SeekBar
+    private lateinit var tvVirtualizerValue: TextView
 
     private val bandSeekBars = mutableListOf<SeekBar>()
     private val bandValueLabels = mutableListOf<TextView>()
@@ -105,6 +108,20 @@ class EqualizerActivity : AppCompatActivity() {
             musicService = (binder as MusicService.MusicBinder).getService()
             isBound = true
             ambientBackground.updateForSong(musicService?.getCurrentSong())
+
+            // Bass Boost y Virtualizador son efectos por SESION de audio
+            // (android.media.audiofx), no por ExoPlayer individual: en
+            // cuanto sabemos el audioSessionId real del servicio, los
+            // enganchamos aqui. Si el servicio aun no ha reproducido
+            // ninguna cancion en esta sesion de la app, getAudioSessionId()
+            // devuelve AudioManager.ERROR y attachToSession() no hace nada
+            // todavia (los sliders siguen guardando el valor con
+            // normalidad; se aplicara solo con que se abra esta pantalla
+            // de nuevo una vez haya sonado musica, sin que el usuario
+            // tenga que volver a tocar nada).
+            musicService?.getAudioSessionId()?.let { sessionId ->
+                BassVirtualizerRepository.attachToSession(sessionId)
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -122,8 +139,7 @@ class EqualizerActivity : AppCompatActivity() {
         seekPreamp.progress = EqualizerRepository.getPreampProgress()
         tvPreampValue.text = formatDb(EqualizerRepository.getPreampLevel())
 
-        switchAutoCompensation.isChecked = EqualizerRepository.isAutoCompensationEnabled()
-        seekPreamp.isEnabled = EqualizerRepository.isEnabled() && !switchAutoCompensation.isChecked
+        seekPreamp.isEnabled = EqualizerRepository.isEnabled()
 
         seekPreamp.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -134,12 +150,48 @@ class EqualizerActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
-
-        switchAutoCompensation.setOnCheckedChangeListener { _, checked ->
-            EqualizerRepository.setAutoCompensationEnabled(checked)
-            seekPreamp.isEnabled = EqualizerRepository.isEnabled() && !checked
-        }
     }
+
+    // Bass Boost y Virtualizador son efectos nativos del sistema
+    // (android.media.audiofx), no software como el EQ de bandas. Se
+    // enganchan a la sesion de audio compartida desde
+    // PlaybackEngine.buildPlayer() (ver BassVirtualizerRepository). Aqui
+    // solo leemos/escribimos el estado guardado y reflejamos el valor en
+    // pantalla; si todavia no hay ninguna sesion de audio activa (por
+    // ejemplo, se abrio el Ecualizador sin haber reproducido nada), el
+    // valor se guarda igual y se aplicara en cuanto arranque el primer
+    // player, sin que el usuario tenga que volver a tocar el slider.
+    private fun setupBassAndVirtualizerControls() {
+        BassVirtualizerRepository.init(applicationContext)
+
+        val bassStrength = BassVirtualizerRepository.getBassBoostStrength()
+        seekBassBoost.max = 1000
+        seekBassBoost.progress = bassStrength
+        tvBassBoostValue.text = formatPercent(bassStrength)
+        seekBassBoost.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvBassBoostValue.text = formatPercent(progress)
+                if (fromUser) BassVirtualizerRepository.setBassBoostStrength(progress)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        val virtualizerStrength = BassVirtualizerRepository.getVirtualizerStrength()
+        seekVirtualizer.max = 1000
+        seekVirtualizer.progress = virtualizerStrength
+        tvVirtualizerValue.text = formatPercent(virtualizerStrength)
+        seekVirtualizer.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                tvVirtualizerValue.text = formatPercent(progress)
+                if (fromUser) BassVirtualizerRepository.setVirtualizerStrength(progress)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+    }
+
+    private fun formatPercent(strength: Int): String = "${strength / 10}%"
 
     private fun currentBandGainsDb(): FloatArray =
         (0 until EqualizerRepository.getNumberOfBands())
@@ -178,6 +230,7 @@ class EqualizerActivity : AppCompatActivity() {
             buildPresetChips()
             setupResetButton()
             setupPreampControls()
+            setupBassAndVirtualizerControls()
             applyEnabledStateToControls(EqualizerRepository.isEnabled())
             highlightChip(findMatchingPresetLabel())
         }
@@ -196,7 +249,10 @@ class EqualizerActivity : AppCompatActivity() {
         eqCurveView = findViewById(R.id.eqCurveView)
         seekPreamp = findViewById(R.id.seekPreamp)
         tvPreampValue = findViewById(R.id.tvPreampValue)
-        switchAutoCompensation = findViewById(R.id.switchAutoCompensation)
+        seekBassBoost = findViewById(R.id.seekBassBoost)
+        tvBassBoostValue = findViewById(R.id.tvBassBoostValue)
+        seekVirtualizer = findViewById(R.id.seekVirtualizer)
+        tvVirtualizerValue = findViewById(R.id.tvVirtualizerValue)
 
         btnBack.setOnClickListener { finish() }
 
@@ -225,7 +281,10 @@ class EqualizerActivity : AppCompatActivity() {
         eqCurveView.visibility = View.GONE
         seekPreamp.visibility = View.GONE
         tvPreampValue.visibility = View.GONE
-        switchAutoCompensation.visibility = View.GONE
+        seekBassBoost.visibility = View.GONE
+        tvBassBoostValue.visibility = View.GONE
+        seekVirtualizer.visibility = View.GONE
+        tvVirtualizerValue.visibility = View.GONE
     }
 
     private fun setupEnabledSwitch() {
@@ -242,8 +301,10 @@ class EqualizerActivity : AppCompatActivity() {
         bandSeekBars.forEach { it.isEnabled = enabled }
         presetChipViews.forEach { it.isEnabled = enabled }
         btnReset.isEnabled = enabled
-        seekPreamp.isEnabled = enabled && !switchAutoCompensation.isChecked
-        switchAutoCompensation.isEnabled = enabled
+        seekPreamp.isEnabled = enabled
+        seekBassBoost.isEnabled = enabled
+        seekVirtualizer.isEnabled = enabled
+        BassVirtualizerRepository.setMasterEnabled(enabled)
     }
 
     private fun buildBandSliders() {
@@ -433,8 +494,12 @@ class EqualizerActivity : AppCompatActivity() {
             eqCurveView.setGainsDb(currentBandGainsDb())
             tvPreampValue.text = formatDb(EqualizerRepository.getPreampLevel())
             seekPreamp.progress = EqualizerRepository.getPreampProgress()
-            switchAutoCompensation.isChecked = true
-            seekPreamp.isEnabled = EqualizerRepository.isEnabled() && !switchAutoCompensation.isChecked
+            seekPreamp.isEnabled = EqualizerRepository.isEnabled()
+            BassVirtualizerRepository.reset()
+            seekBassBoost.progress = 0
+            tvBassBoostValue.text = formatPercent(0)
+            seekVirtualizer.progress = 0
+            tvVirtualizerValue.text = formatPercent(0)
             highlightChip("Plano")
             Toast.makeText(this, "Ecualizador reiniciado", Toast.LENGTH_SHORT).show()
         }

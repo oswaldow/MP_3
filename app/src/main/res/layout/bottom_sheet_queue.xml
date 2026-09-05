@@ -3,6 +3,7 @@
 <com.learnlayout.mp_3.LiquidGlassView
     android:id="@+id/queueGlassPanel"
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -66,19 +67,6 @@
             android:contentDescription="Buscar en la cola"
             android:padding="9dp"
             android:src="@drawable/ic_search" />
-
-        <TextView
-            android:id="@+id/btnQueueSave"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:background="@drawable/bg_queue_action"
-            android:gravity="center"
-            android:paddingStart="13dp"
-            android:paddingEnd="13dp"
-            android:text="Guardar"
-            android:textColor="@color/spotify_green"
-            android:textSize="12sp"
-            android:textStyle="bold" />
 
     </LinearLayout>
 
@@ -267,7 +255,13 @@
         android:paddingStart="12dp"
         android:paddingTop="2dp"
         android:paddingEnd="12dp"
-        android:paddingBottom="12dp" />
+        android:paddingBottom="12dp"
+        android:scrollbars="none"
+        app:fastScrollEnabled="true"
+        app:fastScrollHorizontalThumbDrawable="@drawable/fast_scroll_thumb"
+        app:fastScrollHorizontalTrackDrawable="@drawable/fast_scroll_track"
+        app:fastScrollVerticalThumbDrawable="@drawable/fast_scroll_thumb"
+        app:fastScrollVerticalTrackDrawable="@drawable/fast_scroll_track" />
 
     <!-- ========================================================= -->
     <!-- MODOS DE REPRODUCCION                                      -->

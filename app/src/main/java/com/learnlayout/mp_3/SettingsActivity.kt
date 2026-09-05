@@ -103,7 +103,15 @@ class SettingsActivity : AppCompatActivity() {
         updateDurationGroupEnabled(enabled)
 
         binding.switchWhatsappReading.isChecked = SettingsRepository.isWhatsAppReadingEnabled(this)
-        binding.switchVolumeNormalization.isChecked = SettingsRepository.isVolumeNormalizationEnabled(this)
+
+        val normalizationEnabled = SettingsRepository.isVolumeNormalizationEnabled(this)
+        val normalizationGainMillibel = SettingsRepository.getVolumeNormalizationGainMillibel(this)
+        binding.switchVolumeNormalization.isChecked = normalizationEnabled
+        binding.seekVolumeNormalizationGain.progress =
+            normalizationGainMillibel - SettingsRepository.MIN_VOLUME_NORMALIZATION_GAIN_MILLIBEL
+        updateVolumeNormalizationGainLabel(normalizationGainMillibel)
+        updateVolumeNormalizationGroupEnabled(normalizationEnabled)
+
         updateNotificationAccessStatus()
         updateVoiceSummary()
     }
@@ -138,7 +146,23 @@ class SettingsActivity : AppCompatActivity() {
             // Efecto inmediato: no hace falta esperar a la siguiente
             // cancion para que se note el cambio.
             ReplayGainAudioProcessor.setEnabled(isChecked)
+            updateVolumeNormalizationGroupEnabled(isChecked)
         }
+
+        binding.seekVolumeNormalizationGain.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val millibel = progress + SettingsRepository.MIN_VOLUME_NORMALIZATION_GAIN_MILLIBEL
+                updateVolumeNormalizationGainLabel(millibel)
+                if (fromUser) {
+                    SettingsRepository.setVolumeNormalizationGainMillibel(this@SettingsActivity, millibel)
+                    // Efecto inmediato, igual que el switch de arriba.
+                    ReplayGainAudioProcessor.setUserGainMillibel(millibel)
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
 
         binding.rowLyricsArtStatus.setOnClickListener {
             startActivity(Intent(this, LyricsArtStatusActivity::class.java))
@@ -170,6 +194,18 @@ class SettingsActivity : AppCompatActivity() {
     private fun updateDurationGroupEnabled(enabled: Boolean) {
         binding.groupCrossfadeDuration.alpha = if (enabled) 1f else 0.4f
         setViewTreeEnabled(binding.groupCrossfadeDuration, enabled)
+    }
+
+    private fun updateVolumeNormalizationGroupEnabled(enabled: Boolean) {
+        binding.groupVolumeNormalizationGain.alpha = if (enabled) 1f else 0.4f
+        setViewTreeEnabled(binding.groupVolumeNormalizationGain, enabled)
+    }
+
+    // milibel > 0 sube el volumen resultante, < 0 lo baja, 0 lo deja igual.
+    private fun updateVolumeNormalizationGainLabel(millibel: Int) {
+        val db = millibel / 100.0
+        val sign = if (db > 0) "+" else ""
+        binding.tvVolumeNormalizationGain.text = "$sign${"%.1f".format(db)} dB"
     }
 
     private fun setViewTreeEnabled(view: View, enabled: Boolean) {

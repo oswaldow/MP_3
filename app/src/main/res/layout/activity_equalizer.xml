@@ -143,6 +143,7 @@
                     android:paddingHorizontal="8dp" />
             </HorizontalScrollView>
 
+            <!-- PREAMP -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -186,6 +187,17 @@
                     android:progress="1200"
                     android:progressDrawable="@drawable/seekbar_style"
                     android:thumb="@drawable/thumb_seekbar" />
+            </LinearLayout>
+
+            <!-- BASS BOOST -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="16dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_item_song"
+                android:orientation="vertical"
+                android:padding="16dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -197,26 +209,76 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Compensación automática"
+                        android:text="BASS BOOST"
                         android:textColor="@color/text_primary_light"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
 
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/switchAutoCompensation"
+                    <TextView
+                        android:id="@+id/tvBassBoostValue"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:checked="true"
-                        app:thumbTint="@color/spotify_green"
-                        app:trackTint="@color/spotify_gray" />
+                        android:text="0%"
+                        android:textColor="@color/spotify_green"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
-                <TextView
+                <SeekBar
+                    android:id="@+id/seekBassBoost"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="Reduce automáticamente la ganancia cuando hay varios boosts para dejar headroom y evitar clipping."
-                    android:textColor="@color/text_secondary_light"
-                    android:textSize="11sp" />
+                    android:layout_marginTop="4dp"
+                    android:max="1000"
+                    android:progress="0"
+                    android:progressDrawable="@drawable/seekbar_style"
+                    android:thumb="@drawable/thumb_seekbar" />
+            </LinearLayout>
+
+            <!-- VIRTUALIZADOR -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="16dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_item_song"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="VIRTUALIZADOR"
+                        android:textColor="@color/text_primary_light"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvVirtualizerValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0%"
+                        android:textColor="@color/spotify_green"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <SeekBar
+                    android:id="@+id/seekVirtualizer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:max="1000"
+                    android:progress="0"
+                    android:progressDrawable="@drawable/seekbar_style"
+                    android:thumb="@drawable/thumb_seekbar" />
             </LinearLayout>
 
             <TextView
