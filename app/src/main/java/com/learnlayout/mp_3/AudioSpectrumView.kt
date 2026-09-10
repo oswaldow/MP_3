@@ -197,6 +197,12 @@ class AudioSpectrumView @JvmOverloads constructor(
     private fun resumeIfPossible() {
         if (!wantsToRun || running) return
         running = true
+        // Enciende el analisis en el hilo de audio SOLO ahora que esta
+        // vista realmente va a dibujar (ver comentario de
+        // SpectrumAudioProcessor.setActive()): mientras estuvo parada
+        // (panel colapsado, vista oculta, app en segundo plano) ese
+        // analisis no costaba nada de CPU.
+        SpectrumAudioProcessor.setActive(true)
         // Vacia cualquier backlog que se haya acumulado mientras esta
         // vista estaba parada (panel colapsado, vista oculta, etc.): sin
         // esto, al reanudar se arrancaba consumiendo snapshots viejos de
@@ -212,6 +218,10 @@ class AudioSpectrumView @JvmOverloads constructor(
     private fun pauseInternal(resetLevels: Boolean) {
         if (!running) return
         running = false
+        // Apaga el analisis en el hilo de audio: es el punto que de verdad
+        // importa para el rendimiento, mas que el propio Choreographer de
+        // esta vista (ver comentario de SpectrumAudioProcessor.setActive()).
+        SpectrumAudioProcessor.setActive(false)
         Choreographer.getInstance().removeFrameCallback(frameCallback)
         if (resetLevels) {
             levels = FloatArray(levels.size)

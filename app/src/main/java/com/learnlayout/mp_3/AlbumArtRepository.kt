@@ -28,7 +28,18 @@ object AlbumArtRepository {
     // Carpeta vieja (dentro de cacheDir), solo para migrar una vez lo que
     // ya se hubiera descargado antes de este cambio.
     private const val LEGACY_CACHE_DIR_NAME = "album_art_cache"
-    private const val MEMORY_CACHE_SIZE = 100
+    // Antes el limite era por CANTIDAD de bitmaps (100), sin importar su
+    // peso real en RAM. Con caratulas de hasta 480x480 en ARGB_8888
+    // (~900 KB cada una), eso dejaba que este cache creciera hasta pesar
+    // ~90 MB solo en portadas -memoria que se queda reservada mientras la
+    // app vive en segundo plano reproduciendo musica, compitiendo con
+    // cualquier otra app en primer plano (ej. Facebook) por RAM y
+    // aumentando cuanto tiene que trabajar el recolector de basura (GC),
+    // lo que se nota como pequenas pausas/tranco. Ahora el limite es por
+    // PESO REAL (KB, ver sizeOf abajo), con un presupuesto fijo mucho mas
+    // chico pero de sobra para las portadas que se ven a la vez (lista +
+    // reproductor + cola).
+    private const val MEMORY_CACHE_SIZE_KB = 6 * 1024 // ~6 MB
     private const val CANDIDATES_LIMIT_PER_SOURCE = 6
 
     // Tamano maximo (en px, en el lado mas largo) al que se decodifican las
@@ -41,7 +52,14 @@ object AlbumArtRepository {
     private val executor: ExecutorService = Executors.newFixedThreadPool(4)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val memoryCache = object : LruCache<Long, Bitmap>(MEMORY_CACHE_SIZE) {}
+    private val memoryCache = object : LruCache<Long, Bitmap>(MEMORY_CACHE_SIZE_KB) {
+        override fun sizeOf(key: Long, value: Bitmap): Int {
+            // LruCache compara este numero contra el limite del
+            // constructor: al devolver KB en vez de "1 por entrada", el
+            // limite de arriba pasa a ser un presupuesto de memoria real.
+            return value.byteCount / 1024
+        }
+    }
 
     // ---------- Proteccion de elecciones manuales ----------
     // Cuando el usuario elige a mano una caratula (picker de iTunes/Deezer o

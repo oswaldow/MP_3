@@ -10,6 +10,8 @@ import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.util.Log
 
 /**
  * Encapsula exclusivamente el comportamiento/animaciones del BottomSheet del
@@ -50,12 +52,32 @@ class PlayerPanelAnimationController(
         private const val TAG = "MP3_PANEL"
         private const val EXPAND_ANIM_DURATION_MS = 320L
 
+        // Duracion propia de smoothExpand() (toque desde Home/mini player
+        // con musica ya sonando). El usuario pidio que se vea el panel
+        // subir de forma gradual y bien lenta, aunque tarde mas, en vez de
+        // un salto rapido. coldExpand() sigue usando
+        // EXPAND_ANIM_DURATION_MS sin cambios.
+        //
+        // Historial: esta constante originalmente no se usaba en absoluto
+        // (smoothExpand dependia enteramente del "settle" interno de
+        // BottomSheetBehavior, con su propia duracion fija ~400ms no
+        // configurable). Se agrego un ValueAnimator propio para
+        // controlarla, pero en un primer intento el panel se volvia
+        // visible ANTES de que el settle oculto terminara realmente
+        // (ver revealAfterHiddenSettle), asi que el settle nativo seguia
+        // moviendo la posicion real del panel al mismo tiempo que nuestro
+        // propio animador -de ahi el "se traba a momentos" reportado-.
+        // Ahora la revelacion espera la confirmacion real de
+        // STATE_EXPANDED antes de arrancar esta animacion, asi que el
+        // valor de aca ya se refleja fielmente en pantalla.
+        private const val SMOOTH_EXPAND_ANIM_DURATION_MS = 550L
+
         // Fraccion del progreso (0..1) en la que ocurre todo el crossfade
         // mini<->expandido. Con 0.5f el intercambio de opacidad termina a
         // mitad de camino y el resto del gesto solo termina de deslizar el
         // panel ya con groupExpanded a alpha 1 (mismo "ritmo" visual que
         // tenia antes, pero ahora sin hueco de opacidad simultanea: ver
-        // onSlide() y el addUpdateListener de smoothExpand()).
+        // onSlide() y el addUpdateListener de revealAfterHiddenSettle()).
         private const val CROSSFADE_SPAN = 0.5f
 
         // Mismos radios que PlayerPanelController.applyRoundedCorners() usa
@@ -68,6 +90,20 @@ class PlayerPanelAnimationController(
     private lateinit var behavior: BottomSheetBehavior<FrameLayout>
     private var coldExpandInProgress = false
     private var expandAnimator: ValueAnimator? = null
+
+    // Flag hermano de coldExpandInProgress, pero para smoothExpand(). Mientras
+    // esta activo, onStateChanged() NO debe tocar alpha/visibility "normal"
+    // ni disparar onExpanded() cuando llegue a STATE_EXPANDED: en vez de eso
+    // dispara revealAfterHiddenSettle(), que recien ahi (settle realmente
+    // terminado, panel todavia GONE) mide la distancia real y arranca nuestra
+    // propia animacion de punta a punta.
+    private var smoothExpandInProgress = false
+    private var smoothExpandAnimator: ValueAnimator? = null
+
+    // "top" del panel justo antes de disparar el cambio de estado a
+    // EXPANDED (o sea, en su posicion colapsada real). Se usa en
+    // revealAfterHiddenSettle() para calcular la distancia real a animar.
+    private var smoothExpandStartTop = 0
 
     private val sharedAlbumArt = SharedAlbumArtTransition(albumArtTransitionOverlay)
     private val density = activity.resources.displayMetrics.density
@@ -94,8 +130,30 @@ class PlayerPanelAnimationController(
 
         behavior.addBottomSheetCallback(object : BottomSheetBehavior.BottomSheetCallback() {
             override fun onStateChanged(bottomSheet: View, newState: Int) {
+                Log.d(TAG, "onStateChanged newState=$newState coldExpandInProgress=$coldExpandInProgress " +
+                        "smoothExpandInProgress=$smoothExpandInProgress translationY=${playerPanel.translationY} " +
+                        "panelVisibility=${playerPanel.visibility}")
                 when (newState) {
                     BottomSheetBehavior.STATE_EXPANDED -> {
+                        if (smoothExpandInProgress) {
+                            // El settle oculto (panel en GONE) recien
+                            // termino de verdad: se posterga un frame con
+                            // post() para asegurar que el ultimo layout
+                            // pass ya escribio el "top" final, y recien
+                            // ahi se revela el panel y arranca nuestra
+                            // propia animacion (ver revealAfterHiddenSettle).
+                            // Antes se revelaba el panel de forma sincrona
+                            // apenas se pedia el cambio de estado (sin
+                            // esperar a este callback), lo que dejaba el
+                            // settle nativo -que tarda ~400ms en terminar-
+                            // corriendo a la vista al mismo tiempo que
+                            // nuestro propio ValueAnimator: dos animaciones
+                            // moviendo la misma posicion a la vez, que se
+                            // sentia como un traqueteo/stutter.
+                            playerPanel.post { revealAfterHiddenSettle() }
+                            return
+                        }
+
                         groupMini.alpha = 0f
                         groupExpanded.alpha = 1f
                         lyricsCoordinator.alpha = 1f
@@ -106,6 +164,10 @@ class PlayerPanelAnimationController(
 
                         if (coldExpandInProgress) return
 
+                        // Devuelve el arrastre manual: lo desactivamos al
+                        // arrancar smoothExpand() para que el usuario no
+                        // interrumpa el settle nativo a mitad de camino.
+                        behavior.isDraggable = true
                         audioSpectrumView.start()
                         onExpanded()
                     }
@@ -130,6 +192,15 @@ class PlayerPanelAnimationController(
             }
 
             override fun onSlide(bottomSheet: View, slideOffset: Float) {
+                // Mientras nuestra propia animacion de smoothExpand() esta
+                // corriendo (o esperando a revelarse), ella ya actualiza
+                // alpha/caratula compartida en cada frame segun su propio
+                // progreso; no hace falta (ni conviene) que onSlide()
+                // tambien lo haga, porque el slideOffset que reporta
+                // BottomSheetBehavior durante un settle "oculto" no
+                // corresponde a nuestra curva de animacion real.
+                if (smoothExpandInProgress) return
+
                 val progress = slideOffset.coerceIn(0f, 1f)
                 // Crossfade real: expandedAlpha + miniAlpha siempre suman 1
                 // durante todo el tramo de transicion (0..CROSSFADE_SPAN), asi
@@ -173,8 +244,17 @@ class PlayerPanelAnimationController(
 
     fun collapse() {
         expandAnimator?.cancel()
+        smoothExpandAnimator?.cancel()
+        smoothExpandAnimator = null
+        smoothExpandInProgress = false
         coldExpandInProgress = false
         playerPanel.translationY = 0f
+        // Si collapse() llega mientras smoothExpand() todavia tenia el
+        // panel oculto esperando el settle (p.ej. el usuario toco "atras"
+        // muy rapido), hay que forzar la visibilidad de vuelta: nada mas
+        // la restaura en ese escenario, ya que revealAfterHiddenSettle()
+        // nunca llegaria a ejecutarse (smoothExpandInProgress ya en false).
+        playerPanel.visibility = View.VISIBLE
         if (isReady) {
             behavior.isDraggable = true
             behavior.state = BottomSheetBehavior.STATE_COLLAPSED
@@ -185,6 +265,9 @@ class PlayerPanelAnimationController(
         if (!isReady || behavior.state == BottomSheetBehavior.STATE_EXPANDED) return
 
         expandAnimator?.cancel()
+        smoothExpandAnimator?.cancel()
+        smoothExpandAnimator = null
+        smoothExpandInProgress = false
         coldExpandInProgress = true
         behavior.isDraggable = false
 
@@ -214,75 +297,43 @@ class PlayerPanelAnimationController(
     fun smoothExpand() {
         if (!isReady || behavior.state == BottomSheetBehavior.STATE_EXPANDED) return
 
-        val panelHeight = playerPanel.height
-        val startOffset = (panelHeight - behavior.peekHeight).toFloat()
-        if (startOffset <= 0f) {
-            behavior.state = BottomSheetBehavior.STATE_EXPANDED
-            return
-        }
-
         expandAnimator?.cancel()
-        coldExpandInProgress = false
+        expandAnimator = null
+        smoothExpandAnimator?.cancel()
+        smoothExpandAnimator = null
+
+        Log.d(TAG, "smoothExpand() escondiendo panel hasta que el settle real termine")
+
+        // A diferencia del primer intento (que revelaba el panel de forma
+        // sincrona, en el mismo frame en que se pedia el cambio de
+        // estado), aca dejamos el panel oculto (GONE) y NO lo volvemos a
+        // mostrar todavia. El settle interno de BottomSheetBehavior corre
+        // sin que se vea nada -exactamente igual que en coldExpand()-, y
+        // solo cuando el callback de arriba confirme STATE_EXPANDED real
+        // (settle terminado) se revela el panel y arranca nuestra propia
+        // animacion (ver revealAfterHiddenSettle). Asi nunca hay dos
+        // animaciones moviendo la posicion del panel al mismo tiempo.
+        smoothExpandStartTop = playerPanel.top
+
+        smoothExpandInProgress = true
         behavior.isDraggable = false
 
+        // Punto de partida visual: el mismo que ya tenia -groupMini
+        // visible/opaco, groupExpanded invisible/transparente-, para que
+        // cuando se revele el panel ya este en el estado correcto.
         groupMini.visibility = View.VISIBLE
         groupMini.alpha = 1f
         groupExpanded.visibility = View.VISIBLE
         groupExpanded.alpha = 0f
-        // Ya arrancamos con el banner de letra visible (a alpha 0, igual que
-        // groupExpanded) para que ambos vayan encendiendose juntos frame a
-        // frame en vez de que el banner aparezca de golpe con un toggle de
-        // visibilidad aparte.
         lyricsCoordinator.visibility = View.VISIBLE
         lyricsCoordinator.alpha = 0f
+        playerPanel.translationY = 0f
 
-        playerPanel.translationY = startOffset
         playerPanel.visibility = View.GONE
         behavior.state = BottomSheetBehavior.STATE_EXPANDED
-        playerPanel.visibility = View.VISIBLE
-
-        expandAnimator = ValueAnimator.ofFloat(startOffset, 0f).apply {
-            duration = EXPAND_ANIM_DURATION_MS
-            interpolator = DecelerateInterpolator(1.4f)
-            addUpdateListener { anim ->
-                val value = anim.animatedValue as Float
-                playerPanel.translationY = value
-                val progress = 1f - (value / startOffset).coerceIn(0f, 1f)
-                // Mismo crossfade sin hueco que onSlide(): ver comentario ahi.
-                val expandedAlpha = (progress / CROSSFADE_SPAN).coerceIn(0f, 1f)
-                groupMini.alpha = 1f - expandedAlpha
-                groupExpanded.alpha = expandedAlpha
-                // Mismo alpha, mismo frame: el banner de letra sube "pegado"
-                // al resto del panel expandido, sin desfase.
-                lyricsCoordinator.alpha = expandedAlpha
-                if (expandedAlpha > 0f) groupExpanded.visibility = View.VISIBLE
-                updateSharedAlbumArt(progress)
-            }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    if (expandAnimator !== animation) return
-                    playerPanel.translationY = 0f
-                    groupMini.alpha = 0f
-                    groupMini.visibility = View.INVISIBLE
-                    groupExpanded.alpha = 1f
-                    groupExpanded.visibility = View.VISIBLE
-                    lyricsCoordinator.alpha = 1f
-                    lyricsCoordinator.visibility = View.VISIBLE
-                    behavior.isDraggable = true
-                    expandAnimator = null
-                    endSharedAlbumArt()
-                }
-
-                override fun onAnimationCancel(animation: Animator) {
-                    if (expandAnimator !== animation) return
-                    playerPanel.translationY = 0f
-                    behavior.isDraggable = true
-                    expandAnimator = null
-                    endSharedAlbumArt()
-                }
-            })
-            start()
-        }
+        // OJO: aca NO se vuelve a poner VISIBLE. Eso ahora lo hace
+        // revealAfterHiddenSettle(), llamado desde onStateChanged() cuando
+        // el settle realmente termino.
     }
 
     fun updatePeekHeight() {
@@ -372,6 +423,98 @@ class PlayerPanelAnimationController(
         }
     }
 
+    /**
+     * Llamado desde onStateChanged() cuando BottomSheetBehavior confirma
+     * STATE_EXPANDED mientras smoothExpand() tenia el panel oculto (GONE).
+     * En este punto el settle nativo ya termino de verdad -a diferencia del
+     * primer intento, que asumia esto con solo esperar un frame (isLaidOut
+     * + post) y a veces revelaba el panel mientras el settle todavia
+     * seguia corriendo, produciendo una doble animacion (stutter)-.
+     *
+     * Mide la distancia real (top viejo colapsado vs. top nuevo ya
+     * expandido), recien ahi vuelve a mostrar el panel (ya en su posicion
+     * final de verdad, sin settle pendiente) y arranca el ValueAnimator
+     * propio que hace toda la subida visible.
+     */
+    private fun revealAfterHiddenSettle() {
+        if (!isReady || !smoothExpandInProgress) return
+        if (behavior.state != BottomSheetBehavior.STATE_EXPANDED) {
+            smoothExpandInProgress = false
+            behavior.isDraggable = true
+            playerPanel.translationY = 0f
+            playerPanel.visibility = View.VISIBLE
+            return
+        }
+
+        val endTop = playerPanel.top
+        val startOffset = (smoothExpandStartTop - endTop).toFloat()
+
+        if (startOffset <= 0f) {
+            // No hay distancia real que animar (raro, pero por seguridad
+            // se cae directo al estado final en vez de dejar algo a medio
+            // camino o animar en la direccion equivocada).
+            playerPanel.translationY = 0f
+            playerPanel.visibility = View.VISIBLE
+            finishSmoothExpand()
+            return
+        }
+
+        playerPanel.translationY = startOffset
+        playerPanel.visibility = View.VISIBLE
+
+        smoothExpandAnimator?.cancel()
+        smoothExpandAnimator = ValueAnimator.ofFloat(startOffset, 0f).apply {
+            duration = SMOOTH_EXPAND_ANIM_DURATION_MS
+            // Ease-in-out: el usuario pidio que se "aprecie como sube" de
+            // punta a punta y bien lento, no solo que frene al final (a
+            // diferencia de coldExpand(), que usa DecelerateInterpolator).
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener { anim ->
+                val value = anim.animatedValue as Float
+                playerPanel.translationY = value
+                val progress = (1f - (value / startOffset)).coerceIn(0f, 1f)
+                val expandedAlpha = (progress / CROSSFADE_SPAN).coerceIn(0f, 1f)
+                groupMini.alpha = 1f - expandedAlpha
+                groupExpanded.alpha = expandedAlpha
+                lyricsCoordinator.alpha = expandedAlpha
+                updateSharedAlbumArt(progress)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (smoothExpandAnimator !== animation) return
+                    smoothExpandAnimator = null
+                    finishSmoothExpand()
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    if (smoothExpandAnimator !== animation) return
+                    smoothExpandAnimator = null
+                    // Un cancel a mitad de camino (p.ej. el usuario toco
+                    // "atras" mientras subia) lo resuelve collapse(), que ya
+                    // limpia smoothExpandInProgress, translationY y
+                    // visibility. Aca no forzamos el estado final para no
+                    // pisar lo que haya decidido quien cancelo.
+                }
+            })
+            start()
+        }
+    }
+
+    private fun finishSmoothExpand() {
+        playerPanel.translationY = 0f
+        groupMini.alpha = 0f
+        groupExpanded.alpha = 1f
+        lyricsCoordinator.alpha = 1f
+        groupMini.visibility = View.INVISIBLE
+        groupExpanded.visibility = View.VISIBLE
+        lyricsCoordinator.visibility = View.VISIBLE
+        endSharedAlbumArt()
+        smoothExpandInProgress = false
+        behavior.isDraggable = true
+        audioSpectrumView.start()
+        onExpanded()
+    }
+
     // --- Shared element de la caratula (mini <-> panel) ---
     //
     // progress = 0  -> caratula en la posicion/tamano/esquinas del mini
@@ -380,8 +523,8 @@ class PlayerPanelAnimationController(
     //                  expandido.
     // La direccion (expandiendo o colapsando) no importa: siempre se
     // interpola de mini a panel con el mismo progress, asi que sirve tanto
-    // para smoothExpand() como para el onSlide() de un arrastre o de un
-    // collapse() por boton de atras.
+    // para revealAfterHiddenSettle() como para el onSlide() de un arrastre
+    // o de un collapse() por boton de atras.
     private fun updateSharedAlbumArt(progress: Float) {
         if (progress <= 0.001f || progress >= 0.999f) {
             endSharedAlbumArt()

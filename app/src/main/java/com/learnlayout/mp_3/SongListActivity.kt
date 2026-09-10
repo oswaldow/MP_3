@@ -598,10 +598,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                     val current = service?.getCurrentSong()
 
                     if (service != null && current?.id == song.id) {
-                        // La cancion ya esta sonando. Solo reconstruimos la
-                        // cola sin reiniciar el audio ni perder la posicion.
+                        // La cancion ya esta sonando (y el mini reproductor
+                        // ya estaba visible en pantalla): solo reconstruimos
+                        // la cola sin reiniciar el audio ni perder la
+                        // posicion, y expandimos con la animacion suave.
                         service.replaceQueueKeepingCurrent(homeQueue)
-                        playerPanelController.expandWhenReady()
+                        playerPanelController.smoothExpand()
                     } else {
                         openPlayer(homeQueue, index)
                     }
@@ -1001,10 +1003,20 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
             // reiniciamos con setPlaylist (que siempre arranca desde el
             // principio): solo abrimos el panel donde va quedo.
             val isSameSongPlaying = tappedSong != null && service.getCurrentSong()?.id == tappedSong.id
+            // Se guarda ANTES de tocar la cola: setPlaylist() puede disparar
+            // onSongChanged() de forma sincronica y dejar el panel visible
+            // recien en este mismo instante (primer play de la sesion), asi
+            // que hay que capturar el estado real previo al toque del
+            // usuario para elegir la animacion correcta.
+            val wasMiniAlreadyVisible = playerPanelController.isVisible
             if (!isSameSongPlaying) {
                 service.setPlaylist(playlist, startIndex)
             }
-            playerPanelController.expandWhenReady()
+            if (wasMiniAlreadyVisible) {
+                playerPanelController.smoothExpand()
+            } else {
+                playerPanelController.expandWhenReady()
+            }
         } else {
             musicServiceConnectionController.queuePlayback(playlist, startIndex)
         }

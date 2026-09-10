@@ -19,6 +19,7 @@ class LyricsCandidateAdapter(
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val tvLabel: TextView = view.findViewById(R.id.tvLyricsCandidateLabel)
+        val tvSyncBadge: TextView = view.findViewById(R.id.tvLyricsCandidateSyncBadge)
         val tvPreview: TextView = view.findViewById(R.id.tvLyricsCandidatePreview)
         val tvDuration: TextView = view.findViewById(R.id.tvLyricsCandidateDuration)
     }
@@ -32,6 +33,24 @@ class LyricsCandidateAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val candidate = candidates[position]
         holder.tvLabel.text = candidate.label
+
+        // Chip aparte para "Sincronizada"/"Sin sincronizar": antes iba
+        // pegado al final de tvLabel y se truncaba con cancion/artista
+        // largos, dejando ilegible justo el dato que decide si conviene
+        // elegir esa letra o no (ver LyricsRepository.buildCandidateLabel).
+        if (candidate.isSynced) {
+            holder.tvSyncBadge.text = "Sincronizada"
+            holder.tvSyncBadge.setBackgroundResource(R.drawable.bg_chip_lyrics_synced)
+            holder.tvSyncBadge.setTextColor(
+                holder.itemView.context.getColor(R.color.background_dark)
+            )
+        } else {
+            holder.tvSyncBadge.text = "Sin sincronizar"
+            holder.tvSyncBadge.setBackgroundResource(R.drawable.bg_chip_lyrics_not_synced)
+            holder.tvSyncBadge.setTextColor(
+                holder.itemView.context.getColor(R.color.text_secondary_light)
+            )
+        }
 
         val preview = candidate.result.plainLyrics
             ?: candidate.result.syncedLines?.firstOrNull { it.text.isNotBlank() }?.text

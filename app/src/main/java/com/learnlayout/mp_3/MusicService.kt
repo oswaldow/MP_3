@@ -125,6 +125,12 @@ class MusicService : Service() {
 
         sleepTimer = SleepTimerManager(handler) { pause() }
 
+        // DEBUG: arranca el heartbeat de diagnostico de rendimiento (tag
+        // MP3_PERF). Solo escribe log cada 2s MIENTRAS suena musica (ver
+        // PerfDiagnostics.kt), asi que no ensucia el logcat en pausa ni
+        // cuando no hay servicio corriendo. Se apaga en onDestroy().
+        PerfDiagnostics.startHeartbeat(applicationContext) { isPlaying() }
+
         // Android exige que un servicio arrancado con startForegroundService()
         // llame a startForeground() en los primeros segundos, sin importar si
         // ya hay una cancion sonando. Si no se hace de inmediato, el sistema
@@ -614,6 +620,10 @@ class MusicService : Service() {
         super.onDestroy()
         if (runningInstance === this) runningInstance = null
         sleepTimer.cancel()
+        // DEBUG: apaga el heartbeat de PerfDiagnostics junto con el resto
+        // del servicio, para no dejar un Handler.postDelayed corriendo
+        // para siempre si el servicio se recrea mas adelante.
+        PerfDiagnostics.stopHeartbeat()
         getCurrentSong()?.let {
             PlaybackStateRepository.saveLastSongBlocking(applicationContext, it.id, getCurrentPosition().toLong())
         }

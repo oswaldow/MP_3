@@ -33,7 +33,8 @@ data class LyricsResult(
 data class LyricsCandidate(
     val label: String,
     val result: LyricsResult,
-    val durationSeconds: Long? = null
+    val durationSeconds: Long? = null,
+    val isSynced: Boolean = false
 )
 
 /**
@@ -301,9 +302,10 @@ object LyricsRepository {
                             if (!hasContent) continue
 
                             out += LyricsCandidate(
-                                label = buildCandidateLabel(obj, result, cleanTitle, cleanArtist),
+                                label = buildCandidateLabel(obj, cleanTitle, cleanArtist),
                                 result = result,
-                                durationSeconds = obj.optLong("duration", -1L).takeIf { it > 0L }
+                                durationSeconds = obj.optLong("duration", -1L).takeIf { it > 0L },
+                                isSynced = !result.syncedLines.isNullOrEmpty()
                             )
                         }
                         mainHandler.post { callback.onCandidatesReady(out) }
@@ -316,17 +318,20 @@ object LyricsRepository {
         })
     }
 
+    // El estado de sincronizacion ya NO va pegado aqui (ver isSynced en
+    // LyricsCandidate): con cancion/artista largos se truncaba junto con
+    // "Sincronizada"/"Sin sincronizar" y quedaba ilegible en la lista
+    // (ver LyricsCandidateAdapter / item_lyrics_candidate.xml, que ahora
+    // lo pintan en un chip aparte que nunca se corta).
     private fun buildCandidateLabel(
         obj: JSONObject,
-        result: LyricsResult,
         fallbackTitle: String,
         fallbackArtist: String
     ): String {
         val trackName = obj.optString("trackName", fallbackTitle).ifBlank { fallbackTitle }
         val artistName = obj.optString("artistName", fallbackArtist).ifBlank { fallbackArtist }
-        val syncLabel = if (!result.syncedLines.isNullOrEmpty()) "Sincronizada" else "Sin sincronizar"
 
-        return "$trackName - $artistName - $syncLabel"
+        return "$trackName - $artistName"
     }
 
     private fun parseSingleResult(json: JSONObject): LyricsResult {

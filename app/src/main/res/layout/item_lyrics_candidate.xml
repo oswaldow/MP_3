@@ -23,22 +23,43 @@
         android:layout_marginStart="12dp"
         android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvLyricsCandidateLabel"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="Cancion - Artista"
-            android:textColor="@color/text_primary_light"
-            android:textSize="14sp"
-            android:textStyle="bold" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvLyricsCandidateLabel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Cancion - Artista"
+                android:textColor="@color/text_primary_light"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvLyricsCandidateSyncBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="3dp"
+                android:text="Sincronizada"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:singleLine="true" />
+
+        </LinearLayout>
 
         <TextView
             android:id="@+id/tvLyricsCandidatePreview"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
+            android:layout_marginTop="4dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="Primera linea de la letra"

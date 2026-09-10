@@ -193,32 +193,31 @@ class HomeController(
     // REFRESH
     // ============================================================
 
+    /**
+     * Antes esta funcion consultaba Room (PlayCountRepository,
+     * PlaylistRepository) de forma bloqueante en el mismo hilo desde el
+     * que se la llamaba. El problema: se llama tanto al abrir la app
+     * como CADA VEZ que cambia de cancion (onSongChanged), y ambos call
+     * sites la invocan desde el hilo principal (runOnMain/runOnUiThread)
+     * a proposito, esperando que adentro solo hubiera actualizacion de
+     * vistas. El profiling confirmo ~150-300ms de bloqueo del hilo
+     * principal por esas consultas, en cada cambio de cancion.
+     *
+     * Ahora refresh() aplica de inmediato lo que no depende de la base
+     * (textos, "agregadas recientemente", que solo usa la lista de
+     * canciones ya en memoria) y dispara las consultas a Room en
+     * background, aplicando el resto del contenido (contadores, hero,
+     * recientes, mas escuchadas, fondo dinamico) solo cuando esos datos
+     * ya estan listos.
+     */
     fun refresh() {
 
         val songs = getAllSongs()
         val current = getCurrentSong()
 
-        val recentIds =
-            PlayCountRepository.getRecentlyPlayedSongIds(
-                context,
-                20
-            )
-
-        val mostIds =
-            PlayCountRepository.getMostPlayedSongIds(
-                context,
-                20
-            )
-
-        val favoriteIds =
-            PlaylistRepository.getPlaylistById(
-                context,
-                PlaylistRepository.FAVORITES_PLAYLIST_ID
-            )?.songIds.orEmpty()
-
 
         // --------------------------------------------------------
-        // TEXTO SUPERIOR
+        // TEXTO SUPERIOR (no depende de la base, se aplica ya mismo)
         // --------------------------------------------------------
 
         tvWelcome.text = greeting()
@@ -235,40 +234,82 @@ class HomeController(
                 "${songs.size} canciones en tu biblioteca"
         }
 
-
-        // --------------------------------------------------------
-        // CANCIONES
-        // --------------------------------------------------------
-
-        // IMPORTANTE: recentIds/mostIds/favoriteIds pueden contener
-        // songId "huerfanos" que ya no corresponden a ninguna cancion
-        // actual (ver SongIdMigrator: MediaStore les asigna un _ID
-        // nuevo a los archivos reescritos, y las tablas que guardaban
-        // el _ID viejo quedan apuntando a nada). Filtramos contra byId
-        // ANTES de contar, para que el numero que se ve en el Home
-        // coincida con lo que el usuario realmente ve al entrar a cada
-        // lista (PlaylistDetailActivity hace exactamente este mismo
-        // filtro). Antes se mostraba favorites.size/recentIds.size/
-        // mostIds.size "en bruto", sin filtrar, por lo que el Home
-        // podia anunciar mas canciones de las que la lista real tenia.
-
-        val byId =
-            songs.associateBy { it.id }
-
-        val recentSongs =
-            recentIds.mapNotNull { byId[it] }
-
-        val mostSongs =
-            mostIds.mapNotNull { byId[it] }
-
-        val favoriteSongs =
-            favoriteIds.mapNotNull { byId[it] }
-
         val addedSongs =
             songs
                 .sortedByDescending { it.dateAdded }
                 .take(12)
 
+
+        // --------------------------------------------------------
+        // CONSULTAS A ROOM (en background)
+        // --------------------------------------------------------
+
+        AppExecutors.runInBackground {
+
+            val recentIds =
+                PlayCountRepository.getRecentlyPlayedSongIds(
+                    context,
+                    20
+                )
+
+            val mostIds =
+                PlayCountRepository.getMostPlayedSongIds(
+                    context,
+                    20
+                )
+
+            val favoriteIds =
+                PlaylistRepository.getPlaylistById(
+                    context,
+                    PlaylistRepository.FAVORITES_PLAYLIST_ID
+                )?.songIds.orEmpty()
+
+            // IMPORTANTE: recentIds/mostIds/favoriteIds pueden contener
+            // songId "huerfanos" que ya no corresponden a ninguna cancion
+            // actual (ver SongIdMigrator: MediaStore les asigna un _ID
+            // nuevo a los archivos reescritos, y las tablas que guardaban
+            // el _ID viejo quedan apuntando a nada). Filtramos contra byId
+            // ANTES de contar, para que el numero que se ve en el Home
+            // coincida con lo que el usuario realmente ve al entrar a cada
+            // lista (PlaylistDetailActivity hace exactamente este mismo
+            // filtro).
+
+            val byId =
+                songs.associateBy { it.id }
+
+            val recentSongs =
+                recentIds.mapNotNull { byId[it] }
+
+            val mostSongs =
+                mostIds.mapNotNull { byId[it] }
+
+            val favoriteSongs =
+                favoriteIds.mapNotNull { byId[it] }
+
+            AppExecutors.runOnMain {
+                applyLibraryData(
+                    current = current,
+                    addedSongs = addedSongs,
+                    recentSongs = recentSongs,
+                    mostSongs = mostSongs,
+                    favoriteSongs = favoriteSongs
+                )
+            }
+        }
+    }
+
+    /**
+     * Aplica a las vistas los datos que dependen de Room, ya calculados
+     * en background por [refresh]. Separado para que refresh() no bloquee
+     * el hilo principal mientras espera esas consultas.
+     */
+    private fun applyLibraryData(
+        current: Song?,
+        addedSongs: List<Song>,
+        recentSongs: List<Song>,
+        mostSongs: List<Song>,
+        favoriteSongs: List<Song>
+    ) {
 
         // --------------------------------------------------------
         // CONTADORES
@@ -456,69 +497,122 @@ class HomeController(
         songs: List<Song>
     ) {
 
+        // Evita reconstruir la fila entera si la lista de canciones no
+        // cambio (mismos ids, mismo orden): esto es lo que causaba el
+        // parpadeo al tocar una cancion. refresh() se llama en CADA cambio
+        // de cancion (onSongChanged), y esta funcion antes tiraba TODAS las
+        // vistas ya infladas (removeAllViews) y las volvia a crear de cero
+        // -incluyendo el placeholder de caratula antes de aplicar la imagen
+        // real- aunque la seccion (p.ej. "Mas escuchadas" o "Agregadas
+        // recientemente") no hubiera cambiado en absoluto.
+        val newIds = songs.map { it.id }
+
+        @Suppress("UNCHECKED_CAST")
+        val previousIds = container.tag as? List<Long>
+
+        if (previousIds == newIds) {
+            return
+        }
+
+        // Reutiliza las vistas ya infladas de canciones que siguen
+        // apareciendo en la fila (por id), en vez de destruirlas y volver a
+        // inflarlas: evita el parpadeo placeholder->caratula en canciones
+        // que ya se estaban mostrando y solo cambiaron de posicion (el caso
+        // tipico de "Recientes": la cancion recien tocada salta al frente,
+        // pero las demas siguen siendo las mismas y no deberian re-flashear).
+        val existingViewsById = HashMap<Long, View>()
+
+        for (i in 0 until container.childCount) {
+            val child = container.getChildAt(i)
+            val id = child.tag as? Long
+            if (id != null) {
+                existingViewsById[id] = child
+            }
+        }
+
         container.removeAllViews()
 
         songs.forEach { song ->
 
-            val item =
-                LayoutInflater
-                    .from(context)
-                    .inflate(
-                        R.layout.item_home_song,
-                        container,
-                        false
+            val reused = existingViewsById.remove(song.id)
+
+            val item = reused ?: LayoutInflater
+                .from(context)
+                .inflate(
+                    R.layout.item_home_song,
+                    container,
+                    false
+                )
+                .also { view ->
+
+                    view.tag = song.id
+
+                    val iv =
+                        view.findViewById<ImageView>(
+                            R.id.ivHomeSongArt
+                        )
+
+                    val title =
+                        view.findViewById<TextView>(
+                            R.id.tvHomeSongTitle
+                        )
+
+                    val artist =
+                        view.findViewById<TextView>(
+                            R.id.tvHomeSongArtist
+                        )
+
+                    title.text = song.title
+                    artist.text = song.artist
+
+                    loadCover(
+                        song,
+                        iv,
+                        140
                     )
-
-
-            val iv =
-                item.findViewById<ImageView>(
-                    R.id.ivHomeSongArt
-                )
-
-            val title =
-                item.findViewById<TextView>(
-                    R.id.tvHomeSongTitle
-                )
-
-            val artist =
-                item.findViewById<TextView>(
-                    R.id.tvHomeSongArtist
-                )
-
-
-            title.text =
-                song.title
-
-            artist.text =
-                song.artist
-
+                }
 
             item.setOnClickListener {
                 onPlaySong(song)
             }
 
-
-            loadCover(
-                song,
-                iv,
-                140
-            )
-
-
             container.addView(item)
         }
+
+        container.tag = newIds
     }
 
 
-    // ============================================================
-    // CARGAR CARATULA
-    // ============================================================
+// ============================================================
+// CARGAR CARATULA
+// ============================================================
 
     private fun loadCover(
         song: Song,
         imageView: ImageView,
         targetDp: Int
     ) {
+
+        // Se guarda el id de la cancion en el tag del ImageView (mismo
+        // patron ya usado en el resto de la app, ver SongAdapter /
+        // SelectableSongAdapter) para poder descartar un callback de red
+        // que llegue tarde si mientras tanto esta vista se reutilizo para
+        // otra cancion (ver populateSongRow, que ahora reutiliza vistas por
+        // id en vez de destruirlas y recrearlas).
+        imageView.tag = song.id
+
+        val cached =
+            AlbumArtRepository.getCachedCover(song)
+
+        if (cached != null) {
+
+            applyBitmap(
+                imageView,
+                cached
+            )
+
+            return
+        }
 
         imageView.setImageResource(
             R.drawable.ic_music_note
@@ -537,22 +631,6 @@ class HomeController(
                 R.color.spotify_gray
             )
 
-
-        val cached =
-            AlbumArtRepository.getCachedCover(song)
-
-
-        if (cached != null) {
-
-            applyBitmap(
-                imageView,
-                cached
-            )
-
-            return
-        }
-
-
         AlbumArtRepository.loadCover(
             context,
             song,
@@ -561,6 +639,10 @@ class HomeController(
                 override fun onCoverReady(
                     bitmap: Bitmap
                 ) {
+
+                    if (imageView.tag != song.id) {
+                        return
+                    }
 
                     applyBitmap(
                         imageView,

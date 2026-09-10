@@ -270,8 +270,22 @@ class PlayerPanelController(
     // expandPlayerOnResume. En estos casos el panel NUNCA estuvo visible
     // en su estado mini de forma legitima, asi que usa coldExpand() en vez
     // de smoothExpand() para no pintar ese estado ni un solo frame.
+    // Se usa para abrir el panel "en frio": recien se toco una cancion en
+    // la lista, se reconecto al servicio, o se volvio de otra pantalla con
+    // expandPlayerOnResume. En estos casos el panel NUNCA estuvo visible
+    // en su estado mini de forma legitima, asi que usa coldExpand() en vez
+    // de smoothExpand() para no pintar ese estado ni un solo frame.
     fun expandWhenReady() {
         animationController.expandWhenReady()
+    }
+
+    // Se usa cuando el mini reproductor YA estaba visible en pantalla antes
+    // de este toque (por ejemplo, se toco una caratula de Home mientras
+    // sonaba otra cancion). A diferencia de expandWhenReady(), aca si hay
+    // un estado mini legitimo del que partir: usa la animacion corta con
+    // crossfade de groupMini/groupExpanded y caratula compartida.
+    fun smoothExpand() {
+        animationController.smoothExpand()
     }
 
     fun updatePeekHeight() {

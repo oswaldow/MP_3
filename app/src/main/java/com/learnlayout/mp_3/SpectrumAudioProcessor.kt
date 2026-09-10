@@ -118,6 +118,38 @@ class SpectrumAudioProcessor : AudioProcessor {
         @Volatile
         private var updateIntervalMs: Long = 23L
 
+        // Analizar 24 bandas con Goertzel sobre cada ventana de 1024
+        // muestras tiene un costo real de CPU, y este AudioProcessor vive
+        // en la cadena de audio de ExoPlayer (hilo interno de reproduccion,
+        // compartido con la entrega a tiempo de los buffers a AudioTrack).
+        // Antes se analizaba SIEMPRE, sonara o no el visualizador en
+        // pantalla -incluida toda la reproduccion en segundo plano con la
+        // pantalla apagada o con otra app en primer plano-, lo cual le resta
+        // margen justo al hilo que no se puede permitir llegar tarde (causa
+        // de "tranco"/glitches de audio cuando el sistema esta exigido por
+        // otra app, ej. Facebook, compitiendo por CPU). Ahora el analisis
+        // solo corre mientras alguien esta realmente mirando las barras
+        // (ver AudioSpectrumView.resumeIfPossible()/pauseInternal()): el
+        // resto del tiempo este processor solo copia el audio tal cual,
+        // igual de barato que cuando el master del ecualizador esta
+        // apagado en SoftwareEqualizerProcessor.
+        @Volatile
+        private var active = false
+
+        /** Enciende o apaga el analisis. Lo llama AudioSpectrumView segun su visibilidad real. */
+        fun setActive(value: Boolean) {
+            active = value
+            if (!value) {
+                // Al apagar no tiene sentido dejar snapshots pendientes: la
+                // proxima vez que se reanude, AudioSpectrumView los
+                // descarta igual (ver clearQueue() en resumeIfPossible()),
+                // asi que se libera la memoria ya de una vez.
+                snapshotQueue.clear()
+            }
+        }
+
+        fun isActive(): Boolean = active
+
         /**
          * Ultimo snapshot calculado, para compatibilidad con quien
          * necesite "el valor actual" sin importarle el ritmo de consumo
@@ -204,10 +236,16 @@ class SpectrumAudioProcessor : AudioProcessor {
         val size = inputBuffer.remaining()
         if (size == 0) return
 
-        // Analiza una copia (duplicate() comparte el contenido pero tiene
-        // su propia posicion/limite) para no interferir con el paso de
-        // "copiar tal cual a la salida" de abajo.
-        analyze(inputBuffer.duplicate().order(ByteOrder.nativeOrder()))
+        // Si nadie esta mirando el visualizador ahora mismo, nos ahorramos
+        // por completo el Goertzel de las 24 bandas (ver comentario de
+        // `active` en el companion): este processor pasa a ser un simple
+        // passthrough, igual de barato que si no estuviera en la cadena.
+        if (active) {
+            // Analiza una copia (duplicate() comparte el contenido pero
+            // tiene su propia posicion/limite) para no interferir con el
+            // paso de "copiar tal cual a la salida" de abajo.
+            analyze(inputBuffer.duplicate().order(ByteOrder.nativeOrder()))
+        }
 
         val out = replaceOutputBuffer(size)
         out.put(inputBuffer)

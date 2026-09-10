@@ -98,6 +98,7 @@ class AlbumArtPickerDialog(
             }
         })
     }
+
     private fun formatDuration(durationMs: Long): String {
         val totalSeconds = durationMs.coerceAtLeast(0L) / 1000L
         val minutes = totalSeconds / 60L
