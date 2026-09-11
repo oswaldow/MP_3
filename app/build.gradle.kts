@@ -70,4 +70,5 @@ dependencies {
     // tiene compilada de antemano; los SNAPSHOT a veces fallan al
     // compilarse al vuelo.
     implementation("com.github.AdrienPoupa:jaudiotagger:2.2.3")
+    implementation("androidx.core:core-splashscreen:1.0.1")
 }

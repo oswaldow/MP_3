@@ -3,6 +3,7 @@ package com.learnlayout.mp_3
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.ImageView
@@ -511,6 +512,28 @@ class HomeController(
         val previousIds = container.tag as? List<Long>
 
         if (previousIds == newIds) {
+            // FIX: los ids/orden no cambiaron, asi que no hace falta
+            // reconstruir la fila (eso seguia evitando el parpadeo), PERO
+            // antes esto se salia sin volver a mirar la caratula de las
+            // vistas ya infladas. Eso significaba que si la caratula de una
+            // de estas canciones cambiaba sin que cambiara su posicion en
+            // la fila -override manual desde el reproductor, una descarga
+            // en background que recien termino, un "redescargar y
+            // sobreescribir"-, esta fila (tipicamente "Reproducido
+            // recientemente", que no reordena solo por refrescar la Home)
+            // se quedaba mostrando la caratula vieja indefinidamente, ya
+            // que ninguna otra ruta del codigo la volvia a tocar.
+            // getCachedCover() es un simple get() en memoria (no dispara
+            // red ni disco), asi que revisarla aca en cada refresh() es
+            // barato; si el bitmap no cambio, applyBitmap() vuelve a poner
+            // el mismo bitmap sin flicker.
+            for (i in 0 until container.childCount) {
+                val child = container.getChildAt(i)
+                val id = child.tag as? Long ?: continue
+                val song = songs.getOrNull(i)?.takeIf { it.id == id } ?: continue
+                val iv = child.findViewById<ImageView>(R.id.ivHomeSongArt)
+                refreshCoverIfChanged(song, iv)
+            }
             return
         }
 
@@ -536,7 +559,17 @@ class HomeController(
 
             val reused = existingViewsById.remove(song.id)
 
-            val item = reused ?: LayoutInflater
+            val item = reused?.also { view ->
+                // FIX: antes una vista reutilizada (misma cancion, solo
+                // cambio de posicion) nunca volvia a llamar a loadCover(),
+                // asi que se quedaba pegada a la caratula que tenia la
+                // PRIMERA vez que se infló esa vista -aunque despues el
+                // usuario la hubiera cambiado a mano. Igual que arriba,
+                // esto solo pega a memoria (getCachedCover), no dispara
+                // red/disco de mas.
+                val iv = view.findViewById<ImageView>(R.id.ivHomeSongArt)
+                refreshCoverIfChanged(song, iv)
+            } ?: LayoutInflater
                 .from(context)
                 .inflate(
                     R.layout.item_home_song,
@@ -580,6 +613,24 @@ class HomeController(
         }
 
         container.tag = newIds
+    }
+
+    /**
+     * Version liviana de [loadCover] para vistas que YA estan mostrando
+     * algo (recien infladas o reutilizadas): solo revisa el cache de
+     * memoria de [AlbumArtRepository] (sin placeholder, sin red/disco) y
+     * actualiza el ImageView unicamente si lo que hay en cache ahora es
+     * distinto de lo que la vista ya tiene puesto. Sirve para detectar
+     * cambios de caratula (override manual, descarga en background que
+     * termino, etc.) en filas que populateSongRow decide NO reconstruir
+     * porque sus ids/orden no cambiaron.
+     */
+    private fun refreshCoverIfChanged(song: Song, imageView: ImageView) {
+        imageView.tag = song.id
+        val cached = AlbumArtRepository.getCachedCover(song) ?: return
+        val current = imageView.drawable
+        if (current is BitmapDrawable && current.bitmap == cached) return
+        applyBitmap(imageView, cached)
     }
 
 

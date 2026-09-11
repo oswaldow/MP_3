@@ -31,9 +31,9 @@ import android.util.Log
  *
  * El preamp NO tiene equivalente en el Equalizer nativo (solo controla
  * bandas), asi que se resuelve fuera de el: se aplica como una ganancia
- * lineal extra dentro de ReplayGainAudioProcessor, que ya vive en la
+ * lineal extra dentro de PreampAudioProcessor, que ya vive en la
  * cadena de AudioProcessor de Media3 (ver setPreampLevel() /
- * syncPreampToReplayGain() aqui abajo).
+ * syncPreampToProcessor() aqui abajo).
  */
 object EqualizerRepository {
 
@@ -106,7 +106,7 @@ object EqualizerRepository {
             }
         }
 
-        syncPreampToReplayGain()
+        syncPreampToProcessor()
     }
 
     /**
@@ -164,7 +164,7 @@ object EqualizerRepository {
             virtualizer = null
         }
 
-        syncPreampToReplayGain()
+        syncPreampToProcessor()
     }
 
     /** Libera los efectos nativos. Llamar desde MusicService.onDestroy(). */
@@ -185,7 +185,7 @@ object EqualizerRepository {
         if (isBassBoostAvailable) bassBoost?.enabled = enabled
         if (isVirtualizerAvailable) virtualizer?.enabled = enabled
         prefs?.edit()?.putBoolean(KEY_ENABLED, enabled)?.apply()
-        syncPreampToReplayGain()
+        syncPreampToProcessor()
     }
 
     fun getNumberOfBands(): Int = equalizer?.numberOfBands?.toInt() ?: 0
@@ -231,7 +231,7 @@ object EqualizerRepository {
     fun setPreampLevel(level: Short) {
         pendingPreampMillibel = level.toInt().coerceIn(MIN_PREAMP_MILLIBEL, MAX_PREAMP_MILLIBEL)
         prefs?.edit()?.putInt(KEY_PREAMP, pendingPreampMillibel)?.apply()
-        syncPreampToReplayGain()
+        syncPreampToProcessor()
     }
 
     fun getBassBoostStrength(): Short = pendingBassBoostStrength
@@ -268,11 +268,11 @@ object EqualizerRepository {
     }
 
     // El preamp solo debe sonar si el ecualizador esta activo Y
-    // disponible; si no, ReplayGainAudioProcessor debe quedar en 0 dB de
+    // disponible; si no, PreampAudioProcessor debe quedar en 0 dB de
     // preamp (ganancia neutra) aunque el usuario tenga guardado un valor
     // distinto de 0 para la proxima vez que lo active.
-    private fun syncPreampToReplayGain() {
+    private fun syncPreampToProcessor() {
         val effectivePreamp = if (pendingEnabled) pendingPreampMillibel else 0
-        ReplayGainAudioProcessor.setPreampMillibel(effectivePreamp)
+        PreampAudioProcessor.setPreampMillibel(effectivePreamp)
     }
 }

@@ -8,15 +8,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [PlaylistEntity::class, PlaylistSongCrossRef::class, PlayCountEntity::class, SongGainEntity::class],
-    version = 2,
+    entities = [PlaylistEntity::class, PlaylistSongCrossRef::class, PlayCountEntity::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun playlistDao(): PlaylistDao
     abstract fun playCountDao(): PlayCountDao
-    abstract fun songGainDao(): SongGainDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -34,6 +33,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Se elimino la normalizacion de volumen (ver SongGainEntity/Dao/
+        // Repository y LoudnessAnalyzer, ya borrados). Esta migracion borra
+        // la tabla song_gains en los dispositivos que ya la tenian creada
+        // por MIGRATION_1_2, en vez de dejarla huerfana sin @Entity.
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `song_gains`")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -48,7 +57,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // TODO: cuando se migre PlaylistRepository/PlayCountRepository
                     // a funciones suspend + corrutinas, quitar esta linea.
                     .allowMainThreadQueries()
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

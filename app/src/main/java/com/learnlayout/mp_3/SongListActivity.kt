@@ -1,8 +1,10 @@
 package com.learnlayout.mp_3
 
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.AnimationDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -14,8 +16,8 @@ import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
-import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -123,6 +125,33 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     private val lyricsPanel: FrameLayout by lazy { findViewById(R.id.lyricsPanel) }
     private val rvLyricsPanel: RecyclerView by lazy { findViewById(R.id.rvLyricsPanel) }
     private val btnSaveLyrics: ImageButton by lazy { findViewById(R.id.btnSaveLyrics) }
+
+    // ---------- Pantalla de carga ----------
+    private val loadingOverlay: View by lazy { findViewById(R.id.loadingOverlay) }
+    private val ivLoadingMascot: ImageView by lazy { findViewById(R.id.ivLoadingMascot) }
+    private var isDataReady = false
+    private var isMinimumTimeElapsed = false
+
+    private var coverReadyElapsedMs = 0L
+    private val coverReadyRunnable = object : Runnable {
+        override fun run() {
+            if (isDataReady) return
+            val ready = areVisibleCoversReady()
+            if (ready || coverReadyElapsedMs >= COVER_READY_TIMEOUT_MS) {
+                isDataReady = true
+                tryHideLoadingOverlay()
+                return
+            }
+            coverReadyElapsedMs += COVER_READY_POLL_MS
+            loadingHandler.postDelayed(this, COVER_READY_POLL_MS)
+        }
+    }
+    private var isLoadingOverlayHidden = false
+    private val loadingHandler = Handler(Looper.getMainLooper())
+    private val minimumTimeRunnable = Runnable {
+        isMinimumTimeElapsed = true
+        tryHideLoadingOverlay()
+    }
 
     private lateinit var songAdapter: SongAdapter
     private lateinit var playlistAdapter: PlaylistAdapter
@@ -407,6 +436,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 Toast.LENGTH_LONG
             ).show()
             tvEmptyState.visibility = View.VISIBLE
+            isDataReady = true
+            tryHideLoadingOverlay()
         }
     }
 
@@ -432,6 +463,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
 
         // Primer arranque: mostramos el onboarding antes que nada y no
@@ -444,6 +476,12 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
 
         setContentView(R.layout.activity_song_list)
+
+        (ivLoadingMascot.drawable as? AnimationDrawable)?.apply {
+            isFilterBitmap = false
+            start()
+        }
+        loadingHandler.postDelayed(minimumTimeRunnable, MINIMUM_LOADING_TIME_MS)
 
         PlaylistRepository.ensureFavoritesPlaylist(this)
 
@@ -717,6 +755,47 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         return playlist.songIds.mapNotNull { songsById[it] }
     }
 
+    /**
+     * Oculta la pantalla de carga solo cuando ya paso el tiempo minimo
+     * garantizado (para que la animacion no sea un flash) Y los datos
+     * (canciones + Home) ya estan listos para mostrarse.
+     */
+    private fun tryHideLoadingOverlay() {
+        if (isLoadingOverlayHidden) return
+        if (!isDataReady || !isMinimumTimeElapsed) return
+        isLoadingOverlayHidden = true
+
+        loadingOverlay.animate()
+            .alpha(0f)
+            .setDuration(220L)
+            .withEndAction {
+                loadingOverlay.visibility = View.GONE
+                (ivLoadingMascot.drawable as? AnimationDrawable)?.stop()
+            }
+            .start()
+    }
+
+    /**
+     * Solo revisa las canciones que estan REALMENTE visibles en pantalla
+     * ahora mismo (no las 450+ de la biblioteca completa): esas son las
+     * unicas cuya carga de caratula le importa al usuario en este
+     * instante. AlbumArtRepository.getCachedCover() devuelve null hasta
+     * que bindAlbumArt() termino de decodificar esa caratula (ver
+     * SongAdapter).
+     */
+    private fun areVisibleCoversReady(): Boolean {
+        val layoutManager = rvSongs.layoutManager as? LinearLayoutManager ?: return true
+        val first = layoutManager.findFirstVisibleItemPosition()
+        val last = layoutManager.findLastVisibleItemPosition()
+        if (first == RecyclerView.NO_POSITION || last == RecyclerView.NO_POSITION) return true
+
+        val from = first.coerceIn(0, allSongs.size)
+        val to = (last + 1).coerceIn(0, allSongs.size)
+        if (from >= to) return true
+
+        return allSongs.subList(from, to).all { AlbumArtRepository.getCachedCover(it) != null }
+    }
+
     companion object {
         // IDs de las playlists automaticas de historial. No viven en
         // PlaylistRepository: se recalculan cada vez a partir de
@@ -727,6 +806,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         const val MOST_PLAYED_PLAYLIST_NAME = "Mas escuchadas"
 
         private const val AUTO_PLAYLIST_LIMIT = 50
+        private const val MINIMUM_LOADING_TIME_MS = 500L
+        private const val COVER_READY_POLL_MS = 50L
+        private const val COVER_READY_TIMEOUT_MS = 2500L
 
         // Bandera para que, al reproducir una cancion desde
         // PlaylistDetailActivity, el panel del reproductor se expanda
@@ -823,18 +905,23 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
                 if (allSongs.isEmpty()) {
                     tvEmptyState.visibility = View.VISIBLE
                     rvSongs.visibility = View.GONE
+                    isDataReady = true
+                    tryHideLoadingOverlay()
                 } else {
                     applyFilterAndSort()
                     if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
+
+                    // No marcamos isDataReady=true todavia: hay que esperar
+                    // a que las caratulas de lo que se ve en pantalla ya
+                    // esten cargadas (ver areVisibleCoversReady), si no la
+                    // pantalla de carga se apaga y el usuario ve los
+                    // placeholders/parpadeo de todas formas.
+                    rvSongs.post {
+                        coverReadyElapsedMs = 0L
+                        loadingHandler.post(coverReadyRunnable)
+                    }
                 }
 
-                // Antes esto lo apagaba quien llamaba a loadSongs() justo
-                // despues (por ejemplo, el gesto de "tirar para
-                // refrescar"), lo cual funcionaba porque loadSongs() era
-                // sincrono. Ahora que es async, se apaga aca, cuando el
-                // resultado ya esta aplicado. En el resto de los casos
-                // (loadSongs() no vino de un pull-to-refresh) esto es un
-                // no-op: isRefreshing ya estaba en false.
                 swipeRefreshSongList.isRefreshing = false
 
                 if (pendingRestoreLastSong) {
@@ -1136,6 +1223,7 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     override fun onDestroy() {
         super.onDestroy()
         if (isRedirectingToOnboarding) return
+        loadingHandler.removeCallbacks(minimumTimeRunnable)
         glassPanelsScrollHandler.removeCallbacks(glassPanelsScrollRefresh)
         AppAccentColor.removeListener(accentColorListener)
         stopMiniProgressPolling()

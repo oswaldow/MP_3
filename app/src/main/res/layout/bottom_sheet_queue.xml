@@ -245,6 +245,21 @@
     <!-- LISTA                                                       -->
     <!-- ========================================================= -->
 
+    <!--
+        FIX: el thumb de fast-scroll se dibuja pegado al borde derecho
+        REAL del RecyclerView (ignora el padding del contenido de las
+        filas), pero su area TACTIL es mas ancha que su dibujo. Con
+        paddingEnd=12dp, el drag handle de cada fila (ivDragHandle en
+        item_queue_song.xml) quedaba demasiado cerca de esa zona y los
+        dos gestos (arrastrar para reordenar / arrastrar el scrollbar)
+        competian por el mismo toque.
+
+        Se sube el paddingEnd del RecyclerView: como clipToPadding=false
+        no afecta el ANCHO disponible para las filas (solo el recorte
+        durante el scroll), esto le resta ancho real a cada fila -las
+        corre a la izquierda- dejando un carril propio, mas generoso,
+        solo para el scrollbar. No hizo falta tocar item_queue_song.xml.
+    -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvQueue"
         android:layout_width="match_parent"
@@ -254,7 +269,7 @@
         android:overScrollMode="never"
         android:paddingStart="12dp"
         android:paddingTop="2dp"
-        android:paddingEnd="12dp"
+        android:paddingEnd="40dp"
         android:paddingBottom="12dp"
         android:scrollbars="none"
         app:fastScrollEnabled="true"

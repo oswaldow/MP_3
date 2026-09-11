@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        Tema del splash nativo (SplashScreen API vía androidx, compatible
+        desde API 21). Solo se aplica a SongListActivity (launcher) y se
+        reemplaza por Theme.MP_3 apenas corre installSplashScreen().
+        NOTA: el icono del splash nativo lo escala el sistema y puede no
+        respetar el "nearest neighbor" del pixel art (se puede ver algo
+        suavizado); es una limitación de la API, no del arte. Si te
+        molesta, cambia windowSplashScreenAnimatedIcon por @mipmap/ic_launcher.
+    -->
+    <style name="Theme.MP_3.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/background_dark</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon_mascot</item>
+        <item name="postSplashScreenTheme">@style/Theme.MP_3</item>
+    </style>
+
+</resources>

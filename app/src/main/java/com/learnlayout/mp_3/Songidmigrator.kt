@@ -63,12 +63,6 @@ object SongIdMigrator {
         }
 
         try {
-            db.songGainDao().remapSongId(oldId, newId)
-        } catch (e: Exception) {
-            Log.w(TAG, "remapSongId(): fallo al remapear en song_gains ($oldId -> $newId): ${e.message}")
-        }
-
-        try {
             SavedLyricsRepository.renameKey(context, oldId, newId)
         } catch (e: Exception) {
             Log.w(TAG, "remapSongId(): fallo al remapear la letra guardada ($oldId -> $newId): ${e.message}")
@@ -108,14 +102,6 @@ object SongIdMigrator {
         for (songId in playCountIds) {
             if (songId !in existingIds) {
                 db.playCountDao().deleteEntity(songId)
-                removed++
-            }
-        }
-
-        val gainIds = db.songGainDao().getAllSongIds()
-        for (songId in gainIds) {
-            if (songId !in existingIds) {
-                db.songGainDao().deleteGain(songId)
                 removed++
             }
         }

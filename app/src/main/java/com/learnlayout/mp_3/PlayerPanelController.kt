@@ -490,11 +490,18 @@ class PlayerPanelController(
 
     private fun loadAlbumArt(song: Song) {
         currentArtSongId = song.id
+        // FIX: marca esta cancion como "la que esta sonando" para que su
+        // caratula quede protegida de ser expulsada del cache mientras el
+        // usuario navega otras listas (ver AlbumArtRepository.
+        // pinCurrentlyPlaying). Se llama sin bitmap todavia: se completa
+        // solo cuando llegue el resultado (cache o loadCoverCacheOnly).
+        AlbumArtRepository.pinCurrentlyPlaying(song.id)
 
         val callback = object : AlbumArtRepository.Callback {
             override fun onCoverReady(bitmap: Bitmap) {
                 // Si mientras se descargaba ya cambio la cancion, se descarta.
                 if (currentArtSongId != song.id) return
+                AlbumArtRepository.pinCurrentlyPlaying(song.id, bitmap)
                 applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
                 applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
                 onAlbumArtChanged(bitmap)
@@ -539,6 +546,7 @@ class PlayerPanelController(
      */
     fun applyAlbumArtOverride(song: Song, bitmap: Bitmap) {
         if (currentArtSongId != song.id) return
+        AlbumArtRepository.pinCurrentlyPlaying(song.id, bitmap)
         applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
         applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
         onAlbumArtChanged(bitmap)

@@ -394,8 +394,6 @@ class PlaybackEngine(
         }
         mediaPlayer = null
 
-        applyVolumeNormalization(song)
-
         val player = buildPlayer(startVolume = if (hadOutgoing) 0f else duckLevel)
         player.addListener(mainPlayerListener)
         attachAudioDiagnostics(player, "MAIN idx=$index")
@@ -422,8 +420,6 @@ class PlaybackEngine(
 
         releasePlayer()
 
-        applyVolumeNormalization(song)
-
         val player = buildPlayer(startVolume = duckLevel)
         player.addListener(mainPlayerListener)
         player.setMediaItem(MediaItem.fromUri(song.uri))
@@ -445,22 +441,6 @@ class PlaybackEngine(
     // activo, aplica de inmediato la ganancia cacheada de [song] (o 0 dB
     // mientras se analiza por primera vez). Ver SongGainRepository /
     // ReplayGainAudioProcessor.
-    private fun applyVolumeNormalization(song: Song) {
-        val enabled = SettingsRepository.isVolumeNormalizationEnabled(context)
-        ReplayGainAudioProcessor.setEnabled(enabled)
-        ReplayGainAudioProcessor.setUserGainMillibel(
-            SettingsRepository.getVolumeNormalizationGainMillibel(context)
-        )
-        if (!enabled) return
-
-        SongGainRepository.applyGainForSong(context, song) { gainDb ->
-            // Si para cuando termino el analisis la cancion ya cambio, no
-            // pisamos la ganancia de la que esta sonando ahora.
-            if (mediaPlayer != null && loadedIndex >= 0 && callback.songAt(loadedIndex)?.id == song.id) {
-                ReplayGainAudioProcessor.setCurrentGainDb(gainDb)
-            }
-        }
-    }
     fun seekTo(positionMs: Int) {
         cancelCrossfadeIfAny()
         val player = mediaPlayer ?: return
@@ -1184,7 +1164,6 @@ class PlaybackEngine(
                     "se reasigna mediaPlayer al incoming igual", e) }
 
         val song = callback.songAt(finishedIndex)
-        song?.let { applyVolumeNormalization(it) }
 
         mediaPlayer = incomingPlayer.apply {
             volume = duckLevel

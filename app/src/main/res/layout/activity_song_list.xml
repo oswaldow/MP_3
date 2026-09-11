@@ -1203,4 +1203,29 @@
 
     </FrameLayout>
 
+    <!-- ============================================================= -->
+    <!-- PANTALLA DE CARGA (overlay)                                   -->
+    <!-- ============================================================= -->
+
+    <FrameLayout
+        android:id="@+id/loadingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/background_dark"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="24dp">
+
+        <ImageView
+            android:id="@+id/ivLoadingMascot"
+            android:layout_width="140dp"
+            android:layout_height="140dp"
+            android:layout_gravity="center"
+            android:contentDescription="Cargando"
+            android:scaleType="fitCenter"
+            android:layerType="software"
+            android:src="@drawable/anim_loading_mascot" />
+
+    </FrameLayout>
+
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -39,7 +39,16 @@ object AlbumArtRepository {
     // PESO REAL (KB, ver sizeOf abajo), con un presupuesto fijo mucho mas
     // chico pero de sobra para las portadas que se ven a la vez (lista +
     // reproductor + cola).
-    private const val MEMORY_CACHE_SIZE_KB = 6 * 1024 // ~6 MB
+    // FIX: 6 MB alcanzaba para ~6-7 caratulas de 480x480 ARGB_8888 a la
+    // vez. Con una biblioteca de cientos de canciones, era muy facil que
+    // la caratula de la cancion que estas escuchando se expulsara del
+    // cache mientras scrolleabas playlists/listas, y que el siguiente
+    // pedido de esa misma caratula (desde una lista, no desde el
+    // reproductor) tuviera que volver a resolverla desde cero -pudiendo
+    // caer a red si justo en ese momento la lectura embebida fallaba. Se
+    // sube el presupuesto y ademas se "pinea" aparte la cancion actual
+    // (ver currentlyPlayingId/pinnedCover) para que nunca dependa del LRU.
+    private const val MEMORY_CACHE_SIZE_KB = 16 * 1024 // ~16 MB
     private const val CANDIDATES_LIMIT_PER_SOURCE = 6
 
     // Tamano maximo (en px, en el lado mas largo) al que se decodifican las
@@ -59,6 +68,26 @@ object AlbumArtRepository {
             // limite de arriba pasa a ser un presupuesto de memoria real.
             return value.byteCount / 1024
         }
+    }
+
+    // FIX: la caratula de la cancion que esta sonando AHORA se guarda
+    // ademas aca, fuera del LRU, para que nunca se expulse por scrollear
+    // otras listas. getCachedCover() la revisa primero. Se actualiza desde
+    // PlayerPanelController cada vez que cambia la cancion en reproduccion
+    // (ver pinCurrentlyPlaying) y se limpia sola al cambiar de cancion.
+    @Volatile private var pinnedSongId: Long? = null
+    @Volatile private var pinnedCover: Bitmap? = null
+
+    /**
+     * Marca [songId] como "la cancion actual" para que, si su caratula ya
+     * esta resuelta (memoria o el bitmap que se le pase), quede protegida
+     * de ser expulsada del cache mientras el usuario navega otras
+     * pantallas. Llamar SIEMPRE que cambie la cancion en reproduccion,
+     * aunque [knownBitmap] venga null (limpia el pin anterior).
+     */
+    fun pinCurrentlyPlaying(songId: Long, knownBitmap: Bitmap? = null) {
+        pinnedSongId = songId
+        pinnedCover = knownBitmap ?: memoryCache.get(songId)
     }
 
     // ---------- Proteccion de elecciones manuales ----------
@@ -122,7 +151,25 @@ object AlbumArtRepository {
      * al instante: evita el parpadeo de placeholder->caratula al reabrir
      * la app, scrollear la lista, o volver a una cancion ya vista.
      */
-    fun getCachedCover(song: Song): Bitmap? = memoryCache.get(song.id)
+    fun getCachedCover(song: Song): Bitmap? {
+        // FIX: si es la cancion actualmente en reproduccion, se responde
+        // con el pin (que no depende del LRU) antes que con memoryCache,
+        // para que nunca aparezca un placeholder ni una recarga de la
+        // caratula del mini player/panel solo porque el LRU la expulso
+        // mientras se navegaba otra pantalla.
+        if (song.id == pinnedSongId) {
+            pinnedCover?.let { return it }
+        }
+        return memoryCache.get(song.id)
+    }
+
+    /** Guarda [bitmap] en el cache de memoria y, si corresponde, en el pin. */
+    private fun putInMemoryCache(songId: Long, bitmap: Bitmap) {
+        memoryCache.put(songId, bitmap)
+        if (songId == pinnedSongId) {
+            pinnedCover = bitmap
+        }
+    }
 
     /**
      * Version sincrona (sin red, sin decodificar el bitmap completo) para
@@ -247,18 +294,30 @@ object AlbumArtRepository {
                     if (needsNetwork) {
                         fetchFromNetwork(song)?.also { bmp ->
                             saveToDisk(diskFile, bmp)
-                            // Descarga automatica desde red (lista, cola,
-                            // notificacion, widget, etc.): se graba tambien
-                            // en el archivo real para que sobreviva a una
-                            // desinstalacion.
-                            persistCoverToAudioFileIfPossible(appContext, song, bmp)
+                            // FIX: este es el camino AUTOMATICO (lista, cola,
+                            // notificacion, widget, etc.), no una eleccion
+                            // del usuario. Antes esto llamaba a
+                            // persistCoverToAudioFileIfPossible() y
+                            // reescribia el archivo de audio REAL con
+                            // cualquier match de iTunes/Deezer -si la
+                            // lectura embebida fallaba de forma transitoria
+                            // (por ejemplo, el archivo esta siendo leido a
+                            // la vez por el reproductor) el resultado era
+                            // que una busqueda automatica, sin confirmacion
+                            // del usuario, terminaba pisando para siempre
+                            // la caratula original del archivo. Guardar en
+                            // el cache de la app (memoria/disco) es
+                            // suficiente aqui; escribir al archivo real
+                            // queda reservado para elecciones explicitas
+                            // del usuario (ver applyOverride y
+                            // forceRefreshCover).
                         }
                     } else null
                 }
                 source = if (fromEmbedded != null) "EMBEDDED_FILE" else if (fromDisk != null) "DISK(cacheKey=$cacheKey)" else if (bitmap != null) "NETWORK" else "NONE"
 
                 if (bitmap != null) {
-                    memoryCache.put(song.id, bitmap)
+                    putInMemoryCache(song.id, bitmap)
                 }
             } finally {
                 finishInFlight(song.id, bitmap)
@@ -366,7 +425,7 @@ object AlbumArtRepository {
 
 
                 if (bitmap != null) {
-                    memoryCache.put(song.id, bitmap)
+                    putInMemoryCache(song.id, bitmap)
                 }
             } finally {
                 finishInFlight(song.id, bitmap)
@@ -475,7 +534,7 @@ object AlbumArtRepository {
             val cacheKey = cacheKeyFor(appContext, song)
             val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
             saveToDisk(diskFile, bitmap)
-            memoryCache.put(song.id, bitmap)
+            putInMemoryCache(song.id, bitmap)
             // Marca esta eleccion como manual para que loadCoverCacheOnly
             // ya no la pise sola con lo que traiga el archivo.
             markManualOverride(appContext, song.id)
@@ -499,7 +558,7 @@ object AlbumArtRepository {
         val appContext = context.applicationContext
         val diskFile = File(cacheDir(appContext), "${cacheKeyFor(appContext, song)}.jpg")
         saveToDisk(diskFile, bitmap)
-        memoryCache.put(song.id, bitmap)
+        putInMemoryCache(song.id, bitmap)
     }
 
     /**
@@ -513,6 +572,9 @@ object AlbumArtRepository {
      */
     fun invalidateMemory(songId: Long) {
         memoryCache.remove(songId)
+        if (songId == pinnedSongId) {
+            pinnedCover = null
+        }
     }
 
     /**
@@ -533,7 +595,7 @@ object AlbumArtRepository {
                     val cacheKey = cacheKeyFor(appContext, song)
                     val diskFile = File(cacheDir(appContext), "$cacheKey.jpg")
                     saveToDisk(diskFile, bitmap)
-                    memoryCache.put(song.id, bitmap)
+                    putInMemoryCache(song.id, bitmap)
                     // "Redescargar y sobreescribir" es una accion explicita
                     // del usuario: se trata igual que una eleccion manual.
                     markManualOverride(appContext, song.id)
