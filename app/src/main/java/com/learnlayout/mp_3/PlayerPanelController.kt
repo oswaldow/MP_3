@@ -1,12 +1,18 @@
 package com.learnlayout.mp_3
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Outline
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -75,12 +81,52 @@ class PlayerPanelController(
 
     private companion object {
         const val SLEEP_TIMER_INACTIVE_ALPHA = 140
+
+        // FIX: cuanto se espera antes de mostrar el placeholder
+        // (ic_music_note) al cambiar de cancion. AlbumArtRepository.
+        // loadCoverCacheOnly() relee el archivo de audio completo en cada
+        // llamada (por diseno, ver su comentario), asi que aunque no salga
+        // a red, tarda un instante perceptible. Antes ese instante se
+        // pintaba siempre con el placeholder, causando un parpadeo
+        // icono->caratula en cada "siguiente"/"anterior". Ahora el
+        // placeholder solo aparece si la carga tarda MAS de este tiempo;
+        // en el caso normal (carga rapida) nunca llega a mostrarse.
+        const val ALBUM_ART_PLACEHOLDER_DELAY_MS = 150L
+
+        // Duracion del deslizamiento de la caratula (ivPanelAlbumArt) al
+        // pasar de cancion. tvPanelSongTitle/tvPanelArtist usan un fundido
+        // cruzado de la mitad de este tiempo (fade out + fade in).
+        const val ALBUM_ART_SLIDE_DURATION_MS = 260L
+        const val PANEL_TEXT_CROSSFADE_DURATION_MS = ALBUM_ART_SLIDE_DURATION_MS / 2
+
     }
+
+    // Sentido del deslizamiento de la caratula: cancion siguiente = la
+    // actual sale por la izquierda y la nueva entra por la derecha;
+    // cancion anterior, al reves.
+    private enum class ArtSlideDirection { NEXT, PREVIOUS }
 
     // Cancion "vigente": si la respuesta de red llega tarde y para entonces
     // ya cambio la cancion, se descarta (evita pisar la caratula nueva con
     // la de una cancion anterior).
     private var currentArtSongId: Long? = null
+
+    // FIX: handler + runnable pendiente para el retraso del placeholder
+    // (ver ALBUM_ART_PLACEHOLDER_DELAY_MS). Se cancela apenas la caratula
+    // real esta lista o apenas se pide otra cancion nueva, para que nunca
+    // se dispare un placeholder "viejo" encima de una caratula ya aplicada.
+    private val albumArtHandler = Handler(Looper.getMainLooper())
+    private var pendingPlaceholderRunnable: Runnable? = null
+
+    // FIX: direccion pendiente del proximo cambio de cancion, si vino de
+    // los botones siguiente/anterior (ver requestNextSong/
+    // requestPreviousSong). La consume updateNowPlaying() una unica vez
+    // por cancion; si el cambio vino de otro lado (elegir de la cola,
+    // autoplay al terminar la cancion, etc.) queda en null y no hay
+    // deslizamiento ni fundido.
+    private var pendingArtSlideDirection: ArtSlideDirection? = null
+    private var albumArtSlideAnimator: ValueAnimator? = null
+    private var outgoingAlbumArtView: ImageView? = null
 
     // Color de fondo de viewPanelArtBanner cuando no hay caratula (o mientras
     // se genera la paleta la primera vez). Es el mismo gris oscuro que ya
@@ -88,9 +134,6 @@ class PlayerPanelController(
     private val defaultBannerColor: Int =
         ContextCompat.getColor(activity, R.color.surface_dark)
 
-    // Color de acento (Material You) para tintar play/pause, siguiente,
-    // anterior, etc. Empieza en un gris neutro y se anima al color de la
-    // caratula cada vez que cambia la cancion (ver applyControlsAccent).
     private val defaultAccentColor: Int =
         ContextCompat.getColor(activity, R.color.text_primary_light)
     private var currentAccentColor: Int = defaultAccentColor
@@ -209,11 +252,11 @@ class PlayerPanelController(
         }
 
         ButtonTapFillAnimator.setOnClickListener(btnPanelPrevious, { currentAccentColor }) {
-            getMusicService()?.playPrevious()
+            requestPreviousSong()
         }
 
         ButtonTapFillAnimator.setOnClickListener(btnPanelNext, { currentAccentColor }) {
-            getMusicService()?.playNext()
+            requestNextSong()
         }
 
         ButtonTapFillAnimator.setOnClickListener(btnMiniPlayPause, { currentAccentColor }) {
@@ -318,20 +361,72 @@ class PlayerPanelController(
         btnPanelPlayPause.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
     }
 
-    fun updateNowPlaying(song: Song, playing: Boolean) {
+    // FIX: marca la direccion del proximo cambio de cancion y recien
+    // despues le pide a MusicService que avance/retroceda. updateNowPlaying()
+    // (disparada por el listener de MusicService cuando la cancion
+    // efectivamente cambia) consume esta marca para decidir si anima la
+    // caratula/texto o los cambia directo como antes.
+    private fun requestNextSong() {
+        pendingArtSlideDirection = ArtSlideDirection.NEXT
+        getMusicService()?.playNext()
+    }
+
+    private fun requestPreviousSong() {
+        pendingArtSlideDirection = ArtSlideDirection.PREVIOUS
+        getMusicService()?.playPrevious()
+    }
+
+    fun updateNowPlaying(song: Song, playing: Boolean, autoAdvance: Boolean = false) {
         playerPanel.visibility = View.VISIBLE
+
+        // Se consume una sola vez aca: si el cambio de cancion vino del
+        // boton siguiente/anterior (o de un swipe sobre la caratula) usa
+        // esa direccion explicita. Si no, pero la cancion termino sola
+        // (autoAdvance = true, ver MusicService.PlaybackListener.
+        // onSongChanged), se anima igual que "siguiente": el avance
+        // automatico siempre es hacia adelante en la cola, nunca hacia
+        // atras. Si tampoco es autoAdvance (se eligio de la cola o de una
+        // lista), queda en null y todo se comporta como antes: sin
+        // deslizamiento ni fundido.
+        val slideDirection = pendingArtSlideDirection
+            ?: if (autoAdvance) ArtSlideDirection.NEXT else null
+        pendingArtSlideDirection = null
 
         tvMiniTitle.text = song.title
         tvMiniArtist.text = song.artist
-        tvPanelSongTitle.text = song.title
-        tvPanelArtist.text = song.artist
+        if (slideDirection != null) {
+            crossfadeText(tvPanelSongTitle, song.title)
+            crossfadeText(tvPanelArtist, song.artist)
+        } else {
+            tvPanelSongTitle.text = song.title
+            tvPanelArtist.text = song.artist
+        }
         sbPanelProgress.setWaveformSeed(song.id)
 
         applyPlayPauseIcons(playing)
 
         updateFavoriteIcon(song.id)
-        loadAlbumArt(song)
+        loadAlbumArt(song, slideDirection)
         updatePeekHeight()
+    }
+
+    // Fundido cruzado (fade out -> cambia el texto -> fade in) para
+    // tvPanelSongTitle/tvPanelArtist cuando el cambio de cancion vino de
+    // siguiente/anterior o del swipe. Reemplaza al cambio instantaneo que
+    // se sigue usando en el resto de los casos (ver updateNowPlaying).
+    private fun crossfadeText(view: TextView, newText: String) {
+        view.animate().cancel()
+        view.animate()
+            .alpha(0f)
+            .setDuration(PANEL_TEXT_CROSSFADE_DURATION_MS)
+            .withEndAction {
+                view.text = newText
+                view.animate()
+                    .alpha(1f)
+                    .setDuration(PANEL_TEXT_CROSSFADE_DURATION_MS)
+                    .start()
+            }
+            .start()
     }
 
     fun updatePlaybackState(isPlaying: Boolean) {
@@ -488,8 +583,15 @@ class PlayerPanelController(
 
     // ---------- Caratula del album (iTunes / Deezer) ----------
 
-    private fun loadAlbumArt(song: Song) {
+    // ---------- Caratula del album (iTunes / Deezer) ----------
+
+    private fun loadAlbumArt(song: Song, slideDirection: ArtSlideDirection? = null) {
         currentArtSongId = song.id
+        // FIX: se cancela cualquier placeholder que hubiera quedado
+        // pendiente de la cancion anterior antes de programar uno nuevo
+        // (ver schedulePlaceholder), asi nunca aparece de golpe encima de
+        // la caratula/mini player de la cancion que se acaba de pedir.
+        cancelPendingPlaceholder()
         // FIX: marca esta cancion como "la que esta sonando" para que su
         // caratula quede protegida de ser expulsada del cache mientras el
         // usuario navega otras listas (ver AlbumArtRepository.
@@ -501,9 +603,21 @@ class PlayerPanelController(
             override fun onCoverReady(bitmap: Bitmap) {
                 // Si mientras se descargaba ya cambio la cancion, se descarta.
                 if (currentArtSongId != song.id) return
+                // FIX: la caratula llego (a tiempo o no): si el placeholder
+                // retrasado todavia no se disparo, se cancela para que
+                // nunca llegue a pintarse.
+                cancelPendingPlaceholder()
                 AlbumArtRepository.pinCurrentlyPlaying(song.id, bitmap)
                 applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
-                applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
+                // FIX: si el cambio vino de siguiente/anterior/swipe, la
+                // caratula del panel se desliza en vez de cambiar de
+                // golpe (ver slideInAlbumArt). El mini player nunca se
+                // anima, solo el panel grande.
+                if (slideDirection != null) {
+                    slideInAlbumArt(bitmap, slideDirection)
+                } else {
+                    applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)
+                }
                 onAlbumArtChanged(bitmap)
                 // Banner estilo Material You: color extraido de la caratula.
                 PlayerPaletteTheme.applyFromBitmap(bitmap, defaultBannerColor, { color -> currentBannerColor = color }, viewPanelArtBanner)
@@ -529,13 +643,120 @@ class PlayerPanelController(
             return
         }
 
-        showAlbumArtPlaceholder()
+        // FIX: antes se llamaba a showAlbumArtPlaceholder() aca mismo, al
+        // instante, y se lo reemplazaba recien cuando terminaba
+        // loadCoverCacheOnly(). Como esa funcion relee el archivo de audio
+        // completo en cada llamada (por diseno), el resultado normalmente
+        // llega en un instante muy breve pero no nulo, y ese instante se
+        // veia como un parpadeo del icono de nota musical en cada cambio
+        // de cancion. Ahora se programa el placeholder con un pequeno
+        // retraso (ver schedulePlaceholder): si la carga real es mas
+        // rapida que ese retraso -el caso normal-, el placeholder se
+        // cancela en onCoverReady() antes de llegar a dibujarse.
+        schedulePlaceholder(song.id)
         // Solo memoria/disco: escuchar musica ya no dispara busqueda de
         // caratula por red (ver AlbumArtRepository.loadCoverCacheOnly).
         // La busqueda en red ahora solo ocurre al mantener presionada la
         // caratula (ver onAlbumArtLongPress) o desde la descarga masiva
         // en Configuracion.
         AlbumArtRepository.loadCoverCacheOnly(activity, song, callback)
+    }
+
+    // FIX: hace que ivPanelAlbumArt "entre" mostrando [newBitmap] desde el
+    // lado que indica [direction], mientras una copia con la imagen
+    // anterior sale por el lado contrario. Si la vista todavia no tiene
+    // tamano (primerisima vez que se muestra el panel) no hay nada que
+    // deslizar: se aplica directo, igual que antes de este cambio.
+    private fun slideInAlbumArt(newBitmap: Bitmap, direction: ArtSlideDirection) {
+        val parent = ivPanelAlbumArt.parent as? ViewGroup
+        val width = ivPanelAlbumArt.width
+        if (parent == null || width <= 0) {
+            applyAlbumArtBitmap(ivPanelAlbumArt, newBitmap)
+            return
+        }
+
+        // Si ya habia un deslizamiento en curso (cambios de cancion muy
+        // rapidos, p.ej. tocando siguiente varias veces seguidas), se
+        // corta limpio antes de arrancar el nuevo.
+        cancelAlbumArtSlide()
+
+        // Copia "volante" con la imagen VIEJA, superpuesta exactamente
+        // sobre ivPanelAlbumArt: es la que se ve salir de pantalla.
+        val outgoing = ImageView(activity).apply {
+            scaleType = ivPanelAlbumArt.scaleType
+            setImageDrawable(ivPanelAlbumArt.drawable)
+            clipToOutline = ivPanelAlbumArt.clipToOutline
+            outlineProvider = ivPanelAlbumArt.outlineProvider
+        }
+        parent.addView(
+            outgoing,
+            parent.indexOfChild(ivPanelAlbumArt) + 1,
+            ViewGroup.LayoutParams(width, ivPanelAlbumArt.height)
+        )
+        outgoing.x = ivPanelAlbumArt.x
+        outgoing.y = ivPanelAlbumArt.y
+        outgoingAlbumArtView = outgoing
+
+        // "Siguiente": la actual sale por la izquierda (outSign -1) y la
+        // nueva entra por la derecha (inSign +1). "Anterior": al reves.
+        val outSign = if (direction == ArtSlideDirection.NEXT) -1f else 1f
+        val inSign = -outSign
+
+        applyAlbumArtBitmap(ivPanelAlbumArt, newBitmap)
+        ivPanelAlbumArt.translationX = width * inSign
+
+        albumArtSlideAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = ALBUM_ART_SLIDE_DURATION_MS
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener { anim ->
+                val p = anim.animatedValue as Float
+                outgoing.translationX = width * outSign * p
+                ivPanelAlbumArt.translationX = width * inSign * (1f - p)
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    parent.removeView(outgoing)
+                    if (outgoingAlbumArtView === outgoing) outgoingAlbumArtView = null
+                }
+            })
+            start()
+        }
+    }
+
+    // Corta en seco cualquier deslizamiento de caratula en curso: saca la
+    // copia volante y deja ivPanelAlbumArt en su posicion normal. Se llama
+    // antes de arrancar un deslizamiento nuevo y antes de aplicar una
+    // caratula manual (applyAlbumArtOverride), para que nunca quede a
+    // mitad de camino.
+    private fun cancelAlbumArtSlide() {
+        albumArtSlideAnimator?.cancel()
+        albumArtSlideAnimator = null
+        outgoingAlbumArtView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        outgoingAlbumArtView = null
+        ivPanelAlbumArt.translationX = 0f
+    }
+
+    // FIX: agenda mostrar el placeholder (ic_music_note) para [songId]
+    // dentro de ALBUM_ART_PLACEHOLDER_DELAY_MS. Si para entonces ya llego
+    // la caratula real (o se pidio otra cancion), el runnable se cancela
+    // en cancelPendingPlaceholder() y nunca llega a ejecutarse.
+    private fun schedulePlaceholder(songId: Long) {
+        val runnable = Runnable {
+            // Doble chequeo: ademas de haberse cancelado explicitamente,
+            // por las dudas de que el runnable ya estuviera en la cola de
+            // mensajes cuando cambio la cancion, se confirma que sigue
+            // siendo la cancion vigente antes de mostrar el icono.
+            if (currentArtSongId == songId) {
+                showAlbumArtPlaceholder()
+            }
+        }
+        pendingPlaceholderRunnable = runnable
+        albumArtHandler.postDelayed(runnable, ALBUM_ART_PLACEHOLDER_DELAY_MS)
+    }
+
+    private fun cancelPendingPlaceholder() {
+        pendingPlaceholderRunnable?.let { albumArtHandler.removeCallbacks(it) }
+        pendingPlaceholderRunnable = null
     }
 
     /**
@@ -546,6 +767,8 @@ class PlayerPanelController(
      */
     fun applyAlbumArtOverride(song: Song, bitmap: Bitmap) {
         if (currentArtSongId != song.id) return
+        cancelPendingPlaceholder()
+        cancelAlbumArtSlide()
         AlbumArtRepository.pinCurrentlyPlaying(song.id, bitmap)
         applyAlbumArtBitmap(ivMiniAlbumArt, bitmap)
         applyAlbumArtBitmap(ivPanelAlbumArt, bitmap)

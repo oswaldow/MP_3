@@ -18,6 +18,14 @@ class MusicService : Service() {
     private val queueManager = QueueManager()
     private var listener: PlaybackListener? = null
 
+    // FIX: marca que el proximo handleSongStarted() viene de que la
+    // cancion anterior termino sola (handleTrackEnded -> playNext()), no
+    // de un toque de siguiente/anterior. Se consume una unica vez en
+    // handleSongStarted() (mismo patron que pendingArtSlideDirection en
+    // PlayerPanelController), asi que nunca queda "pegada" a un cambio
+    // de cancion posterior que no corresponda.
+    private var pendingAutoAdvance = false
+
     private lateinit var playbackEngine: PlaybackEngine
     private lateinit var notifier: PlaybackNotifier
     private lateinit var sleepTimer: SleepTimerManager
@@ -38,7 +46,13 @@ class MusicService : Service() {
     enum class PlaybackMode { NORMAL, REPEAT_ONE, SHUFFLE }
 
     interface PlaybackListener {
-        fun onSongChanged(song: Song, index: Int)
+        // autoAdvance = true cuando el cambio de cancion vino de que la
+        // anterior termino sola (por reproduccion normal o por crossfade),
+        // no de que el usuario toco siguiente/anterior ni eligio otra de
+        // la cola/lista. Lo usa PlayerPanelController para animar la
+        // caratula igual que con el boton "siguiente" (ver
+        // MusicService.handleTrackEnded/handleSongStarted).
+        fun onSongChanged(song: Song, index: Int, autoAdvance: Boolean = false)
         fun onPlaybackStateChanged(isPlaying: Boolean)
         fun onProgressChanged(currentMs: Int, totalMs: Int)
     }
@@ -440,7 +454,17 @@ class MusicService : Service() {
 
         val isPlayingNow = reason != PlaybackEngine.SongStartReason.RESTORED
 
-        listener?.onSongChanged(song, index)
+        // FIX: el crossfade es siempre una transicion automatica (nunca lo
+        // dispara un boton, ver PlaybackEngine.handleCrossfadeTick), asi
+        // que cuenta como autoAdvance directo. El caso sin crossfade se
+        // decide con pendingAutoAdvance, marcado en handleTrackEnded() y
+        // consumido aqui una unica vez (si quedara sin consumir, un
+        // proximo cambio de cancion por boton heredaria el flag por
+        // error).
+        val autoAdvance = reason == PlaybackEngine.SongStartReason.CROSSFADE || pendingAutoAdvance
+        pendingAutoAdvance = false
+
+        listener?.onSongChanged(song, index, autoAdvance)
         if (reason != PlaybackEngine.SongStartReason.RESTORED) {
             // Antes esto se llamaba directo aqui, en el hilo principal: es
             // una lectura + escritura de Room (allowMainThreadQueries en
@@ -488,6 +512,12 @@ class MusicService : Service() {
         if (queueManager.getPlaybackMode() == PlaybackMode.REPEAT_ONE) {
             playbackEngine.playSongAt(queueManager.getCurrentIndex())
         } else {
+            // FIX: es la misma cancion "siguiente" que dispara el boton,
+            // pero disparada sola porque la anterior termino. Se marca
+            // antes de llamar a playNext() para que handleSongStarted()
+            // (via el reason NEW que produce playSongAt) sepa que este
+            // cambio de cancion fue automatico y no un toque de boton.
+            pendingAutoAdvance = true
             playNext()
         }
     }

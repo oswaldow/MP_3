@@ -28,6 +28,17 @@ import android.util.Log
  * AudioManager.ERROR: los sliders siguen guardando el valor con
  * set*Strength() con toda normalidad, solo que no hay ningun efecto
  * real corriendo todavia para aplicarselo hasta que exista una sesion.
+ *
+ * DIAGNOSTICO (temporal): reporto que los sliders no se notan por
+ * bocina/cable (descartado Bluetooth). No hay ninguna excepcion en el
+ * logcat al crear los efectos, lo que sugiere que SI se crean bien.
+ * Sospecha actual: BassBoost.strengthSupported / Virtualizer.strengthSupported
+ * podrian venir en false en este chip de audio -el efecto queda prendido
+ * a su intensidad fija de fabrica y setStrength() nunca se llega a
+ * ejecutar (el codigo ya lo evita a proposito para no lanzar excepcion),
+ * sin que quede ningun rastro de error en el log. Se agrego el log de
+ * abajo (tag BassVirtualizerRepo) SOLO para confirmar o descartar esto;
+ * quitar despues de revisar el proximo logcat.
  */
 object BassVirtualizerRepository {
 
@@ -90,6 +101,8 @@ object BassVirtualizerRepository {
                 enabled = masterEnabled
                 if (strengthSupported) setStrength(bassStrength.toShort())
             }
+            // DIAGNOSTICO: confirmar si el chip soporta ajustar la fuerza.
+            Log.w(TAG, "BassBoost creado OK: strengthSupported=${bassBoost?.strengthSupported} enabled=${bassBoost?.enabled}")
         } catch (e: Exception) {
             // Algunos dispositivos/fabricantes no traen BassBoost
             // disponible: no queremos tumbar la pantalla por eso, solo
@@ -104,6 +117,8 @@ object BassVirtualizerRepository {
                 enabled = masterEnabled
                 if (strengthSupported) setStrength(virtualizerStrength.toShort())
             }
+            // DIAGNOSTICO: confirmar si el chip soporta ajustar la fuerza.
+            Log.w(TAG, "Virtualizer creado OK: strengthSupported=${virtualizer?.strengthSupported} enabled=${virtualizer?.enabled}")
         } catch (e: Exception) {
             Log.w(TAG, "No se pudo crear Virtualizer en sesion $sessionId", e)
             virtualizer = null

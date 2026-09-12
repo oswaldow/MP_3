@@ -34,7 +34,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:layout_marginStart="8dp"
-            android:text="MP_3"
+            android:text="Mapany"
             android:textColor="@color/text_primary_light"
             android:textSize="24sp"
             android:textStyle="bold"

@@ -758,21 +758,25 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
     /**
      * Oculta la pantalla de carga solo cuando ya paso el tiempo minimo
      * garantizado (para que la animacion no sea un flash) Y los datos
-     * (canciones + Home) ya estan listos para mostrarse.
+     * (canciones + Home) ya estan listos para mostrarse. Ademas, una vez
+     * que ambas condiciones se cumplen, espera EXTRA_HIDE_DELAY_MS antes
+     * de arrancar la animacion de salida.
      */
     private fun tryHideLoadingOverlay() {
         if (isLoadingOverlayHidden) return
         if (!isDataReady || !isMinimumTimeElapsed) return
         isLoadingOverlayHidden = true
 
-        loadingOverlay.animate()
-            .alpha(0f)
-            .setDuration(220L)
-            .withEndAction {
-                loadingOverlay.visibility = View.GONE
-                (ivLoadingMascot.drawable as? AnimationDrawable)?.stop()
-            }
-            .start()
+        loadingHandler.postDelayed({
+            loadingOverlay.animate()
+                .alpha(0f)
+                .setDuration(220L)
+                .withEndAction {
+                    loadingOverlay.visibility = View.GONE
+                    (ivLoadingMascot.drawable as? AnimationDrawable)?.stop()
+                }
+                .start()
+        }, EXTRA_HIDE_DELAY_MS)
     }
 
     /**
@@ -809,6 +813,10 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         private const val MINIMUM_LOADING_TIME_MS = 500L
         private const val COVER_READY_POLL_MS = 50L
         private const val COVER_READY_TIMEOUT_MS = 2500L
+        // Espera extra (fija) desde que la pantalla de carga detecto que
+        // ya todo esta listo (isDataReady + isMinimumTimeElapsed) hasta
+        // que arranca su animacion de salida. Ver tryHideLoadingOverlay().
+        private const val EXTRA_HIDE_DELAY_MS = 1000L
 
         // Bandera para que, al reproducir una cancion desde
         // PlaylistDetailActivity, el panel del reproductor se expanda
@@ -1153,8 +1161,8 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 
-    private fun showMiniPlayer(song: Song, playing: Boolean) {
-        playerPanelController.updateNowPlaying(song, playing)
+    private fun showMiniPlayer(song: Song, playing: Boolean, autoAdvance: Boolean = false) {
+        playerPanelController.updateNowPlaying(song, playing, autoAdvance)
         lyricsPanelController.updatePeekHeight()
         lyricsPanelController.loadForSong(song)
         // groupMini es visible en las tres pestañas (Home, Canciones,
@@ -1172,9 +1180,9 @@ class SongListActivity : AppCompatActivity(), MusicService.PlaybackListener {
         }
     }
 
-    override fun onSongChanged(song: Song, index: Int) {
+    override fun onSongChanged(song: Song, index: Int, autoAdvance: Boolean) {
         runOnUiThread {
-            showMiniPlayer(song, musicService?.isPlaying() == true)
+            showMiniPlayer(song, musicService?.isPlaying() == true, autoAdvance)
             songAdapter.setCurrentPlayingId(song.id)
             if (::homeController.isInitialized && homeView.visibility == View.VISIBLE) homeController.refresh()
             queueSheet.onSongChanged(song)

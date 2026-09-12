@@ -7,6 +7,7 @@ import android.os.StrictMode
 import android.service.notification.NotificationListenerService
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import com.google.android.gms.ads.MobileAds
 
 class App : Application() {
     override fun onCreate() {
@@ -18,6 +19,7 @@ class App : Application() {
         warmUpSharedPreferences()
         requestNotificationListenerRebindIfGranted()
         pruneOrphanedSongReferences()
+        initializeMobileAds()
     }
 
     // DEBUG: detecta trabajo costoso (disco, red, DB) hecho por error en el
@@ -53,7 +55,7 @@ class App : Application() {
      * ~511ms perdidos ahi antes de este fix; el profiling mas reciente
      * confirma que ese evento ya no aparece).
      *
-     * Ac谩 se piden todos los archivos de prefs del proyecto en el hilo de
+     * Aca se piden todos los archivos de prefs del proyecto en el hilo de
      * background compartido (AppExecutors) apenas arranca el proceso.
      * Android cachea la instancia por nombre, asi que cuando cada
      * Activity/Repository los pida de verdad mas adelante, ya van a estar
@@ -129,6 +131,20 @@ class App : Application() {
             }.onFailure {
                 Log.w("MP3_App", "pruneOrphanedSongReferences() fallo en el arranque: ${it.message}", it)
             }
+        }
+    }
+
+    /**
+     * Inicializa el SDK de Google Mobile Ads (AdMob) una sola vez por
+     * proceso. El SDK hace su trabajo pesado (red, configuracion) en sus
+     * propios hilos internos, asi que llamarlo desde el hilo principal
+     * aqui es seguro y no traba el arranque. Hasta que no se llame esto,
+     * ningun AdView de la app puede cargar un anuncio real.
+     */
+    private fun initializeMobileAds() {
+        MobileAds.initialize(this) { status ->
+            val readyAdapters = status.adapterStatusMap.count { it.value.initializationState.name == "READY" }
+            Log.i("MP3_App", "MobileAds inicializado: $readyAdapters adaptador(es) listos")
         }
     }
 }

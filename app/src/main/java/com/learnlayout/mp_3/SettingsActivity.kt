@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
+import com.google.android.gms.ads.AdRequest
 import com.learnlayout.mp_3.databinding.ActivitySettingsBinding
 
 class SettingsActivity : AppCompatActivity() {
@@ -73,6 +74,7 @@ class SettingsActivity : AppCompatActivity() {
 
         loadCurrentSettings()
         setupListeners()
+        binding.adViewSettings.loadAd(AdRequest.Builder().build())
     }
 
     override fun onResume() {
@@ -80,6 +82,12 @@ class SettingsActivity : AppCompatActivity() {
         // El usuario puede volver de Ajustes del sistema tras dar (o quitar)
         // el acceso a notificaciones, asi que refrescamos el estado aqui.
         updateNotificationAccessStatus()
+        binding.adViewSettings.resume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        binding.adViewSettings.pause()
     }
 
     override fun onDestroy() {
@@ -91,6 +99,7 @@ class SettingsActivity : AppCompatActivity() {
             unbindService(connection)
             isBound = false
         }
+        binding.adViewSettings.destroy()
     }
 
     private fun loadCurrentSettings() {

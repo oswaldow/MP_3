@@ -458,6 +458,21 @@
 
             </LinearLayout>
 
+            <!-- AdMob: banner de prueba de Google (Ad Unit ID de prueba,
+                 no genera ingresos). Cuando crees tu propia unidad de
+                 anuncios "Banner" en AdMob para Mapany, reemplaza el
+                 app:adUnitId de abajo por el tuyo, solo en esta pantalla
+                 por ahora. -->
+            <!-- AdMob: banner real de Mapany (Ad Unit ID: Banner Settings). -->
+            <com.google.android.gms.ads.AdView
+                android:id="@+id/adViewSettings"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:layout_gravity="center_horizontal"
+                app:adSize="BANNER"
+                app:adUnitId="ca-app-pub-9103620416211360/3828962110" />
+
         </LinearLayout>
 
     </androidx.core.widget.NestedScrollView>

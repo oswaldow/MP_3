@@ -47,6 +47,15 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MP_3">
 
+        <!-- AdMob: App ID de PRUEBA de Google (no es el tuyo). Cuando tengas
+             tu App ID real en la consola de AdMob (Mapany > Configuracion de
+             la app), reemplaza el valor de abajo por el tuyo antes de
+             publicar en Play Store, o Google rechazara la app en revision. -->
+        <!-- AdMob: App ID real de Mapany (ca-app-pub-9103620416211360~2708216474). -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-9103620416211360~2708216474" />
+
         <activity android:name=".EqualizerActivity" android:exported="false" />
 
         <activity

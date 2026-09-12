@@ -246,7 +246,12 @@ class PlaybackEngine(
         // manual de cancion): con duraciones de ~180-220ms, un paso de
         // 100ms daria solo 2 escalones y se notaria "a saltos".
         private const val FAST_FADE_STEP_MS = 20L
-        private const val PAUSE_PLAY_FADE_MS = 220L
+        // FIX: subido de 220ms a 600ms. Con 220ms el fundido de pausa/play
+        // era tan corto que se sentia casi como un corte seco; a 600ms
+        // (con el mismo paso de 20ms, o sea 30 escalones) se nota
+        // claramente que el volumen baja/sube gradual, sin llegar a
+        // sentirse lento para un uso normal de pausar/reanudar.
+        private const val PAUSE_PLAY_FADE_MS = 600L
         private const val MANUAL_CHANGE_FADE_MS = 200L
 
         // Duracion del fundido de ducking y a que nivel queda la musica

@@ -18,16 +18,23 @@ class EqAudioSinkRenderersFactory(context: Context) : DefaultRenderersFactory(co
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
                     PreampAudioProcessor(),
+                    SoftwareEqualizerProcessor(),
                     SpectrumAudioProcessor()
                 )
             )
-            // El ecualizador de bandas ya no vive aqui (ver
-            // EqualizerRepository): ahora es android.media.audiofx.Equalizer,
-            // atado directamente al audioSessionId por fuera de esta cadena
-            // de AudioProcessor. Lo que SI sigue aqui es PreampAudioProcessor
-            // (preamp manual del ecualizador, ver ese archivo; la
-            // normalizacion de volumen por cancion que tenia antes se quito)
-            // y SpectrumAudioProcessor (visualizador de espectro).
+            // El ecualizador de 10 bandas vive aqui como AudioProcessor propio
+            // (SoftwareEqualizerProcessor), NO como android.media.audiofx.Equalizer:
+            // asi el sonido es identico en cualquier fabricante, con headroom
+            // calculado a partir de la respuesta real combinada de las bandas
+            // en vez de una regla fija (ver EqualizerRepository para el porque
+            // del cambio).
+            //
+            // El orden de la cadena importa: primero el preamp manual del
+            // usuario (PreampAudioProcessor), despues el ecualizador de bandas
+            // (que incluye su propio limitador de seguridad como ultimo recurso
+            // contra clipping combinado de preamp + bandas), y al final el
+            // visualizador de espectro, para que dibuje la señal ya final tal
+            // como se escucha.
             //
             // SpectrumAudioProcessor solo sabe procesar PCM de 16 bits (ver su
             // configure(), que lanza UnhandledAudioFormatException para

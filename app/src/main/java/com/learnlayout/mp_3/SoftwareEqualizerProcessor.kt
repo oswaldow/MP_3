@@ -10,45 +10,79 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tanh
 
-
+/**
+ * Ecualizador grafico de 10 bandas, 100% software (AudioProcessor propio
+ * dentro de la cadena de Media3). No depende de android.media.audiofx.Equalizer
+ * (el DSP nativo del fabricante): con el nativo, el rango real de dB y la
+ * calidad del efecto dependian del chip de audio de cada telefono -en
+ * equipos de gama media el efecto se sentia debil, y el DSP del fabricante
+ * podia sonar sucio/distorsionado al subir varias bandas, sin que la app
+ * tuviera ningun control sobre eso-. Con esto, el resultado es identico en
+ * cualquier telefono.
+ *
+ * Dos cambios clave respecto a la version anterior de este mismo archivo:
+ *
+ * 1) HEADROOM EXACTO EN VEZ DE UNA REGLA FIJA: antes se restaba "la mitad
+ *    de la suma de todo el boost positivo" sin importar la forma real de
+ *    la curva resultante, lo que atenuaba el efecto incluso subiendo una
+ *    sola banda. Ahora se calcula la respuesta en frecuencia REAL de las
+ *    10 bandas ya combinadas (computeHeadroomLinear), se busca el pico
+ *    mas alto de esa curva, y solo se resta el headroom que hace falta
+ *    para que ese pico no sature. Si no hay riesgo de saturar, no se resta
+ *    nada: el boost pedido se aplica completo.
+ *
+ * 2) Q CORRECTO PARA BANDAS SEPARADAS POR OCTAVA: las 10 frecuencias
+ *    (31, 62, 125...16k) estan separadas exactamente una octava entre si.
+ *    El valor de Q que le corresponde matematicamente a un ancho de banda
+ *    de 1 octava es sqrt(2)/(2-1) ~= 1.41 (formula estandar de conversion
+ *    ancho de banda -> Q), no 1.0 como tenia antes. Con Q=1 las bandas se
+ *    superponian mas de lo necesario entre si, lo que hacia mas impredecible
+ *    el resultado al subir varias bandas juntas.
+ *
+ * El limitador suave (softLimit, con tanh en vez de un recorte seco) se
+ * queda como red de seguridad de ultimo recurso: con el headroom exacto
+ * casi nunca deberia dispararse, pero cubre picos puntuales que el calculo
+ * de headroom (hecho solo en frecuencia, no por muestra) no puede prever,
+ * y tambien protege si el preamp manual (PreampAudioProcessor, que corre
+ * ANTES que este procesador en la cadena) suma su propia ganancia encima.
+ *
+ * El preamp manual del usuario YA NO vive aqui: eso lo maneja por separado
+ * PreampAudioProcessor. Este procesador solo se encarga de las 10 bandas
+ * y de su propio headroom.
+ */
 @UnstableApi
 class SoftwareEqualizerProcessor : AudioProcessor {
 
     companion object {
-        // 10 bandas graficas estandar.
+        // 10 bandas graficas estandar, separadas exactamente una octava.
         val CENTER_FREQS_HZ = intArrayOf(31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
         const val NUM_BANDS = 10
 
         const val MIN_GAIN_MILLIBEL = -1500
         const val MAX_GAIN_MILLIBEL = 1500
 
-        const val MIN_PREAMP_MILLIBEL = -1200
-        const val MAX_PREAMP_MILLIBEL = 1200
+        // Q para un ancho de banda de 1 octava: sqrt(2^BW) / (2^BW - 1) con BW=1.
+        // Da una curva combinada mas limpia y previsible que Q=1.0 al subir
+        // varias bandas adyacentes a la vez.
+        private val BAND_Q = sqrt(2.0) / (2.0.pow(1.0) - 1.0)
 
-        private const val Q = 1.0
-
-        // DEBUG: filtrar en Logcat con  adb logcat -s MP3_EQ
         private const val TAG_EQ = "MP3_EQ"
-
-        // Para no inundar Logcat: solo logueamos 1 de cada N buffers
-        // procesados en queueInput, y logueamos SIEMPRE que cambia un valor.
 
         // Ganancia por banda en milibeles (100 mB = 1 dB), y flag global
         // de enabled/disabled. @Volatile: se leen desde el hilo de audio
         // y se escriben desde el hilo principal (UI).
         @Volatile private var bandGainsMillibel = IntArray(NUM_BANDS)
         @Volatile private var masterEnabled = false
-        @Volatile private var preampMillibel = 0
-        @Volatile private var autoCompensationEnabled = true
 
         // Se incrementa cada vez que cambia una ganancia o el enabled,
         // para que las instancias existentes sepan que tienen que
-        // recalcular sus coeficientes en vez de recomputar en cada
+        // recalcular coeficientes y headroom en vez de recomputar en cada
         // muestra.
         @Volatile private var configVersion = 0
 
@@ -73,20 +107,6 @@ class SoftwareEqualizerProcessor : AudioProcessor {
 
         fun isMasterEnabled(): Boolean = masterEnabled
 
-        fun setPreampMillibel(value: Int) {
-            preampMillibel = value.coerceIn(MIN_PREAMP_MILLIBEL, MAX_PREAMP_MILLIBEL)
-            configVersion++
-        }
-
-        fun getPreampMillibel(): Int = preampMillibel
-
-        fun setAutoCompensationEnabled(enabled: Boolean) {
-            autoCompensationEnabled = enabled
-            configVersion++
-        }
-
-        fun isAutoCompensationEnabled(): Boolean = autoCompensationEnabled
-
         fun resetAllBands() {
             bandGainsMillibel = IntArray(NUM_BANDS)
             configVersion++
@@ -109,9 +129,9 @@ class SoftwareEqualizerProcessor : AudioProcessor {
     private var channelStates: Array<Array<ChannelBandState>> = emptyArray()
     private var appliedVersion = -1
 
-    // Atenuacion global aplicada ANTES de filtrar, para dejar headroom
-    // cuando hay varias bandas boosteadas a la vez (ver computeHeadroomGain).
-    // 1.0 = sin atenuar.
+    // Atenuacion global aplicada ANTES de filtrar, calculada a partir del
+    // pico real de la curva combinada (ver computeHeadroomLinear). 1.0 =
+    // sin atenuar (curva combinada sin picos por encima de 0 dB).
     private var preGainLinear = 1.0
 
     private var buffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
@@ -153,37 +173,62 @@ class SoftwareEqualizerProcessor : AudioProcessor {
             when (band) {
                 0 -> computeLowShelf(safeFreq, sampleRate, gainDb)
                 NUM_BANDS - 1 -> computeHighShelf(safeFreq, sampleRate, gainDb)
-                else -> computeBiquadPeaking(safeFreq, sampleRate, gainDb, Q)
+                else -> computeBiquadPeaking(safeFreq, sampleRate, gainDb, BAND_Q)
             }
         }
 
-        val manualPreampDb = preampMillibel / 100.0
-        val automaticDb = if (autoCompensationEnabled) {
-            -computeAutomaticCompensationDb(gains)
-        } else {
-            0.0
-        }
-        preGainLinear = 10.0.pow((manualPreampDb + automaticDb) / 20.0)
+        preGainLinear = computeHeadroomLinear(sampleRate, coeffs)
         appliedVersion = configVersion
     }
 
     /**
-     * Si varias bandas estan boosteadas al mismo tiempo, sus picos se
-     * pueden sumar en ciertas frecuencias y superar el rango de 16 bits.
-     * Antes eso se resolvia con un recorte seco (hard clip) que suena
-     * distorsionado. Ahora, en vez de eso, se le resta un poco de volumen
-     * a TODA la senal antes de filtrar (headroom), proporcional a cuanto
-     * boost total se esta pidiendo, para que el pico ya casi no llegue a
-     * necesitar el limiter de la funcion softLimit().
+     * Muestrea la respuesta en frecuencia de las 10 bandas YA COMBINADAS
+     * (en cascada) en puntos espaciados logaritmicamente entre 20 Hz y
+     * casi Nyquist, y devuelve la ganancia lineal necesaria para que el
+     * pico mas alto de esa curva no pase de 0 dB. Si la curva combinada
+     * no supera 0 dB en ningun punto (por ejemplo, todo en 0 o solo hay
+     * cortes), devuelve 1.0: no se resta nada que no haga falta.
      */
-    private fun computeAutomaticCompensationDb(gainsMillibel: IntArray): Double {
-        val positiveBoostDb = gainsMillibel
-            .filter { it > 0 }
-            .sumOf { it / 100.0 }
+    private fun computeHeadroomLinear(sampleRate: Int, bandCoeffs: Array<Coeffs>): Double {
+        val numPoints = 300
+        val minHz = 20.0
+        val maxHz = (sampleRate * 0.49).coerceAtLeast(minHz + 1.0)
+        val logMin = kotlin.math.ln(minHz)
+        val logMax = kotlin.math.ln(maxHz)
 
-        // Compensacion moderada: suficiente para dejar headroom sin hacer
-        // que un preset suene innecesariamente bajo. Se limita a 12 dB.
-        return (positiveBoostDb * 0.5).coerceAtMost(12.0)
+        var peakDb = 0.0
+        for (i in 0 until numPoints) {
+            val t = i.toDouble() / (numPoints - 1)
+            val hz = kotlin.math.exp(logMin + (logMax - logMin) * t)
+            val w = 2.0 * PI * hz / sampleRate
+
+            var totalDb = 0.0
+            for (c in bandCoeffs) {
+                totalDb += biquadMagnitudeDb(c, w)
+            }
+            if (totalDb > peakDb) peakDb = totalDb
+        }
+
+        return if (peakDb > 0.0) 10.0.pow(-peakDb / 20.0) else 1.0
+    }
+
+    /** Magnitud en dB de un solo biquad a la frecuencia angular [w] (radianes/muestra). */
+    private fun biquadMagnitudeDb(c: Coeffs, w: Double): Double {
+        val cosw = cos(w)
+        val sinw = sin(w)
+        val cos2w = cos(2.0 * w)
+        val sin2w = sin(2.0 * w)
+
+        val numRe = c.b0 + c.b1 * cosw + c.b2 * cos2w
+        val numIm = -c.b1 * sinw - c.b2 * sin2w
+        val denRe = 1.0 + c.a1 * cosw + c.a2 * cos2w
+        val denIm = -c.a1 * sinw - c.a2 * sin2w
+
+        val numMagSq = numRe * numRe + numIm * numIm
+        val denMagSq = denRe * denRe + denIm * denIm
+        val magSq = if (denMagSq > 1e-12) numMagSq / denMagSq else 0.0
+
+        return 10.0 * log10(magSq.coerceAtLeast(1e-12))
     }
 
     private fun computeBiquadPeaking(freqHz: Double, sampleRate: Int, gainDb: Double, q: Double): Coeffs {
@@ -293,10 +338,14 @@ class SoftwareEqualizerProcessor : AudioProcessor {
         return buffer
     }
 
-    // Red de seguridad final: en vez de recortar seco (lo que sonaba
-    // "feo"/distorsionado), si una muestra se acerca al limite de 16 bits
-    // la comprime suave con una curva tanh. Por debajo del umbral no toca
-    // nada, asi que en volumen normal es completamente transparente.
+    // Red de seguridad de ultimo recurso: con el headroom exacto de
+    // computeHeadroomLinear casi nunca deberia entrar en accion. Cubre
+    // picos puntuales por muestra (el calculo de headroom es en
+    // frecuencia, no exhaustivo por cada muestra real) y la ganancia
+    // extra que pueda sumar el preamp manual, que corre antes que este
+    // procesador en la cadena. En vez de recortar seco (que suena "feo"),
+    // si una muestra se acerca al limite de 16 bits la comprime suave con
+    // una curva tanh; por debajo del umbral no toca nada.
     private fun softLimit(sample: Double): Double {
         val threshold = 28000.0
         val ceilingPos = 32767.0

@@ -4,36 +4,41 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.media.audiofx.BassBoost
-import android.media.audiofx.Equalizer
 import android.media.audiofx.Virtualizer
 import android.util.Log
 
 /**
- * Estado persistente del ecualizador nativo de Android
- * (android.media.audiofx.Equalizer), mas BassBoost y Virtualizer.
+ * Estado persistente del ecualizador de 10 bandas, mas BassBoost y
+ * Virtualizer.
  *
- * A diferencia de la version anterior (SoftwareEqualizerProcessor, un
- * AudioProcessor casero dentro de la cadena de Media3), esto delega el
- * filtrado real al DSP del propio chip de audio / fabricante, atado al
- * audioSessionId compartido de PlaybackEngine (ver
- * PlaybackEngine.getAudioSessionId() y MusicService.handleSongStarted(),
- * que llama a attachToSession()).
+ * El ecualizador de bandas YA NO delega en android.media.audiofx.Equalizer
+ * (el DSP nativo del fabricante): eso hacia que el efecto real dependiera
+ * por completo del chip de audio de cada telefono -en equipos de gama
+ * media el rango de dB disponible solia ser muy limitado ("efecto debil"),
+ * y el DSP del fabricante podia sonar sucio al subir varias bandas
+ * ("raro"/distorsionado), sin ningun control desde la app sobre eso-.
  *
- * En algunos fabricantes (MIUI/HyperOS y similares -ver el mismo
- * problema ya documentado en SpectrumAudioProcessor para el Visualizer
- * del sistema-) el motor de efectos de audio puede rechazar la creacion
- * de Equalizer/BassBoost/Virtualizer. Por eso cada uno se crea en su
- * propio try/catch: si Equalizer falla, isAvailable queda en false y la
- * UI muestra el estado "no disponible" (ver
- * EqualizerActivity.showUnavailableState()) sin fallback a software. Si
- * BassBoost o Virtualizer fallan por separado, sus controles quedan
- * ocultos pero el resto del ecualizador sigue funcionando normal.
+ * Ahora las 10 bandas vuelven a ser 100% software (ver
+ * SoftwareEqualizerProcessor, un AudioProcessor propio dentro de la
+ * cadena de Media3, con headroom calculado a partir de la respuesta real
+ * combinada de las bandas en vez de una regla fija). El resultado es
+ * identico sin importar el telefono, igual que ya se hizo con
+ * SpectrumAudioProcessor por el mismo motivo (en varios fabricantes,
+ * MIUI/HyperOS y similares, el motor de efectos de audio del sistema
+ * llega a rechazar la creacion de efectos de terceros).
  *
- * El preamp NO tiene equivalente en el Equalizer nativo (solo controla
- * bandas), asi que se resuelve fuera de el: se aplica como una ganancia
- * lineal extra dentro de PreampAudioProcessor, que ya vive en la
- * cadena de AudioProcessor de Media3 (ver setPreampLevel() /
- * syncPreampToProcessor() aqui abajo).
+ * BassBoost y Virtualizer SI se quedan como efectos nativos
+ * (android.media.audiofx): son binarios mucho mas simples que un
+ * ecualizador de 10 bandas, y ya tenian su propio fallback a "no
+ * disponible" cuando el fabricante los rechaza, atados al
+ * audioSessionId compartido de PlaybackEngine.
+ *
+ * El preamp NO tiene equivalente en las bandas (solo agrega una ganancia
+ * manual extra encima), asi que se resuelve fuera de ellas: se aplica
+ * como una ganancia lineal dentro de PreampAudioProcessor, que corre
+ * ANTES que el EQ en la cadena de AudioProcessor de Media3 (ver
+ * setPreampLevel() / syncPreampToProcessor() aqui abajo, y
+ * EqAudioSinkRenderersFactory para el orden de la cadena).
  */
 object EqualizerRepository {
 
@@ -59,24 +64,21 @@ object EqualizerRepository {
     private var prefs: SharedPreferences? = null
     private var initialized = false
 
-    private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var virtualizer: Virtualizer? = null
     private var attachedSessionId: Int = AudioManager.ERROR
 
     // Copia en memoria de lo guardado en SharedPreferences, disponible
-    // desde init() aunque todavia no exista ningun efecto nativo creado
-    // (attachToSession() no se llama hasta que hay una sesion de audio
-    // real, ver comentario de clase). Es lo que se lee/pinta en la UI
-    // antes de que arranque la primera cancion.
+    // desde init() aunque todavia no haya sonado ninguna cancion. Es lo
+    // que se lee/pinta en la UI antes de que arranque la primera cancion.
     private var pendingEnabled = false
     private var pendingBandLevelsMillibel: MutableMap<Int, Int> = mutableMapOf()
     private var pendingPreampMillibel = 0
     private var pendingBassBoostStrength: Short = 0
     private var pendingVirtualizerStrength: Short = 0
 
-    val isAvailable: Boolean
-        get() = equalizer != null
+    /** El EQ de 10 bandas es software puro: siempre disponible, en cualquier telefono. */
+    val isAvailable: Boolean = true
 
     val isBassBoostAvailable: Boolean
         get() = bassBoost?.strengthSupported == true
@@ -100,45 +102,31 @@ object EqualizerRepository {
         pendingVirtualizerStrength = savedPrefs.getInt(KEY_VIRTUALIZER, 0)
             .coerceIn(0, MAX_EFFECT_STRENGTH).toShort()
 
-        for (band in 0 until 16) {
-            if (savedPrefs.contains(KEY_BAND_PREFIX + band)) {
-                pendingBandLevelsMillibel[band] = savedPrefs.getInt(KEY_BAND_PREFIX + band, 0)
-            }
+        for (band in 0 until SoftwareEqualizerProcessor.NUM_BANDS) {
+            val saved = savedPrefs.getInt(KEY_BAND_PREFIX + band, 0)
+                .coerceIn(SoftwareEqualizerProcessor.MIN_GAIN_MILLIBEL, SoftwareEqualizerProcessor.MAX_GAIN_MILLIBEL)
+            pendingBandLevelsMillibel[band] = saved
+            SoftwareEqualizerProcessor.setBandGainMillibel(band, saved)
         }
 
+        SoftwareEqualizerProcessor.setMasterEnabled(pendingEnabled)
         syncPreampToProcessor()
     }
 
     /**
-     * Crea Equalizer/BassBoost/Virtualizer atados a [sessionId] la
-     * primera vez que hay una sesion de audio real. Llamarla de nuevo con
-     * la MISMA sesion no hace nada (los efectos quedan atados a esa
-     * sesion mientras viva el proceso, ver comentario de
-     * PlaybackEngine.sharedAudioSessionId); si alguna vez llega una
-     * sesion DISTINTA, se liberan los efectos viejos y se recrean.
+     * Crea BassBoost/Virtualizer atados a [sessionId] la primera vez que
+     * hay una sesion de audio real. El EQ de 10 bandas YA NO depende de
+     * la sesion: SoftwareEqualizerProcessor vive dentro de la cadena de
+     * AudioProcessor y aplica su estado global sin importar que instancia
+     * de ExoPlayer este sonando en cada momento, igual que ya pasaba con
+     * PreampAudioProcessor.
      */
     fun attachToSession(sessionId: Int) {
         if (sessionId == AudioManager.ERROR || sessionId == 0) return
-        if (sessionId == attachedSessionId && equalizer != null) return
+        if (sessionId == attachedSessionId && (bassBoost != null || virtualizer != null)) return
 
         release()
         attachedSessionId = sessionId
-
-        runCatching {
-            val eq = Equalizer(0, sessionId)
-            equalizer = eq
-            for (band in 0 until eq.numberOfBands.toInt()) {
-                val range = eq.bandLevelRange
-                val saved = pendingBandLevelsMillibel[band] ?: 0
-                val clamped = saved.coerceIn(range[0].toInt(), range[1].toInt()).toShort()
-                pendingBandLevelsMillibel[band] = clamped.toInt()
-                eq.setBandLevel(band.toShort(), clamped)
-            }
-            eq.enabled = pendingEnabled
-        }.onFailure {
-            Log.w(TAG, "No se pudo crear Equalizer nativo en sesion $sessionId", it)
-            equalizer = null
-        }
 
         runCatching {
             val bb = BassBoost(0, sessionId)
@@ -163,16 +151,12 @@ object EqualizerRepository {
             Log.w(TAG, "No se pudo crear Virtualizer en sesion $sessionId", it)
             virtualizer = null
         }
-
-        syncPreampToProcessor()
     }
 
     /** Libera los efectos nativos. Llamar desde MusicService.onDestroy(). */
     fun release() {
-        runCatching { equalizer?.release() }
         runCatching { bassBoost?.release() }
         runCatching { virtualizer?.release() }
-        equalizer = null
         bassBoost = null
         virtualizer = null
     }
@@ -181,41 +165,41 @@ object EqualizerRepository {
 
     fun setEnabled(enabled: Boolean) {
         pendingEnabled = enabled
-        equalizer?.enabled = enabled
+        SoftwareEqualizerProcessor.setMasterEnabled(enabled)
         if (isBassBoostAvailable) bassBoost?.enabled = enabled
         if (isVirtualizerAvailable) virtualizer?.enabled = enabled
         prefs?.edit()?.putBoolean(KEY_ENABLED, enabled)?.apply()
         syncPreampToProcessor()
     }
 
-    fun getNumberOfBands(): Int = equalizer?.numberOfBands?.toInt() ?: 0
+    fun getNumberOfBands(): Int = SoftwareEqualizerProcessor.NUM_BANDS
 
-    fun getBandLevelRange(): ShortArray = equalizer?.bandLevelRange ?: shortArrayOf(0, 0)
+    fun getBandLevelRange(): ShortArray = shortArrayOf(
+        SoftwareEqualizerProcessor.MIN_GAIN_MILLIBEL.toShort(),
+        SoftwareEqualizerProcessor.MAX_GAIN_MILLIBEL.toShort()
+    )
 
     fun getCenterFreqHz(band: Int): Int {
-        val eq = equalizer ?: return 0
-        if (band !in 0 until eq.numberOfBands.toInt()) return 0
-        // getCenterFreq() devuelve milihercios.
-        return eq.getCenterFreq(band.toShort()) / 1000
+        if (band !in 0 until SoftwareEqualizerProcessor.NUM_BANDS) return 0
+        return SoftwareEqualizerProcessor.CENTER_FREQS_HZ[band]
     }
 
-    fun getCenterFrequenciesHz(): IntArray {
-        val eq = equalizer ?: return IntArray(0)
-        return IntArray(eq.numberOfBands.toInt()) { band -> eq.getCenterFreq(band.toShort()) / 1000 }
-    }
+    fun getCenterFrequenciesHz(): IntArray = SoftwareEqualizerProcessor.CENTER_FREQS_HZ.copyOf()
 
     fun getBandLevel(band: Int): Short {
-        val eq = equalizer ?: return 0
-        if (band !in 0 until eq.numberOfBands.toInt()) return 0
-        return eq.getBandLevel(band.toShort())
+        if (band !in 0 until SoftwareEqualizerProcessor.NUM_BANDS) return 0
+        return (pendingBandLevelsMillibel[band] ?: 0).toShort()
     }
 
     fun setBandLevel(band: Int, level: Short) {
-        val eq = equalizer ?: return
-        if (band !in 0 until eq.numberOfBands.toInt()) return
-        eq.setBandLevel(band.toShort(), level)
-        pendingBandLevelsMillibel[band] = level.toInt()
-        prefs?.edit()?.putInt(KEY_BAND_PREFIX + band, level.toInt())?.apply()
+        if (band !in 0 until SoftwareEqualizerProcessor.NUM_BANDS) return
+        val clamped = level.toInt().coerceIn(
+            SoftwareEqualizerProcessor.MIN_GAIN_MILLIBEL,
+            SoftwareEqualizerProcessor.MAX_GAIN_MILLIBEL
+        )
+        pendingBandLevelsMillibel[band] = clamped
+        SoftwareEqualizerProcessor.setBandGainMillibel(band, clamped)
+        prefs?.edit()?.putInt(KEY_BAND_PREFIX + band, clamped)?.apply()
     }
 
     fun getPreampRange(): ShortArray =
@@ -254,23 +238,20 @@ object EqualizerRepository {
 
     /** Deja bandas y preamp en 0 dB. No toca BassBoost/Virtualizer. */
     fun resetAllBands() {
-        val eq = equalizer
         val editor = prefs?.edit()
-        if (eq != null) {
-            for (band in 0 until eq.numberOfBands.toInt()) {
-                eq.setBandLevel(band.toShort(), 0)
-                pendingBandLevelsMillibel[band] = 0
-                editor?.putInt(KEY_BAND_PREFIX + band, 0)
-            }
+        for (band in 0 until SoftwareEqualizerProcessor.NUM_BANDS) {
+            pendingBandLevelsMillibel[band] = 0
+            SoftwareEqualizerProcessor.setBandGainMillibel(band, 0)
+            editor?.putInt(KEY_BAND_PREFIX + band, 0)
         }
         editor?.apply()
         setPreampLevel(0)
     }
 
-    // El preamp solo debe sonar si el ecualizador esta activo Y
-    // disponible; si no, PreampAudioProcessor debe quedar en 0 dB de
-    // preamp (ganancia neutra) aunque el usuario tenga guardado un valor
-    // distinto de 0 para la proxima vez que lo active.
+    // El preamp solo debe sonar si el ecualizador esta activo; si no,
+    // PreampAudioProcessor debe quedar en 0 dB de preamp (ganancia
+    // neutra) aunque el usuario tenga guardado un valor distinto de 0
+    // para la proxima vez que lo active.
     private fun syncPreampToProcessor() {
         val effectivePreamp = if (pendingEnabled) pendingPreampMillibel else 0
         PreampAudioProcessor.setPreampMillibel(effectivePreamp)
